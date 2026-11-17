@@ -7,7 +7,7 @@ struct AccountRail: View {
 
     var body: some View {
         ScrollView(showsIndicators: false) {
-            VStack(spacing: 10) {
+            VStack(spacing: 2) {
                 ForEach(store.accounts) { account in
                     AccountButton(account: account, isSelected: account.id == store.selected?.id)
                         .onTapGesture { store.selectedID = account.id }
@@ -28,11 +28,12 @@ struct AccountRail: View {
                         .font(.system(size: 14, weight: .medium))
                         .frame(width: 34, height: 34)
                         .background(.quaternary, in: Circle())
+                        .padding(7)
                 }
                 .buttonStyle(.plain)
                 .help("Add account")
             }
-            .padding(.vertical, 10)
+            .padding(.vertical, 3)
         }
         .frame(width: 54)
         .confirmationDialog("Sign out of \(accountToSignOut?.userID ?? "")?",
@@ -66,11 +67,13 @@ private struct AccountButton: View {
             // Punch a gap out of the avatar and ring so the badge never touches them.
             .overlay(alignment: .topTrailing) {
                 if let badge {
+                    // Grown evenly on every side, then shifted back out so it stays centred on the badge.
                     badge.shape
-                        .padding(2)
+                        .padding(Self.badgeGap)
                         .background(.black, in: Capsule())
                         .blendMode(.destinationOut)
-                        .offset(badge.offset)
+                        .offset(x: badge.offset.width + Self.badgeGap,
+                                y: badge.offset.height - Self.badgeGap)
                 }
             }
             .compositingGroup()
@@ -80,15 +83,22 @@ private struct AccountButton: View {
                 }
             }
             .contentShape(Circle())
+            // Room for the badge inside this view's bounds: the context menu attached to it
+            // clips anything drawn outside them.
+            .padding(Self.badgeOverhang)
             .help(helpText)
     }
+
+    private static let badgeOverhang: CGFloat = 4
+    /// Width of the clear ring between a badge and the avatar behind it.
+    private static let badgeGap: CGFloat = 2
 
     private struct Badge {
         let shape: AnyView
         let offset: CGSize
     }
 
-    /// Red and numbered for mentions and invitations; a quiet dot for ordinary unread rooms.
+    /// Red and numbered for direct messages, mentions and invitations; a quiet dot for other unread rooms.
     private var badge: Badge? {
         if account.urgentCount > 0 {
             let label = Text("\(min(account.urgentCount, 99))")
@@ -112,7 +122,9 @@ private struct AccountButton: View {
     private var helpText: String {
         var lines = [account.userID]
         if account.urgentCount > 0 {
-            lines.append("\(account.urgentCount) mention\(account.urgentCount == 1 ? "" : "s") or invitation\(account.urgentCount == 1 ? "" : "s")")
+            lines.append(account.urgentCount == 1
+                ? "1 direct message, mention or invitation"
+                : "\(account.urgentCount) direct messages, mentions or invitations")
         }
         let other = account.badgeCount - account.urgentCount
         if other > 0 {

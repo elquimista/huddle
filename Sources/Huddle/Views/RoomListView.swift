@@ -97,7 +97,7 @@ private struct RoomRow: View {
         } else if room.mentions > 0 {
             pill(Text("@"), color: .red)
         } else if room.notifications > 0 {
-            pill(Text("\(min(room.notifications, 99))"), color: .accentColor)
+            pill(Text("\(min(room.notifications, 99))"), color: room.isUrgent ? .red : .accentColor)
         } else if room.hasUnread {
             Circle()
                 .fill(.tertiary)
