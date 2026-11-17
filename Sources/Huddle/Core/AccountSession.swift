@@ -41,6 +41,8 @@ final class AccountSession: Identifiable {
 
     /// Rooms with notifications, for the account rail and Dock badge.
     private(set) var badgeCount = 0
+    /// Rooms that need attention now: mentions and pending invitations.
+    private(set) var urgentCount = 0
 
     @ObservationIgnored private var syncService: SyncService?
     @ObservationIgnored private var roomListService: RoomListService?
@@ -157,6 +159,7 @@ final class AccountSession: Identifiable {
         // A search narrows `rooms`, so only count while the list is unfiltered.
         if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
             badgeCount = rooms.reduce(0) { $0 + ($1.isHighlighted ? 1 : 0) }
+            urgentCount = rooms.reduce(0) { $0 + ($1.isInvite || $1.mentions > 0 ? 1 : 0) }
         }
     }
 

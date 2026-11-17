@@ -93,24 +93,30 @@ private struct RoomRow: View {
 
     @ViewBuilder private var badge: some View {
         if room.isInvite {
-            Text("Invite")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.accentColor, in: Capsule())
-        } else if room.notifications > 0 || room.mentions > 0 {
-            Text(room.mentions > 0 ? "@" : "\(min(room.notifications, 99))")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 5)
-                .frame(minWidth: 18, minHeight: 18)
-                .background(room.mentions > 0 ? Color.red : Color.accentColor, in: Capsule())
+            pill(Text("Invite"), color: .red, padding: 6)
+        } else if room.mentions > 0 {
+            pill(Text("@"), color: .red)
+        } else if room.notifications > 0 {
+            pill(Text("\(min(room.notifications, 99))"), color: .accentColor)
         } else if room.hasUnread {
             Circle()
-                .fill(.secondary)
+                .fill(.tertiary)
                 .frame(width: 8, height: 8)
+                .frame(width: Self.badgeWidth)
         }
+    }
+
+    /// Every badge is at least this wide, so they line up down the list's right edge.
+    private static let badgeWidth: CGFloat = 20
+
+    private func pill(_ text: Text, color: Color, padding: CGFloat = 4) -> some View {
+        text
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, padding)
+            .frame(minWidth: Self.badgeWidth, minHeight: 18)
+            .background(color, in: Capsule())
     }
 }
 

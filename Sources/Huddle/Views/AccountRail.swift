@@ -63,18 +63,61 @@ private struct AccountButton: View {
             .overlay {
                 Circle().strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
             }
+            // Punch a gap out of the avatar and ring so the badge never touches them.
             .overlay(alignment: .topTrailing) {
-                if account.badgeCount > 0 {
-                    Text("\(min(account.badgeCount, 99))")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .frame(minWidth: 16, minHeight: 16)
-                        .background(.red, in: Capsule())
-                        .offset(x: 3, y: -3)
+                if let badge {
+                    badge.shape
+                        .padding(2)
+                        .background(.black, in: Capsule())
+                        .blendMode(.destinationOut)
+                        .offset(badge.offset)
+                }
+            }
+            .compositingGroup()
+            .overlay(alignment: .topTrailing) {
+                if let badge {
+                    badge.shape.offset(badge.offset)
                 }
             }
             .contentShape(Circle())
-            .help(account.userID)
+            .help(helpText)
+    }
+
+    private struct Badge {
+        let shape: AnyView
+        let offset: CGSize
+    }
+
+    /// Red and numbered for mentions and invitations; a quiet dot for ordinary unread rooms.
+    private var badge: Badge? {
+        if account.urgentCount > 0 {
+            let label = Text("\(min(account.urgentCount, 99))")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .frame(minWidth: 16, minHeight: 16)
+                .background(.red, in: Capsule())
+            return Badge(shape: AnyView(label), offset: CGSize(width: 2, height: -2))
+        }
+        if account.badgeCount > 0 {
+            let dot = Circle()
+                .fill(Color.accentColor)
+                .frame(width: 10, height: 10)
+            return Badge(shape: AnyView(dot), offset: CGSize(width: -1, height: 1))
+        }
+        return nil
+    }
+
+    private var helpText: String {
+        var lines = [account.userID]
+        if account.urgentCount > 0 {
+            lines.append("\(account.urgentCount) mention\(account.urgentCount == 1 ? "" : "s") or invitation\(account.urgentCount == 1 ? "" : "s")")
+        }
+        let other = account.badgeCount - account.urgentCount
+        if other > 0 {
+            lines.append("\(other) room\(other == 1 ? "" : "s") with new messages")
+        }
+        return lines.joined(separator: "\n")
     }
 }
