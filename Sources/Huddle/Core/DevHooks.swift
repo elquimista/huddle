@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Launch-time automation for the Dev build, driven by environment variables
@@ -8,11 +9,27 @@ import Foundation
 ///   HUDDLE_DEV_PASSWORD  their shared test password
 ///   HUDDLE_DEV_SELECT    "username" or "username/Room Name" to open at launch
 ///   HUDDLE_DEV_SIGN_OUT  username to sign out at launch (same code path as the Sign Out menu)
+///   HUDDLE_DEV_FRESH     start with no accounts loaded (stored ones are left alone), to see first run
+///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance
 ///   HUDDLE_DEV_NO_BROWSER  print the OAuth sign-in URL (DEV_OAUTH_URL ...) instead of opening it
 @MainActor
 enum DevHooks {
-    static func run(store: AccountStore) async {
+    static func applyAppearance() {
         guard AppEnvironment.isDev else { return }
+        switch ProcessInfo.processInfo.environment["HUDDLE_DEV_APPEARANCE"] {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: break
+        }
+    }
+
+    /// First-run preview: nothing is restored and no hooks run.
+    static var startsFresh: Bool {
+        AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_FRESH"] != nil
+    }
+
+    static func run(store: AccountStore) async {
+        guard AppEnvironment.isDev, !startsFresh else { return }
         let env = ProcessInfo.processInfo.environment
 
         if let server = env["HUDDLE_DEV_SERVER"], let password = env["HUDDLE_DEV_PASSWORD"] {

@@ -8,7 +8,7 @@ struct HuddleApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
-                .frame(minWidth: 720, minHeight: 440)
+                .frame(minWidth: 720, minHeight: 540)
                 .task { await store.restore() }
                 .onChange(of: store.totalBadgeCount, initial: true) { _, count in
                     NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
@@ -51,7 +51,7 @@ struct RootView: View {
             get: { store.isAddingAccount && !store.accounts.isEmpty },
             set: { store.isAddingAccount = $0 })) {
             LoginView(isFirstAccount: false)
-                .frame(width: 420, height: 420)
+                .frame(width: 440, height: 520)
         }
     }
 }

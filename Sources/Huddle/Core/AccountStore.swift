@@ -20,7 +20,8 @@ final class AccountStore {
     var totalBadgeCount: Int { accounts.reduce(0) { $0 + $1.badgeCount } }
 
     func restore() async {
-        await restoreStoredAccounts()
+        DevHooks.applyAppearance()
+        if !DevHooks.startsFresh { await restoreStoredAccounts() }
         isRestoring = false
         await DevHooks.run(store: self)
     }
