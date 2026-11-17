@@ -39,6 +39,8 @@ final class AccountSession: Identifiable {
     private(set) var needsReauth = false
     private(set) var startError: String?
     var selectedRoomID: String?
+    /// For rooms opened this session: a reaction that came after the room's newest message.
+    private(set) var reactionPreviews: [String: ReactionPreview] = [:]
     /// What the panel beside each room's timeline shows, so it is still there on coming back.
     var sidePanels: [String: ThreadPanel.Content] = [:]
     var searchText = "" {
@@ -264,6 +266,7 @@ final class AccountSession: Identifiable {
         }
         guard let room = room(id: roomID) else { return nil }
         let timeline = RoomTimeline(room: room)
+        timeline.onLatestReaction = { [weak self] preview in self?.reactionPreviews[roomID] = preview }
         timelines[roomID] = timeline
         touch(roomID)
         if let roomListService {

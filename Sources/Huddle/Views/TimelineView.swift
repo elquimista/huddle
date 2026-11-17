@@ -265,7 +265,7 @@ private struct TimelineRowView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
         case .dateDivider(let date):
-            Text(date.formatted(date: .complete, time: .omitted))
+            Text(date.dayLabel)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
@@ -295,10 +295,73 @@ private struct MessageView: View {
         return { onOpenThread(eventID) }
     }
     @State private var isHovering = false
+    @State private var showsPicker = false
+    @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
 
-    private static let quickReactions = ["👍", "❤️", "😂", "🎉"]
+    private static let quickReactions = ["👍", "❤️", "😂"]
+
+    /// The action bar stays up while its emoji picker is open, even with the pointer elsewhere.
+    private var showsActions: Bool { (isHovering || showsPicker || isDevHovered) && message.sendState == nil }
+
+    private var isDevHovered: Bool {
+        guard let wanted = DevHooks.hoverText, case .text(let text) = message.body else { return false }
+        return text == wanted.trimmingCharacters(in: ["!"])
+    }
 
     var body: some View {
+        Group {
+            switch layout {
+            case .modern: modernRow
+            case .irc: ircRow
+            }
+        }
+        // A gutter on the right for read receipts, so they never sit on top of the text.
+        .padding(.trailing, ReceiptView.gutter)
+        .padding(.top, layout == .modern && message.showsHeader ? 9 : 3)
+        .padding(.bottom, 3)
+        .opacity(message.sendState == .sending ? 0.55 : 1)
+        .background {
+            // Ties the floating actions to the message they act on.
+            if showsActions {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.045))
+                    .padding(.horizontal, -8)
+                    // The row's own padding is the breathing room around the text. A row that
+                    // starts a group has extra space above its avatar, so trim that side.
+                    .padding(.top, layout == .modern && message.showsHeader ? 4 : 0)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            ReceiptView(message: message, media: media)
+                .padding(.bottom, 3)
+        }
+        .overlay(alignment: .topTrailing) {
+            if showsActions {
+                actionBar
+                    // Rides the top edge of the row, to the left of the receipts column so it
+                    // covers neither this message's read receipts nor the previous one's.
+                    .offset(x: -ReceiptView.gutter, y: -15)
+            }
+        }
+        .onAppear {
+            if isDevHovered, DevHooks.hoverText?.hasSuffix("!") == true { showsPicker = true }
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .contextMenu {
+            if let openThread {
+                Button(message.thread == nil ? "Reply in Thread" : "Open Thread", action: openThread)
+            }
+            if case .text(let text) = message.body {
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+            }
+        }
+    }
+
+    private var modernRow: some View {
         HStack(alignment: .top, spacing: 10) {
             if message.showsHeader {
                 AvatarView(media: media,
@@ -320,88 +383,96 @@ private struct MessageView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                bodyView
-                if !message.reactions.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(message.reactions) { reaction in
-                            Button {
-                                Task { await timeline.toggleReaction(reaction.key, on: message.itemID) }
-                            } label: {
-                                Text("\(reaction.key) \(reaction.count)")
-                                    .font(.callout)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2)
-                                    .background(reaction.isOwn ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.15),
-                                                in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                if let thread = message.thread, let openThread {
-                    ThreadChip(thread: thread, media: media, action: openThread)
-                }
-                if message.sendState == .failed {
-                    Button("Failed to send. Retry") {
-                        Task { await timeline.retry(message.itemID) }
-                    }
-                    .buttonStyle(.link)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                }
+                content
             }
             Spacer(minLength: 0)
         }
-        // A gutter on the right for read receipts, so they never sit on top of the text.
-        .padding(.trailing, ReceiptView.gutter)
-        .padding(.top, message.showsHeader ? 8 : 1)
-        .padding(.bottom, 1)
-        .opacity(message.sendState == .sending ? 0.55 : 1)
-        .overlay(alignment: .bottomTrailing) {
-            ReceiptView(message: message, media: media)
-                .padding(.bottom, 3)
+    }
+
+    /// Time, sender, text on one line, with the names in a column so the text lines up.
+    private var ircRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(message.date.formatted(date: .omitted, time: .shortened))
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
+                .frame(width: 54, alignment: .trailing)
+            Text(message.senderName)
+                .fontWeight(.semibold)
+                .foregroundStyle(AvatarView.color(for: message.sender))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: 88, alignment: .trailing)
+                .help(message.sender)
+            VStack(alignment: .leading, spacing: 3) { content }
+            Spacer(minLength: 0)
         }
-        .overlay(alignment: .topTrailing) {
-            if isHovering, message.sendState == nil {
-                HStack(spacing: 2) {
-                    ForEach(Self.quickReactions, id: \.self) { emoji in
-                        Button(emoji) {
-                            Task { await timeline.toggleReaction(emoji, on: message.itemID) }
-                        }
-                        .buttonStyle(.plain)
-                        .padding(3)
+    }
+
+    /// The message itself with what hangs under it; shared by both layouts.
+    @ViewBuilder private var content: some View {
+        bodyView
+        if !message.reactions.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(message.reactions) { reaction in
+                    Button {
+                        Task { await timeline.toggleReaction(reaction.key, on: message.itemID) }
+                    } label: {
+                        Text("\(reaction.key) \(reaction.count)")
+                            .font(.callout)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(reaction.isOwn ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.15),
+                                        in: Capsule())
                     }
-                    if let openThread {
-                        Divider().frame(height: 14)
-                        Button(action: openThread) {
-                            Image(systemName: "bubble.left.and.text.bubble.right")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(3)
-                        .help("Reply in thread")
-                    }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 4)
-                .background(.regularMaterial, in: Capsule())
-                .overlay { Capsule().strokeBorder(.separator) }
-                .offset(y: -6)
             }
         }
-        .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
-        .contextMenu {
+        if let thread = message.thread, let openThread {
+            ThreadChip(thread: thread, media: media, action: openThread)
+        }
+        if message.sendState == .failed {
+            Button("Failed to send. Retry") {
+                Task { await timeline.retry(message.itemID) }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+            .foregroundStyle(.red)
+        }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 1) {
+            ForEach(Self.quickReactions, id: \.self) { emoji in
+                ActionButton(help: "React with \(emoji)") {
+                    Task { await timeline.toggleReaction(emoji, on: message.itemID) }
+                } label: {
+                    Text(emoji).font(.system(size: 15))
+                }
+            }
+            ActionButton(help: "More reactions…") {
+                showsPicker = true
+            } label: {
+                Image(systemName: "face.smiling")
+            }
+            .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
+                EmojiPicker { emoji in
+                    showsPicker = false
+                    Task { await timeline.toggleReaction(emoji, on: message.itemID) }
+                }
+            }
             if let openThread {
-                Button(message.thread == nil ? "Reply in Thread" : "Open Thread", action: openThread)
-            }
-            if case .text(let text) = message.body {
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
+                Divider().frame(height: 16).padding(.horizontal, 3)
+                ActionButton(help: "Reply in thread", action: openThread) {
+                    Image(systemName: "bubble.left.and.text.bubble.right")
                 }
             }
         }
+        .padding(3)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.separator) }
+        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
     }
 
     @ViewBuilder private var bodyView: some View {
@@ -437,6 +508,29 @@ private struct MessageView: View {
             Text(text)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// One button in a message's floating action bar.
+private struct ActionButton<Label: View>: View {
+    let help: String
+    let action: () -> Void
+    @ViewBuilder var label: Label
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            label
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 26)
+                .background(isHovering ? Color.primary.opacity(0.1) : .clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(help)
     }
 }
 
@@ -694,5 +788,15 @@ extension String {
             result[lower..<upper].link = url
         }
         return result
+    }
+}
+
+private extension Date {
+    /// "Today", "Yesterday", or the full date.
+    var dayLabel: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(self) { return "Today" }
+        if calendar.isDateInYesterday(self) { return "Yesterday" }
+        return formatted(date: .complete, time: .omitted)
     }
 }

@@ -28,6 +28,10 @@ struct HuddleApp: App {
                 }
             }
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 }
 

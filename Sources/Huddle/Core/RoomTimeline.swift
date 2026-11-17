@@ -55,6 +55,9 @@ struct MessageRow: Equatable {
         var key: String
         var count: Int
         var isOwn: Bool
+        /// Who added this reaction most recently, and when.
+        var latestSender: String?
+        var latestDate: Date?
         var id: String { key }
     }
 
@@ -118,6 +121,20 @@ struct MediaRef: Equatable {
 }
 
 /// Live, paginated view of one room's events, or of a single thread within it.
+/// A reaction newer than a room's newest message, worded for the room list.
+struct ReactionPreview: Equatable {
+    var text: String
+    var date: Date
+}
+
+extension String {
+    /// "alice" from "@alice:example.org".
+    var matrixLocalpart: String {
+        guard hasPrefix("@"), let colon = firstIndex(of: ":") else { return self }
+        return String(self[index(after: startIndex)..<colon])
+    }
+}
+
 @MainActor @Observable
 final class RoomTimeline {
     let room: Room
@@ -146,6 +163,8 @@ final class RoomTimeline {
     @ObservationIgnored private var threadSeen: [String: Date] = [:]
     /// Thread timeline only. Tells the room's timeline that this thread has been read.
     @ObservationIgnored var onRead: (() -> Void)?
+    @ObservationIgnored var onLatestReaction: ((ReactionPreview?) -> Void)?
+    @ObservationIgnored private var latestReaction: ReactionPreview?
     @ObservationIgnored private var lastRoomReceipt: String?
     /// A two-person direct chat shows ticks on your messages; other rooms show who has read.
     @ObservationIgnored private var isOneToOne = false
@@ -270,9 +289,39 @@ final class RoomTimeline {
         let oldFirst = self.rows.first(where: \.isMessage)?.id
         let newFirst = rows.first(where: \.isMessage)?.id
         self.rows = rows
+        if threadRoot == nil { updateLatestReaction() }
         if let oldFirst, oldFirst != newFirst, rows.contains(where: { $0.id == oldFirst }) {
             prependAnchorID = oldFirst
             prependCount += 1
+        }
+    }
+
+    /// The newest reaction, if it came after the newest message: the room list shows it as the
+    /// room's latest activity.
+    private func updateLatestReaction() {
+        var newest: ReactionPreview?
+        var lastMessageDate = Date.distantPast
+        for row in rows {
+            guard case .message(let message) = row.kind else { continue }
+            lastMessageDate = max(lastMessageDate, message.date)
+            for reaction in message.reactions {
+                guard let sender = reaction.latestSender, let date = reaction.latestDate,
+                      date > (newest?.date ?? .distantPast) else { continue }
+                let target: String
+                switch message.body {
+                case .text(let text), .emote(let text): target = "“\(text.replacingOccurrences(of: "\n", with: " ").prefix(60))”"
+                case .image: target = "an image"
+                case .attachment(_, let name): target = name
+                default: target = "a message"
+                }
+                let who = sender == ownUserID ? "You" : (profiles[sender]?.name ?? sender.matrixLocalpart)
+                newest = ReactionPreview(text: "\(who) reacted \(reaction.key) to \(target)", date: date)
+            }
+        }
+        if let found = newest, found.date <= lastMessageDate { newest = nil }
+        if newest != latestReaction {
+            latestReaction = newest
+            onLatestReaction?(newest)
         }
     }
 
@@ -454,9 +503,12 @@ extension TimelineRow.Kind {
             body: body,
             isEdited: isEdited,
             reactions: event.reactions.map { reaction in
-                .init(key: reaction.key,
-                      count: reaction.senders.count,
-                      isOwn: reaction.senders.contains { $0.senderId == ownUserID })
+                let latest = reaction.senders.max { $0.timestamp < $1.timestamp }
+                return .init(key: reaction.key,
+                             count: reaction.senders.count,
+                             isOwn: reaction.senders.contains { $0.senderId == ownUserID },
+                             latestSender: latest?.senderId,
+                             latestDate: latest.map { Date(matrixTimestamp: $0.timestamp) })
             },
             sendState: sendState,
             thread: ThreadInfo(content.threadSummary),

@@ -8,7 +8,7 @@ struct RoomListView: View {
     var body: some View {
         List(selection: $account.selectedRoomID) {
             ForEach(account.rooms) { room in
-                RoomRow(room: room, media: account.media)
+                RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id])
                     .tag(room.id)
                     .onAppear {
                         if room.id == account.rooms.last?.id { account.loadMoreRooms() }
@@ -62,6 +62,18 @@ struct RoomListView: View {
 private struct RoomRow: View {
     let room: RoomSummary
     let media: MediaLoader
+    var reaction: ReactionPreview?
+
+    /// The reaction, when it is more recent than the room's newest message.
+    private var latestReaction: ReactionPreview? {
+        guard let reaction, !room.isInvite, reaction.date > (room.timestamp ?? .distantPast) else { return nil }
+        return reaction
+    }
+
+    private var preview: String {
+        if room.isInvite { return room.lastMessage ?? "Invitation" }
+        return latestReaction?.text ?? room.lastMessage ?? " "
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -72,14 +84,14 @@ private struct RoomRow: View {
                         .fontWeight(room.hasUnread || room.isHighlighted ? .semibold : .regular)
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    if let timestamp = room.timestamp {
+                    if let timestamp = latestReaction?.date ?? room.timestamp {
                         Text(timestamp.roomListLabel)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
                 HStack(alignment: .center) {
-                    Text(room.isInvite ? (room.lastMessage ?? "Invitation") : (room.lastMessage ?? " "))
+                    Text(preview)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
