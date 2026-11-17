@@ -33,29 +33,41 @@ final class MediaLoader: @unchecked Sendable {
         if let cached = cache.object(forKey: key) { return cached }
         if DevHooks.imageLoadDelay > 0 { try? await Task.sleep(for: .seconds(DevHooks.imageLoadDelay)) }
 
-        guard let data = await displayData(for: image, side: side, isLocal: isLocal),
-              let scaled = ImagePreparer.scaled(data, to: side) else { return nil }
+        guard let (data, isWhole) = await displayData(for: image, side: side, isLocal: isLocal),
+              var scaled = ImagePreparer.scaled(data, to: side) else { return nil }
+        // A smaller copy that isn't the shape of the picture is either cropped (some apps make
+        // their thumbnails by cutting a square out of the middle) or the picture's reported size
+        // is wrong. The picture itself settles which, and is what gets shown.
+        if !isWhole, !image.hasReportedShape(CGSize(width: scaled.width, height: scaled.height)),
+           let whole = try? await imageFile(source: image.media.source),
+           let rescaled = ImagePreparer.scaled(whole, to: side) {
+            scaled = rescaled
+        }
         let result = NSImage(cgImage: scaled, size: CGSize(width: scaled.width, height: scaled.height))
         cache.setObject(result, forKey: key, cost: scaled.width * scaled.height * 4)
         return result
     }
 
-    /// The smallest download that will do for the timeline.
-    private func displayData(for image: ImageAttachment, side: Int, isLocal: Bool) async -> Data? {
+    /// The smallest download that will do for the timeline, and whether it is the whole picture
+    /// rather than a smaller copy of it.
+    private func displayData(for image: ImageAttachment, side: Int, isLocal: Bool) async -> (Data, Bool)? {
         let isEncrypted = image.media.source.toJson().contains("\"key\"")
         if isLocal || isEncrypted {
             // The server can't scale these: one is still on this Mac, the other it can't read.
-            // The sender's own thumbnail will do if it is sharp enough for the size wanted.
-            if let thumbnail = image.thumbnail, isLocal || (image.thumbnailPixelWidth ?? 0) >= CGFloat(side) * 0.6,
+            // The sender's own thumbnail will do if it is sharp enough for the size wanted, and
+            // the same shape as the picture.
+            if let thumbnail = image.thumbnail,
+               isLocal || ((image.thumbnailPixelSize.map { max($0.width, $0.height) } ?? 0) >= CGFloat(side) * 0.6
+                           && image.hasReportedShape(image.thumbnailPixelSize ?? .zero)),
                let data = try? await client.getMediaContent(mediaSource: thumbnail.source) {
-                return data
+                return (data, false)
             }
-            return try? await imageFile(source: image.media.source)
+            return (try? await imageFile(source: image.media.source)).map { ($0, true) }
         }
         if let data = try? await client.getMediaThumbnail(mediaSource: image.media.source, width: UInt64(side), height: UInt64(side)) {
-            return data
+            return (data, false)
         }
-        return try? await imageFile(source: image.media.source)
+        return (try? await imageFile(source: image.media.source)).map { ($0, true) }
     }
 
     /// An image exactly as it was sent, for viewing at full size, copying, saving, or animating.

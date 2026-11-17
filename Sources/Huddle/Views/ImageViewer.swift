@@ -157,7 +157,8 @@ struct ImageViewer: View {
     /// representations is no guide: AppKit adds a double-sized one after drawing on a Retina screen.)
     private var naturalSize: CGSize {
         if let full, full.size.width > 0, full.size.height > 0 { return full.size }
-        if let size = item.image.pixelSize { return size }
+        // Until then the timeline's idea of its shape, which corrects a wrongly reported size.
+        if let size = ImageShapes.corrected(for: item.image) ?? item.image.pixelSize { return size }
         return item.placeholder?.size ?? CGSize(width: 400, height: 300)
     }
 

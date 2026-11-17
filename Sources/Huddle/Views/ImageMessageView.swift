@@ -18,6 +18,8 @@ struct ImageMessageView: View {
     var cancelUpload: (() -> Void)?
 
     @State private var still: NSImage?
+    /// The picture's true size, when the sender reported it wrongly.
+    @State private var correctedSize: CGSize?
     @State private var animation: NSImage?
     @State private var hasFailed = false
     @State private var attempt = 0
@@ -31,23 +33,38 @@ struct ImageMessageView: View {
         let isLocal: Bool
     }
 
+    /// The frame, shaped like the picture itself once it is known.
+    private var displaySize: CGSize {
+        image.displaySize(for: correctedSize ?? ImageShapes.corrected(for: image) ?? image.pixelSize)
+    }
+
     var body: some View {
-        let size = image.displaySize
+        let size = displaySize
         // Rounded like everything else in the timeline, but gently on an image that is itself small.
         let radius = image.isSticker ? 0 : min(10, min(size.width, size.height) * 0.18)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
 
         ZStack {
             Button(action: hasFailed ? retry : { open(still) }) {
+                // Every layer is held to the frame on its own. Left to size themselves, a layer
+                // filling the frame takes the shape of its picture, and the stack takes the
+                // largest of them: the blurred placeholder, which is always square, would make
+                // the stack square and the picture would be filled into that and cut down,
+                // showing only its middle.
                 ZStack {
                     placeholder
+                        .frame(width: size.width, height: size.height)
+                        .clipped()
                     if let animation, sendState == nil {
                         AnimatedImage(image: animation, isPlaying: isOnScreen)
+                            .frame(width: size.width, height: size.height)
                     } else if let still {
                         Image(nsImage: still)
                             .resizable()
                             .interpolation(.high)
                             .aspectRatio(contentMode: .fill)
+                            .frame(width: size.width, height: size.height)
+                            .clipped()
                             .transition(.opacity)
                     }
                 }
@@ -97,12 +114,18 @@ struct ImageMessageView: View {
             still = localPreview
             return
         }
-        let size = image.displaySize
+        let size = displaySize
         // Sharp on this screen, with a little to spare for images cropped to fit.
         let side = Int((max(size.width, size.height) * displayScale * 1.2).rounded(.up))
         guard let loaded = await media.displayImage(for: image, side: max(side, 64), isLocal: sendState != nil) else {
             if !Task.isCancelled { hasFailed = still == nil }
             return
+        }
+        // Reshape the frame if the picture turns out not to be the shape the sender said, and
+        // remember that, so the frame is right from the start next time it is drawn.
+        if let corrected = image.correctedPixelSize(seeing: loaded.size) {
+            ImageShapes.remember(corrected, for: image)
+            correctedSize = corrected
         }
         still = loaded
         if image.isAnimated, sendState == nil {
@@ -239,5 +262,19 @@ private enum BlurCache {
         guard let image = BlurHash.image(from: hash) else { return nil }
         cache.setObject(image, forKey: hash as NSString)
         return image
+    }
+}
+
+/// Images whose real shape turned out to differ from what their sender reported, by address.
+@MainActor
+enum ImageShapes {
+    private static var sizes: [String: CGSize] = [:]
+
+    static func corrected(for image: ImageAttachment) -> CGSize? {
+        sizes[image.media.source.url()]
+    }
+
+    static func remember(_ size: CGSize, for image: ImageAttachment) {
+        sizes[image.media.source.url()] = size
     }
 }

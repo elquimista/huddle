@@ -9,7 +9,8 @@ struct ImageAttachment: Equatable {
     /// A smaller copy the sender made. In encrypted rooms the server can't make one, so this is
     /// the only way to show the picture without downloading all of it.
     let thumbnail: MediaRef?
-    let thumbnailPixelWidth: CGFloat?
+    /// The thumbnail's size, as the sender reported it.
+    let thumbnailPixelSize: CGSize?
     let filename: String
     let caption: String?
     /// As the sender reported it; nil if they didn't.
@@ -31,7 +32,7 @@ struct ImageAttachment: Equatable {
     init(staged: StagedImage, caption: String?, id: UUID) {
         media = MediaRef(source: try! MediaSource.fromUrl(url: "mxc://queued.invalid/\(id.uuidString)"))
         thumbnail = nil
-        thumbnailPixelWidth = nil
+        thumbnailPixelSize = nil
         filename = staged.filename
         self.caption = caption
         pixelSize = staged.pixelSize
@@ -49,7 +50,11 @@ struct ImageAttachment: Equatable {
     private init(source: MediaSource, info: ImageInfo?, filename: String, caption: String?, isSticker: Bool) {
         media = MediaRef(source: source)
         thumbnail = info?.thumbnailSource.map(MediaRef.init(source:))
-        thumbnailPixelWidth = info?.thumbnailInfo?.width.map { CGFloat($0) }
+        if let width = info?.thumbnailInfo?.width, let height = info?.thumbnailInfo?.height, width > 0, height > 0 {
+            thumbnailPixelSize = CGSize(width: CGFloat(width), height: CGFloat(height))
+        } else {
+            thumbnailPixelSize = nil
+        }
         self.filename = filename
         self.caption = caption
         if let width = info?.width, let height = info?.height, width > 0, height > 0 {
@@ -72,10 +77,14 @@ struct ImageAttachment: Equatable {
     private static let minimumSide: CGFloat = 72
     private static let stickerSide: CGFloat = 128
 
-    /// How big to draw the image: its own size if that fits, otherwise scaled down to fit the
-    /// box. Never scaled up. An extreme shape is cropped rather than reduced to a sliver.
-    var displaySize: CGSize {
-        guard let pixelSize else { return CGSize(width: 280, height: 210) }
+    /// How big to draw the image, going by the size the sender reported.
+    var displaySize: CGSize { displaySize(for: pixelSize) }
+
+    /// How big to draw an image of this many pixels: its own size if that fits, otherwise scaled
+    /// down to fit the box. Never scaled up. An extreme shape is cropped rather than reduced to
+    /// a sliver.
+    func displaySize(for pixelSize: CGSize?) -> CGSize {
+        guard let pixelSize, pixelSize.width > 0, pixelSize.height > 0 else { return CGSize(width: 280, height: 210) }
         let limit = isSticker ? CGSize(width: Self.stickerSide, height: Self.stickerSide) : Self.maximumSize
         let scale = min(1, limit.width / pixelSize.width, limit.height / pixelSize.height)
         let fitted = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
@@ -83,6 +92,30 @@ struct ImageAttachment: Equatable {
         let floor = min(Self.minimumSide, max(pixelSize.width, pixelSize.height))
         return CGSize(width: max(fitted.width, min(floor, pixelSize.width)).rounded(),
                       height: max(fitted.height, min(floor, pixelSize.height)).rounded())
+    }
+
+    /// The image's real size, judged from a copy of it that has been loaded (which may be
+    /// smaller, but has the true shape). Nil if the reported size already has that shape.
+    ///
+    /// Senders get this wrong more often than you'd think: some report width and height the
+    /// wrong way round, and phone photos are often stored on their side with a note saying
+    /// which way up they go, and reported at their stored, sideways, size. Drawn by the reported
+    /// size, such a photo gets a frame of the wrong shape and is cropped to fill it.
+    func correctedPixelSize(seeing loaded: CGSize) -> CGSize? {
+        guard loaded.width > 0, loaded.height > 0 else { return nil }
+        guard let reported = pixelSize else { return loaded }
+        guard !hasReportedShape(loaded) else { return nil }
+        // Keep the reported scale: the loaded copy is usually a smaller thumbnail.
+        let scale = max(reported.width, reported.height) / max(loaded.width, loaded.height)
+        return CGSize(width: (loaded.width * scale).rounded(), height: (loaded.height * scale).rounded())
+    }
+
+    /// Whether a copy of this size has the same shape as the picture is reported to have.
+    /// Unknown counts as yes: there is nothing to compare with.
+    func hasReportedShape(_ size: CGSize) -> Bool {
+        guard let reported = pixelSize, size.width > 0, size.height > 0 else { return true }
+        let ratio = (size.width / size.height) / (reported.width / reported.height)
+        return abs(ratio - 1) <= 0.04
     }
 
     /// A name to save or preview the image under, with an extension that matches what it is.
@@ -192,10 +225,19 @@ enum ImagePreparer {
 
         var thumbnail: (data: Data, size: CGSize, mimetype: String)?
         if !isAnimated, largestSide > thumbnailSide || data.count > 400_000,
-           let small = scaled(source, to: min(thumbnailSide, largestSide)) {
+           var small = scaled(source, to: min(thumbnailSide, largestSide)) {
+            var reportedSize = CGSize(width: small.width, height: small.height)
+            if DevHooks.cropsThumbnails {
+                // Reported at its uncropped size, as the worst-behaved apps do, so that only
+                // looking at the thumbnail itself gives it away.
+                let side = min(small.width, small.height)
+                small = small.cropping(to: CGRect(x: (small.width - side) / 2, y: (small.height - side) / 2,
+                                                  width: side, height: side)) ?? small
+            }
             let smallType: UTType = hasTransparency ? .png : .jpeg
             if let encoded = encode(small, as: smallType, quality: 0.8), encoded.count < data.count {
-                thumbnail = (encoded, CGSize(width: small.width, height: small.height), smallType.preferredMIMEType ?? "image/jpeg")
+                if !DevHooks.cropsThumbnails { reportedSize = CGSize(width: small.width, height: small.height) }
+                thumbnail = (encoded, reportedSize, smallType.preferredMIMEType ?? "image/jpeg")
             }
         }
 
