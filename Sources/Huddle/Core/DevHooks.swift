@@ -14,6 +14,9 @@ import Foundation
 ///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance
 ///   HUDDLE_DEV_ASSUME_ACTIVE  mark rooms as read even while the app is in the background
 ///   HUDDLE_DEV_HOVER     text of a message to show the hover actions on ("text!" also opens its emoji picker)
+///   HUDDLE_DEV_MUTE_AUDIO  play audio messages silently (Scripts/run-dev.sh sets this)
+///   HUDDLE_DEV_AUDIO_DEVICE  UID of the output device to play through, instead of the Mac's default
+///   HUDDLE_DEV_AUDIO_DELAY   seconds to stall before audio starts, standing in for a slow output device
 ///   HUDDLE_DEV_NO_BROWSER  print the OAuth sign-in URL (DEV_OAUTH_URL ...) instead of opening it
 @MainActor
 enum DevHooks {
@@ -51,6 +54,14 @@ enum DevHooks {
 
     /// Stands in for the pointer, which automation cannot move over the Dev app.
     static let hoverText: String? = AppEnvironment.isDev ? ProcessInfo.processInfo.environment["HUDDLE_DEV_HOVER"] : nil
+
+    /// Keeps test runs from making noise.
+    static let mutesAudio = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_MUTE_AUDIO"] != nil
+
+    static let audioDevice: String? = AppEnvironment.isDev ? ProcessInfo.processInfo.environment["HUDDLE_DEV_AUDIO_DEVICE"] : nil
+
+    static let audioStartDelay: TimeInterval = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_AUDIO_DELAY"].flatMap(TimeInterval.init) ?? 0 : 0
 
     /// First-run preview: nothing is restored and no hooks run.
     static var startsFresh: Bool {

@@ -164,6 +164,7 @@ struct TimelineView: View {
         }
         .onDisappear {
             input.stop()
+            AudioPlayback.shared.stop(owner: timeline)
             let timeline = timeline
             Task { await timeline.leave() }
         }
@@ -435,6 +436,9 @@ private struct MessageView: View {
             if let openThread {
                 Button(message.thread == nil ? "Reply in Thread" : "Open Thread", action: openThread)
             }
+            if case .audio(let audio) = message.body {
+                Button("Save Audio As…") { AudioSaver.save(audio, media: media) }
+            }
             if case .text(let text) = message.body {
                 Button("Copy") {
                     NSPasteboard.general.clearContents()
@@ -582,6 +586,15 @@ private struct MessageView: View {
                     Text(caption.linkified).textSelection(.enabled)
                 }
             }
+        case .audio(let audio):
+            VStack(alignment: .leading, spacing: 4) {
+                AudioMessageView(id: message.eventID ?? audio.media.source.url(), audio: audio,
+                                 media: media, owner: timeline)
+                if let caption = audio.caption {
+                    Text(caption.linkified).textSelection(.enabled)
+                }
+            }
+            .padding(.vertical, 2)
         case .attachment(let icon, let name):
             Label(name, systemImage: icon)
                 .padding(.horizontal, 10)

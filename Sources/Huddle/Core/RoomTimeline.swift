@@ -29,6 +29,7 @@ struct MessageRow: Equatable {
         case text(String)
         case emote(String)
         case image(MediaRef, caption: String?, aspectRatio: Double)
+        case audio(AudioAttachment)
         case attachment(icon: String, name: String)
         case undecryptable
         case redacted
@@ -324,6 +325,7 @@ final class RoomTimeline {
                         name: { [profiles] in profiles[$0]?.name })
                     target = "“\(plain.prefix(60))”"
                 case .image: target = "an image"
+                case .audio(let audio): target = audio.isVoice ? "a voice message" : audio.filename
                 case .attachment(_, let name): target = name
                 default: target = "a message"
                 }
@@ -578,7 +580,7 @@ extension MessageRow.Body {
                           caption: content.caption,
                           aspectRatio: content.info?.aspectRatio ?? 1.5)
         case .video(let content): self = .attachment(icon: "film", name: content.filename)
-        case .audio(let content): self = .attachment(icon: "waveform", name: content.filename)
+        case .audio(let content): self = .audio(AudioAttachment(content))
         case .file(let content): self = .attachment(icon: "doc", name: content.filename)
         case .gallery: self = .attachment(icon: "photo.on.rectangle", name: message.body)
         case .location: self = .attachment(icon: "mappin.and.ellipse", name: "Location")
@@ -606,7 +608,7 @@ extension TimelineItemContent {
                 switch message.msgType {
                 case .image: text = "Image"
                 case .video: text = "Video"
-                case .audio: text = "Audio"
+                case .audio(let content): text = content.voice != nil ? "Voice message" : content.filename
                 case .file(let file): text = file.filename
                 case .emote(let emote):
                     return "* \(who) \(MessageFormatter.plainText(text: emote.body, formatted: emote.formatted))"

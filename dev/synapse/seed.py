@@ -5,11 +5,12 @@ Run after setup.sh. Does nothing if alice already has rooms.
 
   seed.py                                   rooms, history, images, a DM, an encrypted room, an invite
   seed.py threads                           three threads in General, one long
+  seed.py audio                             voice messages and audio files in General
   seed.py say <user> <room> <text>          one live message
   seed.py read <user> <room> [fragment]     send a read receipt, for the newest message or a named one
   seed.py reply <user> <room> <fragment> <text>   one reply in the thread whose text contains <fragment>
 """
-import json, os, struct, sys, urllib.error, urllib.request, uuid, zlib
+import json, os, struct, sys, urllib.error, urllib.parse, urllib.request, uuid, zlib
 
 def load_env():
     env = {}
@@ -109,8 +110,46 @@ def seed_threads():
         reply_in_thread(speakers[i % 3], general, root, f"Thread reply {i}")
     print("Seeded three threads in General.")
 
+def upload(token, name, data, content_type):
+    request = urllib.request.Request(f"{BASE}/_matrix/media/v3/upload?filename={urllib.parse.quote(name)}",
+                                     data=data, method="POST")
+    request.add_header("Content-Type", content_type)
+    request.add_header("Authorization", "Bearer " + token)
+    return json.load(urllib.request.urlopen(request))["content_uri"]
+
+def seed_audio():
+    """Audio in General: voice messages with and without a waveform, files that play natively,
+    one that needs the system's Ogg reader, and one that can't be played at all."""
+    fixtures = os.path.join(os.path.dirname(__file__), "fixtures")
+    meta = json.load(open(os.path.join(fixtures, "audio.json")))
+    read = lambda name: open(os.path.join(fixtures, name), "rb").read()
+    bob, carol = login("bob"), login("carol")
+    general = find_room(bob, "General")
+
+    def audio(token, body, data, mimetype, duration_ms, **extra):
+        uri = upload(token, extra.get("filename", body), data, mimetype)
+        info = {"mimetype": mimetype, "size": len(data), "duration": duration_ms}
+        return send(token, general, body, "m.audio", url=uri, info=info, **extra)
+
+    voice, song, chime = read("voice.ogg"), read("song.mp3"), read("chime.ogg")
+    length = meta["voice"]["duration_ms"]
+    send(bob, general, "Sending a couple of voice notes about the release")
+    audio(bob, "Voice message.ogg", voice, "audio/ogg", length, **{
+        "org.matrix.msc3245.voice": {},
+        "org.matrix.msc1767.audio": {"duration": length, "waveform": meta["voice"]["waveform"]}})
+    audio(carol, "Voice message.ogg", voice, "audio/ogg", length, **{"org.matrix.msc3245.voice": {}})
+    audio(bob, "late-night-arpeggio.mp3", song, "audio/mpeg", meta["song"]["duration_ms"])
+    audio(carol, "Here's the standup recording, the bit about the launch is near the end", song, "audio/mpeg",
+          meta["song"]["duration_ms"], filename="2026-11-17 Standup recording with the whole platform team (final cut).mp3")
+    audio(carol, "notification-chime.ogg", chime, "audio/ogg", meta["chime"]["duration_ms"])
+    audio(bob, "field-recording.xyz", b"not really audio " * 400, "application/octet-stream", 5000)
+    print("Seeded audio in General.")
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else None
+    if command == "audio":    # seed.py audio: voice messages and audio files in General
+        seed_audio()
+        return
     if command == "say":      # seed.py say <user> <room> <text>: one live message
         _, _, user, room_name, text = sys.argv
         token = login(user)

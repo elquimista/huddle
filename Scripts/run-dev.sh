@@ -11,5 +11,8 @@ Scripts/build-app.sh   # Keep the release app in step with every Dev build.
 set -a; source dev/synapse/dev.env; set +a
 export HUDDLE_DEV_ACCOUNTS="${HUDDLE_DEV_ACCOUNTS:-${HUDDLE_DEV_USERS// /,}}"
 export HUDDLE_DEV_SELECT="${1:-}"
+# Test runs stay quiet; HUDDLE_DEV_MUTE_AUDIO= Scripts/run-dev.sh makes audio messages audible.
+if [ -z "${HUDDLE_DEV_MUTE_AUDIO+set}" ]; then export HUDDLE_DEV_MUTE_AUDIO=1; fi
+[ -n "$HUDDLE_DEV_MUTE_AUDIO" ] || unset HUDDLE_DEV_MUTE_AUDIO
 pkill -f "Huddle Dev.app/Contents/MacOS/Huddle" 2>/dev/null || true
 "build/Huddle Dev.app/Contents/MacOS/Huddle" > .build/dev.log 2>&1 &

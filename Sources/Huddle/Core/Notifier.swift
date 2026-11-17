@@ -130,7 +130,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             case .emote(let content): return "* " + MessageFormatter.plainText(text: content.body, formatted: content.formatted)
             case .image(let content): return content.caption ?? "Sent an image"
             case .video(let content): return content.caption ?? "Sent a video"
-            case .audio(let content): return content.caption ?? "Sent an audio message"
+            case .audio(let content):
+                return content.caption ?? (content.voice != nil ? "Sent a voice message" : "Sent an audio file: \(content.filename)")
             case .file(let content): return content.caption ?? "Sent a file: \(content.filename)"
             case .gallery: return "Sent images"
             case .location: return "Shared a location"
