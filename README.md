@@ -8,6 +8,7 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Sign-in:** username and password in the app wherever the homeserver accepts them, with OAuth in your browser as the alternative (needed for single sign-on, passkeys and two-step verification) or where it is the only way.
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions and a markdown composer.
 - **Threads:** Slack-style. Replies stay out of the room; the root message shows a reply count that opens the thread in a side panel with its own composer. A toolbar button lists all of a room's threads.
+- **Read receipts:** in direct chats, ticks on your messages (one grey tick while sending, two grey once sent, two coloured once read); in group rooms, small avatars beside the last message each person has read, with the full list on click.
 - **Encryption:** end-to-end encrypted rooms work, and a new session is verified with your recovery key.
 
 Not built yet: system notifications, sending attachments, inline replies, edits, spaces, and emoji verification.
@@ -66,6 +67,7 @@ Two Docker setups give Huddle Dev something to talk to. Their credentials are in
 dev/synapse/setup.sh          # start Synapse, create alice, bob, carol, dave, erin
 dev/synapse/seed.py           # rooms, history, images, a DM, an encrypted room, an invite
 dev/synapse/seed.py say bob General "hello"   # send one live message
+dev/synapse/seed.py read bob General           # Bob reads General up to its newest message
 dev/synapse/seed.py threads   # three threads in General, one with 40 replies
 dev/synapse/seed.py reply bob General "team lunch" "hi"   # reply in the thread containing that text
 ```

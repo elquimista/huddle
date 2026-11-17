@@ -37,6 +37,20 @@ struct MessageRow: Equatable {
 
     enum SendState: Equatable { case sending, failed }
 
+    enum Delivery: Equatable { case sending, sent, read }
+
+    struct RawReceipt: Equatable {
+        var userID: String
+        var date: Date?
+    }
+
+    struct Reader: Equatable, Identifiable {
+        let id: String
+        var name: String
+        var avatarURL: String?
+        var date: Date?
+    }
+
     struct ReactionChip: Equatable, Identifiable {
         var key: String
         var count: Int
@@ -61,6 +75,16 @@ struct MessageRow: Equatable {
     var sendState: SendState?
     /// Present on a message that has thread replies.
     var thread: ThreadInfo?
+    /// Read receipts placed on this message, as the SDK reports them. Resolved into `readers`.
+    var receipts: [RawReceipt] = []
+    /// Group rooms: other people whose latest read message is this one, most recent first.
+    var readers: [Reader] = []
+    /// Your own messages: how far this one has got. Nil when no indicator should show.
+    var delivery: Delivery?
+    /// For a read message: when it is known to have been read. Exact if the receipt sits on
+    /// this message; otherwise the time of the later receipt or reply that covers it.
+    var readDate: Date?
+    var readDateIsExact = false
     /// False when this message continues a run from the same sender.
     var showsHeader = true
 }
@@ -123,6 +147,11 @@ final class RoomTimeline {
     /// Thread timeline only. Tells the room's timeline that this thread has been read.
     @ObservationIgnored var onRead: (() -> Void)?
     @ObservationIgnored private var lastRoomReceipt: String?
+    /// A two-person direct chat shows ticks on your messages; other rooms show who has read.
+    @ObservationIgnored private var isOneToOne = false
+    /// Names and avatars for read receipts, learned from messages and fetched for the rest.
+    @ObservationIgnored private var profiles: [String: (name: String, avatarURL: String?)] = [:]
+    @ObservationIgnored private var requestedProfiles: Set<String> = []
 
     init(room: Room, threadRoot: String? = nil) {
         self.room = room
@@ -153,6 +182,8 @@ final class RoomTimeline {
             let (stream, continuation) = AsyncStream.makeStream(of: [TimelineDiff].self)
             listenerHandle = await timeline.addListener(listener: TimelineDiffListener { continuation.yield($0) })
             if threadRoot == nil { unreadHorizon = await lastReadTime() }
+            let isDirect = await room.isDirect()
+            isOneToOne = isDirect && room.activeMembersCount() <= 2
             isLoading = false
             for await diffs in stream {
                 for diff in diffs { items.apply(diff.diff) }
@@ -227,6 +258,8 @@ final class RoomTimeline {
             }
         }
 
+        resolveReceipts(in: &rows)
+
         // Detect history landing above what was the oldest message, so the view can hold its place.
         let oldFirst = self.rows.first(where: \.isMessage)?.id
         let newFirst = rows.first(where: \.isMessage)?.id
@@ -235,6 +268,68 @@ final class RoomTimeline {
             prependAnchorID = oldFirst
             prependCount += 1
         }
+    }
+
+    /// Turns raw receipts into what each message shows: reader avatars in group rooms, and a
+    /// sending / sent / read state on your own messages.
+    private func resolveReceipts(in rows: inout [TimelineRow]) {
+        for row in rows {
+            if case .message(let message) = row.kind, profiles[message.sender] == nil {
+                profiles[message.sender] = (message.senderName, message.senderAvatarURL)
+            }
+        }
+
+        var readByOthers = false      // someone else has read this message or a later one
+        var passedLatestOwn = false
+        var evidenceDate: Date?       // when the nearest later receipt or reply happened
+        for index in rows.indices.reversed() {
+            guard case .message(var message) = rows[index].kind else { continue }
+            let others = message.receipts
+                .filter { $0.userID != ownUserID }
+                .sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+            // Replying is reading: a later message from someone else covers everything before it.
+            if !others.isEmpty || !message.isOwn { readByOthers = true }
+            if let receiptDate = others.first?.date {
+                evidenceDate = receiptDate
+            } else if !message.isOwn {
+                evidenceDate = message.date
+            }
+            message.readDate = message.isOwn && readByOthers ? evidenceDate : nil
+            message.readDateIsExact = !others.isEmpty
+
+            message.readers = isOneToOne ? [] : others.map(reader(for:))
+
+            if !message.isOwn || message.sendState == .failed {
+                message.delivery = nil
+            } else if message.sendState == .sending {
+                message.delivery = .sending
+            } else if isOneToOne {
+                message.delivery = readByOthers ? .read : .sent
+            } else {
+                // In a group the avatars say who has read; only the newest message of yours
+                // needs a "sent" tick, and only until someone reads it.
+                message.delivery = !passedLatestOwn && message.readers.isEmpty ? .sent : nil
+            }
+            if message.isOwn { passedLatestOwn = true }
+            rows[index].kind = .message(message)
+        }
+    }
+
+    private func reader(for receipt: MessageRow.RawReceipt) -> MessageRow.Reader {
+        let userID = receipt.userID
+        if let profile = profiles[userID] {
+            return .init(id: userID, name: profile.name, avatarURL: profile.avatarURL, date: receipt.date)
+        }
+        if requestedProfiles.insert(userID).inserted {
+            Task { [weak self, room] in
+                let name = try? await room.memberDisplayName(userId: userID)
+                let avatar = try? await room.memberAvatarUrl(userId: userID)
+                guard let self else { return }
+                self.profiles[userID] = (name ?? userID, avatar ?? nil)
+                self.rebuildRows()
+            }
+        }
+        return .init(id: userID, name: userID, avatarURL: nil, date: receipt.date)
     }
 
     // MARK: Actions
@@ -346,7 +441,13 @@ extension TimelineRow.Kind {
                       isOwn: reaction.senders.contains { $0.senderId == ownUserID })
             },
             sendState: sendState,
-            thread: ThreadInfo(content.threadSummary)))
+            thread: ThreadInfo(content.threadSummary),
+            // Sorted so the same receipts always compare equal (dictionary order varies).
+            receipts: event.readReceipts
+                .map { userID, receipt in
+                    MessageRow.RawReceipt(userID: userID, date: receipt.timestamp.map(Date.init(matrixTimestamp:)))
+                }
+                .sorted { $0.userID < $1.userID }))
     }
 }
 

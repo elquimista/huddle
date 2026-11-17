@@ -331,9 +331,15 @@ private struct MessageView: View {
             }
             Spacer(minLength: 0)
         }
+        // A gutter on the right for read receipts, so they never sit on top of the text.
+        .padding(.trailing, ReceiptView.gutter)
         .padding(.top, message.showsHeader ? 8 : 1)
         .padding(.bottom, 1)
         .opacity(message.sendState == .sending ? 0.55 : 1)
+        .overlay(alignment: .bottomTrailing) {
+            ReceiptView(message: message, media: media)
+                .padding(.bottom, 3)
+        }
         .overlay(alignment: .topTrailing) {
             if isHovering, message.sendState == nil {
                 HStack(spacing: 2) {
@@ -410,6 +416,125 @@ private struct MessageView: View {
             Text(text)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// What sits at the right of a message: who has read up to it (group rooms), or how far your
+/// own message has got (one grey tick while sending, two grey when sent, two coloured when read).
+private struct ReceiptView: View {
+    static let gutter: CGFloat = 64
+    private static let maxAvatars = 3
+
+    let message: MessageRow
+    let media: MediaLoader
+    @State private var showsReaders = false
+
+    var body: some View {
+        if !message.readers.isEmpty {
+            Button {
+                showsReaders = true
+            } label: {
+                HStack(spacing: 3) {
+                    if message.readers.count > Self.maxAvatars {
+                        Text("+\(message.readers.count - Self.maxAvatars)")
+                            .font(.system(size: 10, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: -4) {
+                        ForEach(message.readers.prefix(Self.maxAvatars).reversed()) { reader in
+                            AvatarView(media: media, url: reader.avatarURL, name: reader.name, seed: reader.id, size: 16)
+                                .overlay { Circle().strokeBorder(.background, lineWidth: 1.5) }
+                        }
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Read by " + message.readers.map(\.name).formatted(.list(type: .and)))
+            .popover(isPresented: $showsReaders, arrowEdge: .trailing) {
+                ReadersList(readers: message.readers, media: media)
+            }
+        } else if let delivery = message.delivery {
+            DeliveryMark(delivery: delivery, readDate: message.readDate,
+                         readDateIsExact: message.readDateIsExact)
+        }
+    }
+}
+
+/// One grey tick while sending, two grey once the server has it, two coloured once read.
+private struct DeliveryMark: View {
+    let delivery: MessageRow.Delivery
+    var readDate: Date?
+    var readDateIsExact = false
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Image(systemName: "checkmark")
+            if delivery != .sending {
+                Image(systemName: "checkmark").offset(x: 5)
+            }
+        }
+        // Same width in every state, so the first tick doesn't shift when the second appears.
+        .padding(.trailing, 5)
+        .font(.system(size: 10, weight: .bold))
+        .foregroundStyle(delivery == .read ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
+    /// The message's own time is already shown beside the sender, so this adds only what isn't:
+    /// the state, and when it was read if that is actually known.
+    private var label: String {
+        switch delivery {
+        case .sending:
+            return "Sending…"
+        case .sent:
+            return "Sent"
+        case .read:
+            // A receipt marks only the last message someone read. Earlier messages are known to
+            // be read, but not when, so they get no time.
+            if let readDate, readDateIsExact {
+                return "Read \(Self.describe(readDate))"
+            }
+            return "Read"
+        }
+    }
+
+    private static func describe(_ date: Date) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "today at \(time)" }
+        if calendar.isDateInYesterday(date) { return "yesterday at \(time)" }
+        return "\(date.formatted(date: .abbreviated, time: .omitted)) at \(time)"
+    }
+}
+
+private struct ReadersList: View {
+    let readers: [MessageRow.Reader]
+    let media: MediaLoader
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Read by")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(readers) { reader in
+                HStack(spacing: 8) {
+                    AvatarView(media: media, url: reader.avatarURL, name: reader.name, seed: reader.id, size: 22)
+                    Text(reader.name)
+                        .lineLimit(1)
+                    Spacer(minLength: 16)
+                    if let date = reader.date {
+                        Text(date.roomListLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(minWidth: 220)
     }
 }
 

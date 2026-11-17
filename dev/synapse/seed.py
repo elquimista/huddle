@@ -6,6 +6,7 @@ Run after setup.sh. Does nothing if alice already has rooms.
   seed.py                                   rooms, history, images, a DM, an encrypted room, an invite
   seed.py threads                           three threads in General, one long
   seed.py say <user> <room> <text>          one live message
+  seed.py read <user> <room> [fragment]     send a read receipt, for the newest message or a named one
   seed.py reply <user> <room> <fragment> <text>   one reply in the thread whose text contains <fragment>
 """
 import json, os, struct, sys, urllib.error, urllib.request, uuid, zlib
@@ -83,6 +84,14 @@ def find_message(token, room, fragment):
             return relation["event_id"] if relation.get("rel_type") == "m.thread" else event["event_id"]
     sys.exit(f"No recent message containing {fragment!r}")
 
+def find_plain_message(token, room, fragment):
+    """Event ID of the newest message whose text contains `fragment`, thread reply or not."""
+    chunk = call("GET", f"/_matrix/client/v3/rooms/{room}/messages?dir=b&limit=100", token)["chunk"]
+    for event in chunk:
+        if event["type"] == "m.room.message" and fragment in event["content"].get("body", ""):
+            return event["event_id"]
+    sys.exit(f"No recent message containing {fragment!r}")
+
 def seed_threads():
     alice, bob, carol = login("alice"), login("bob"), login("carol")
     general = find_room(alice, "General")
@@ -112,6 +121,17 @@ def main():
         token = login(user)
         room = find_room(token, room_name)
         print(reply_in_thread(token, room, find_message(token, room, fragment), text))
+        return
+    if command == "read":     # seed.py read <user> <room> [fragment]: read up to the newest message,
+        user, room_name = sys.argv[2], sys.argv[3]  # or up to the one containing <fragment>
+        token = login(user)
+        room = find_room(token, room_name)
+        if len(sys.argv) > 4:
+            event = find_plain_message(token, room, sys.argv[4])
+        else:
+            event = call("GET", f"/_matrix/client/v3/rooms/{room}/messages?dir=b&limit=1", token)["chunk"][0]["event_id"]
+        call("POST", f"/_matrix/client/v3/rooms/{room}/receipt/m.read/{event}", token, {})
+        print(event)
         return
     if command == "threads":  # seed.py threads: three threads in General
         seed_threads()
