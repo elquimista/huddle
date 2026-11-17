@@ -217,6 +217,9 @@ final class RoomTimeline {
     /// Focused timeline only: counts finished requests for newer messages.
     private(set) var newerRequests = 0
     @ObservationIgnored private var isPaginatingForwards = false
+    /// Set when the user marks the room unread while it is open: it stays unread (nothing is
+    /// marked read, here or on leaving) until it is opened again or they write in it.
+    @ObservationIgnored var holdsUnread = false
     /// Changes whenever a name is learned, so text naming people by their ID is drawn again.
     @ObservationIgnored private(set) var nameVersion = 0
     /// The room's pinned messages, by event ID, in the order they were pinned (oldest first).
@@ -612,8 +615,12 @@ final class RoomTimeline {
                 _ = try await timeline.send(msg: content)
             }
             error = nil
-            // Having answered, the user is caught up: nothing above is "new" any more.
-            if isLive { try? await timeline.markAsRead(receiptType: .fullyRead) }
+            // Having answered, the user is caught up: nothing above is "new" any more, and a
+            // room they had marked unread has been dealt with.
+            if isLive {
+                holdsUnread = false
+                try? await timeline.markAsRead(receiptType: .fullyRead)
+            }
         } catch {
             self.error = error.userMessage
         }
@@ -833,14 +840,15 @@ final class RoomTimeline {
     /// up to on arriving, and stays put while they are here; if they reached the newest message,
     /// move it there so it is gone when they come back.
     func leave() async {
-        guard isLive, hasReadToEnd, let timeline else { return }
+        guard isLive, hasReadToEnd, !holdsUnread, let timeline else { return }
         hasReadToEnd = false
         try? await timeline.markAsRead(receiptType: .fullyRead)
     }
 
     func markAsRead() async {
-        // A stretch of older messages isn't where the room has been read up to.
-        guard let timeline, focusedEvent == nil, !isPinnedList else { return }
+        // A stretch of older messages isn't where the room has been read up to; nor is a room
+        // the user has just marked unread.
+        guard let timeline, focusedEvent == nil, !isPinnedList, !holdsUnread else { return }
         try? await timeline.markAsRead(receiptType: .read)
         hasReadToEnd = true
         guard threadRoot != nil else { return }

@@ -20,6 +20,18 @@ struct HuddleApp: App {
                 Button("Add Account…") { store.isAddingAccount = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
             }
+            CommandMenu("Room") {
+                let account = store.selected
+                let roomID = account?.selectedRoomID
+                let unread = roomID.map { account?.isUnread($0) ?? false } ?? false
+                Button(unread ? "Mark as Read" : "Mark as Unread") {
+                    if let account, let roomID { account.setRoom(roomID, unread: !unread) }
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .disabled(roomID == nil)
+                Button("Mark All as Read") { account?.markAllRead() }
+                    .disabled(!(account?.hasUnreadRooms ?? false))
+            }
             CommandMenu("Accounts") {
                 ForEach(Array(store.accounts.enumerated()), id: \.element.id) { index, account in
                     Button(account.displayName ?? account.userID) { store.selectedID = account.id }

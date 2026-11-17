@@ -13,6 +13,8 @@ struct RoomSummary: Identifiable, Equatable {
     var notifications = 0
     var mentions = 0
     var hasUnread = false
+    /// Marked unread by the user (here or in another client), as a reminder to come back.
+    var isMarkedUnread = false
     /// False when the room's details could not be read, so the counts above mean nothing.
     var hasCounts = false
     var lastMessage: String?
@@ -240,6 +242,12 @@ final class AccountSession: Identifiable {
         }
         let previous = self.rooms
         self.rooms = rooms
+        // Marked unread from another device: a room open here stays unread too, rather than
+        // being read again by the next message that arrives.
+        let wasMarked = Set(previous.filter(\.isMarkedUnread).map(\.id))
+        for room in rooms where room.isMarkedUnread && !wasMarked.contains(room.id) {
+            timelines[room.id]?.holdsUnread = true
+        }
         // A direct chat's other person may only now be known.
         if rooms.contains(where: { $0.directUserID != nil && visibleRooms.contains($0.id) }) { updatePresenceWatch() }
         // A room that stops needing attention (read here or elsewhere) drops its notifications.
@@ -317,6 +325,53 @@ final class AccountSession: Identifiable {
         let thread = RoomTimeline(room: room, threadRoot: root)
         thread.onRead = { [weak self] in self?.timelines[roomID]?.markThreadSeen(root) }
         return thread
+    }
+
+    // MARK: Read and unread
+
+    /// Whether a room has anything unread, as the room list shows it.
+    func isUnread(_ roomID: String) -> Bool {
+        guard let room = rooms.first(where: { $0.id == roomID }) else { return false }
+        return room.hasUnread || room.notifications > 0 || room.mentions > 0
+    }
+
+    /// Marks a room read up to its newest message, or unread, as the user asks. Shown in the
+    /// list at once; the server's own record follows as it syncs.
+    func setRoom(_ roomID: String, unread: Bool) {
+        guard let room = room(id: roomID) else { return }
+        if let index = rooms.firstIndex(where: { $0.id == roomID }) {
+            rooms[index].hasUnread = unread
+            rooms[index].isMarkedUnread = unread
+            if !unread {
+                rooms[index].notifications = 0
+                rooms[index].mentions = 0
+            }
+        }
+        // The room on screen stays unread until it is opened again, rather than being read
+        // again the moment a message arrives or the room is left.
+        timelines[roomID]?.holdsUnread = unread
+        Task {
+            if unread {
+                try? await room.setUnreadFlag(newValue: true)
+            } else {
+                try? await room.markAsRead(receiptType: .read)
+                // Moves the "New" line too, so the room isn't half read on opening.
+                try? await room.markAsRead(receiptType: .fullyRead)
+                try? await room.setUnreadFlag(newValue: false)
+            }
+        }
+    }
+
+    /// Whether any room in the list has anything unread.
+    var hasUnreadRooms: Bool {
+        rooms.contains { !$0.isInvite && ($0.hasUnread || $0.notifications > 0 || $0.mentions > 0) }
+    }
+
+    /// Marks every room in the list read.
+    func markAllRead() {
+        for room in rooms where !room.isInvite && (room.hasUnread || room.notifications > 0 || room.mentions > 0) {
+            setRoom(room.id, unread: false)
+        }
     }
 
     /// A fresh timeline around one message, for showing it without loading the whole room's
@@ -485,6 +540,7 @@ extension RoomSummary {
             summary.notifications = Int(info.numUnreadNotifications)
             summary.mentions = Int(info.numUnreadMentions)
             summary.hasUnread = info.numUnreadMessages > 0 || info.isMarkedUnread
+            summary.isMarkedUnread = info.isMarkedUnread
             if info.isDirect, info.heroes.count == 1 {
                 summary.directUserID = info.heroes[0].userId
                 if summary.avatarURL == nil { summary.avatarURL = info.heroes[0].avatarUrl }

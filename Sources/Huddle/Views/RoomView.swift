@@ -53,7 +53,9 @@ struct RoomView: View {
                                          room: RoomContext(live: timeline, pins: bannerPins(timeline), pinIndex: $pinIndex,
                                                            showPinned: { panel = .pinned },
                                                            focus: { focus(on: $0) },
-                                                           returnToLive: returnToLive))
+                                                           returnToLive: returnToLive,
+                                                           isMarkedUnread: summary?.isMarkedUnread == true,
+                                                           markRead: { account.setRoom(roomID, unread: false) }))
                             // A fresh view for each timeline it shows: where it is scrolled to
                             // belongs to that timeline.
                             .id(focused.map(ObjectIdentifier.init))

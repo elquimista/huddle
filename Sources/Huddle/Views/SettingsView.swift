@@ -26,6 +26,34 @@ enum MessageLayout: String, CaseIterable, Identifiable {
     }
 }
 
+/// How a message of nothing but a few emoji is drawn.
+enum EmojiSize: String, CaseIterable, Identifiable {
+    case normal
+    case large
+    case extraLarge
+
+    static let key = "emojiOnlySize"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .normal: "Normal"
+        case .large: "Large"
+        case .extraLarge: "Extra Large"
+        }
+    }
+
+    /// The emoji's point size; nil for the size of ordinary text.
+    var pointSize: CGFloat? {
+        switch self {
+        case .normal: nil
+        case .large: 30
+        case .extraLarge: 44
+        }
+    }
+}
+
 extension EnvironmentValues {
     /// A layout that overrides the user's choice, for places that need one (threads, whose
     /// narrow panel suits only the modern layout).
@@ -33,6 +61,8 @@ extension EnvironmentValues {
     /// The layout a timeline's messages are drawn in, read once by the timeline rather than by
     /// every message, each of which would otherwise keep its own watch on the setting.
     @Entry var messageLayout: MessageLayout = .modern
+    /// How emoji-only messages are drawn; read once by the timeline, like the layout.
+    @Entry var emojiSize: EmojiSize = .large
     /// How wide a message's content (text, pictures, players) can be where it is shown.
     /// Pictures and players shrink to fit it instead of spilling out of a narrow column.
     @Entry var messageContentWidth: CGFloat = .infinity
@@ -50,6 +80,7 @@ struct SettingsView: View {
     @AppStorage(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault
     @AppStorage(NotificationSettings.soundKey) private var notificationSound = true
     @AppStorage(OwnPresence.sharingKey) private var sharesPresence = true
+    @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
 
     var body: some View {
         Form {
@@ -100,11 +131,75 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 6)
             }
+
+            Section {
+                // Laid out by hand: a segmented picker is otherwise put under its label, unlike
+                // every other control here, which sits on the right.
+                HStack(alignment: .center, spacing: 12) {
+                    Text("Emoji-only messages")
+                    Spacer(minLength: 8)
+                    Picker("Emoji-only messages", selection: $emojiSize) {
+                        ForEach(EmojiSize.allCases) { size in
+                            Text(size.title).tag(size)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                }
+                EmojiPreview(size: emojiSize)
+            } header: {
+                Text("Emoji")
+            } footer: {
+                Text("A message of nothing but a few emoji is drawn at this size.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 10)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 480)
         // The window takes its height from the form, so nothing scrolls or clips.
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A message of two emoji as the timeline would draw it at the chosen size. Always as tall as
+/// the largest size needs, so the window doesn't change height as the choice changes.
+private struct EmojiPreview: View {
+    let size: EmojiSize
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(Color.indigo)
+                .frame(width: 28, height: 28)
+                .overlay {
+                    Text("A")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Alice")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.indigo)
+                    Text("9:41 AM")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("🎉🙌")
+                    .font(size.pointSize.map { .system(size: $0) } ?? .body)
+                    .contentTransition(.interpolate)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+        .frame(height: 78, alignment: .top)
+        .animation(.snappy(duration: 0.25), value: size)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Preview: a message of two emoji, \(size.title.lowercased()) size")
     }
 }
 

@@ -77,6 +77,7 @@ struct TimelineView: View {
     @Environment(\.accountSession) private var account
     @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
     @Environment(\.forcedMessageLayout) private var forcedLayout
+    @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
     @FocusState private var composerFocused: Bool
 
     /// Whether the newest message is on screen.
@@ -210,6 +211,7 @@ struct TimelineView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .environment(\.messageLayout, forcedLayout ?? chosenLayout)
+                .environment(\.emojiSize, emojiSize)
                 // Laid out at the width the timeline is heading for, not at each width it passes
                 // through on the way: as the thread panel opens or closes, the messages re-wrap
                 // once, at the start, instead of again and again as the conversation narrows,
@@ -231,19 +233,27 @@ struct TimelineView: View {
             .defaultScrollAnchor(timeline.threadRoot == nil && timeline.focusedEvent == nil ? .bottom : .top)
             .modifier(NewestMessageHold(isOn: followsNewest))
             .safeAreaInset(edge: .top, spacing: 0) {
-                pinnedBanner(proxy)
-                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
-                        let changed = height != place.topInset
-                        place.topInset = height
-                        // The banner arriving (the room's pins load a moment after it opens)
-                        // makes the view shorter: back to the very end, once it has settled.
-                        guard changed, followsNewest else { return }
-                        for delay in [0.0, 0.3] {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                                if followsNewest { jump(proxy, to: Self.bottomID, anchor: .bottom) }
-                            }
+                VStack(spacing: 0) {
+                    if let room, room.isMarkedUnread {
+                        MarkedUnreadBar(markRead: room.markRead)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    pinnedBanner(proxy)
+                }
+                .animation(.snappy(duration: 0.25), value: room?.isMarkedUnread)
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
+                    let changed = height != place.topInset
+                    place.topInset = height
+                    // A banner arriving (the room's pins load a moment after it opens; the
+                    // marked-unread bar) makes the view shorter: back to the very end, once
+                    // it has settled.
+                    guard changed, followsNewest else { return }
+                    for delay in [0.0, 0.3] {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                            if followsNewest { jump(proxy, to: Self.bottomID, anchor: .bottom) }
                         }
                     }
+                }
             }
             // Slides in when a message is pinned while the room is open; just there when the room
             // opens with pins already.
@@ -303,6 +313,8 @@ struct TimelineView: View {
                 bannerAnimates = true
             }
             .onAppear {
+                // Opened again after being marked unread: read as usual from here.
+                if timeline.isLive { timeline.holdsUnread = false }
                 if timeline.threadRoot == nil { PerfLog.markDrawn("room on screen, \(shownRows.count) of \(timeline.rows.count) rows drawn") }
                 if timeline.focusedEvent != nil {
                     followsNewest = false
@@ -1077,6 +1089,7 @@ private struct MessageView: View {
     /// True while the "More" menu is open, which keeps the actions up under it.
     @State private var isMenuOpen = false
     @Environment(\.messageLayout) private var layout
+    @Environment(\.emojiSize) private var emojiSize
     @Environment(\.timelineWidth) private var timelineWidth
 
     /// What is left for the message itself once the margins, the read-receipt gutter and the
@@ -1255,7 +1268,9 @@ private struct MessageView: View {
         // Time and name share a baseline with each other, and sit at the top of the message. The
         // name is set in the body's own size, so against text its baseline matches the first
         // line; against a picture or an audio player, which have no baseline, it marks the top.
-        HStack(alignment: .top, spacing: 8) {
+        // A message of large emoji is one line of text all the same: time and name sit on its
+        // baseline, as they would beside ordinary text, rather than up at the top of the tall line.
+        HStack(alignment: isLargeEmoji && message.replyTo == nil ? .firstTextBaseline : .top, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(message.date.formatted(date: .omitted, time: .shortened))
                     .font(.caption)
@@ -1367,6 +1382,12 @@ private struct MessageView: View {
                                       name: timeline.knownName(for:))
     }
 
+    /// Whether this is a message of nothing but a few emoji, drawn large.
+    private var isLargeEmoji: Bool {
+        guard emojiSize.pointSize != nil, case .text(let text) = message.body else { return false }
+        return Emoji.isLargeOnly(text)
+    }
+
     /// " (edited)" after a message that has been changed since it was sent.
     private var editedLabel: Text {
         Text(message.isEdited ? " (edited)" : "").font(.caption).foregroundStyle(.secondary)
@@ -1374,6 +1395,12 @@ private struct MessageView: View {
 
     @ViewBuilder private var bodyView: some View {
         switch message.body {
+        case .text(let text) where isLargeEmoji:
+            // Nothing but a few emoji: drawn large, as Settings asks.
+            (Text(text).font(.system(size: emojiSize.pointSize ?? 30)) + editedLabel)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 1)
         case .text(let text):
             (Text(styled(text)) + editedLabel)
                 .textSelection(.enabled)
@@ -1962,4 +1989,43 @@ struct RoomContext {
     let focus: (String) -> Void
     /// Back to the room as it is now.
     let returnToLive: () -> Void
+    /// Whether the room has been marked unread while it is open.
+    var isMarkedUnread = false
+    let markRead: () -> Void
+}
+
+/// Along the top of a room the user has marked unread while in it: what that means, and the
+/// way back. Without it the only sign is a dot in the room list, easily missed, and nothing
+/// says why read receipts have stopped going out for messages plainly on screen.
+private struct MarkedUnreadBar: View {
+    let markRead: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: 8, height: 8)
+            Text("Marked as unread")
+                .fontWeight(.semibold)
+                .layoutPriority(1)
+            Text("Read receipts are paused until you come back to it.")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            Button("Mark as Read", action: markRead)
+                .controlSize(.small)
+                .help("Mark this room read (⇧⌘U)")
+        }
+        .font(.callout)
+        .padding(.leading, 16)
+        .padding(.trailing, 14)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity)
+        .background(Color.accentColor.opacity(0.08))
+        .background(.bar)
+        .overlay(alignment: .bottom) { Rectangle().fill(.separator).frame(height: 1) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAction(named: "Mark as Read", markRead)
+    }
 }

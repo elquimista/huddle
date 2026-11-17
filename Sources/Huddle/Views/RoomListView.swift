@@ -11,6 +11,18 @@ struct RoomListView: View {
                 RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id],
                         presence: room.directUserID.flatMap { account.presence.people[$0] })
                     .tag(room.id)
+                    .contextMenu {
+                        if !room.isInvite {
+                            if account.isUnread(room.id) {
+                                Button("Mark as Read") { account.setRoom(room.id, unread: false) }
+                            } else {
+                                Button("Mark as Unread") { account.setRoom(room.id, unread: true) }
+                            }
+                            Divider()
+                            Button("Mark All as Read") { account.markAllRead() }
+                                .disabled(!account.hasUnreadRooms)
+                        }
+                    }
                     .onAppear {
                         account.roomBecameVisible(room.id)
                         if room.id == account.rooms.last?.id { account.loadMoreRooms() }
@@ -119,10 +131,13 @@ private struct RoomRow: View {
         } else if room.notifications > 0 {
             pill(Text("\(min(room.notifications, 99))"), color: room.isUrgent ? .red : .accentColor)
         } else if room.hasUnread {
+            // Marked unread on purpose is a reminder, in colour; new messages in a quiet room
+            // only a grey dot.
             Circle()
-                .fill(.tertiary)
+                .fill(room.isMarkedUnread ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
                 .frame(width: 8, height: 8)
                 .frame(width: Self.badgeWidth)
+                .accessibilityLabel(room.isMarkedUnread ? "Marked unread" : "Unread")
         }
     }
 

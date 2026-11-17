@@ -17,6 +17,8 @@ struct AccountRail: View {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(account.userID, forType: .string)
                             }
+                            Button("Mark All as Read") { account.markAllRead() }
+                                .disabled(!account.hasUnreadRooms)
                             Divider()
                             Button("Sign Out…", role: .destructive) { accountToSignOut = account }
                         }
