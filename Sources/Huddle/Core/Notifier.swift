@@ -2,6 +2,22 @@ import AppKit
 import MatrixRustSDK
 import UserNotifications
 
+/// The user's choices in Settings. Alerts start off in the Dev build, where test traffic would
+/// otherwise flood Notification Center.
+enum NotificationSettings {
+    static let enabledKey = "notificationsEnabled"
+    static let soundKey = "notificationSound"
+    static let enabledByDefault = !AppEnvironment.isDev
+
+    static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? enabledByDefault
+    }
+
+    static var playsSound: Bool {
+        UserDefaults.standard.object(forKey: soundKey) as? Bool ?? true
+    }
+}
+
 /// Posts macOS notifications for the events the SDK says should notify (it applies the
 /// account's push rules, so muted rooms and "mentions only" are already respected), and opens
 /// the right account and room when one is clicked.
@@ -27,6 +43,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         guard !isActivated, let center else { return }
         isActivated = true
         center.delegate = self
+        // Alerts left over from before they were turned off.
+        if !NotificationSettings.isEnabled { center.removeAllDeliveredNotifications() }
         // `.badge` matters even though the Dock badge is set directly: once an app uses
         // notifications, macOS hides its Dock badge unless badges are part of the permission.
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
@@ -91,12 +109,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.body = body
         content.threadIdentifier = Self.group(accountID: account.id, roomID: roomID)
         content.userInfo = ["account": account.id, "room": roomID, "thread": threadRoot ?? ""]
-        if item.isNoisy == true { content.sound = .default }
+        if item.isNoisy == true, NotificationSettings.playsSound { content.sound = .default }
 
+        // Logged even when alerts are off, so the Dev build can be tested without showing any.
         if AppEnvironment.isDev {
-            print("DEV_NOTIFY \(content.title) | \(content.subtitle) | \(content.body) | sound=\(item.isNoisy == true)")
+            print("DEV_NOTIFY \(content.title) | \(content.subtitle) | \(content.body) | sound=\(item.isNoisy == true) shown=\(NotificationSettings.isEnabled)")
             fflush(stdout)
         }
+        guard NotificationSettings.isEnabled else { return }
         center?.add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
     }
 
