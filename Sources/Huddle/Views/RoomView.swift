@@ -10,6 +10,27 @@ struct RoomView: View {
         nonmutating set { account.sidePanels[roomID] = newValue }
     }
 
+    /// The thread panel's width as the user last dragged it; 0 until they have.
+    @AppStorage("threadPanelWidth") private var preferredPanelWidth: Double = 0
+    /// The width when a drag of the divider began.
+    @State private var dragStartWidth: CGFloat?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// What the panel shows on screen: follows `panel`, but holds on while the panel slides away.
+    @State private var shownPanel: ThreadPanel.Content?
+    /// Whether the room gives the panel its width. Moved a moment after the panel is put in
+    /// place, so that it slides as a view already there: a view sliding in as it is added
+    /// leaves its scrolling parts (which AppKit draws) where they will end up, and the
+    /// conversation narrowing beside it is drawn over a panel that hasn't moved.
+    @State private var isPanelOut = false
+    /// Whether the conversation is laid out with room for the panel beside it. Changed just
+    /// before the panel moves, and not animated, so its messages re-wrap once, at the start,
+    /// rather than at every width the conversation passes through as the panel slides.
+    @State private var roomForPanel = false
+    /// Changed when the panel comes back with something else on it before it had quite gone,
+    /// so that it starts afresh rather than moving over from what it showed.
+    @State private var panelGeneration = 0
+
     private var summary: RoomSummary? {
         account.rooms.first { $0.id == roomID }
     }
@@ -19,22 +40,40 @@ struct RoomView: View {
             if let room = account.room(id: roomID), room.membership() == .invited || summary?.isInvite == true {
                 InviteView(account: account, roomID: roomID, name: title)
             } else if let timeline = account.timeline(for: roomID) {
-                HStack(spacing: 0) {
-                    TimelineView(timeline: timeline, media: account.media) { root in
-                        panel = .thread(root)
-                    }
-                    .frame(minWidth: 320)
-                    if let panel {
-                        Divider()
-                        ThreadPanel(account: account, roomID: roomID, roomName: title, content: panel) {
-                            self.panel = $0
+                GeometryReader { geometry in
+                    let layout = PanelLayout(width: geometry.size.width, preferred: CGFloat(preferredPanelWidth))
+                    ZStack(alignment: .trailing) {
+                        HStack(spacing: 0) {
+                            TimelineView(timeline: timeline, media: account.media) { root in
+                                panel = .thread(root)
+                            }
+                            .environment(\.timelineWidth, roomForPanel && layout.sideBySide
+                                         ? layout.width - layout.panelWidth : layout.width)
+                            // Takes what is left, and never more: overflowing, it would be cut off.
+                            .frame(maxWidth: .infinity)
+                            .clipped()
+                            if layout.sideBySide {
+                                panelSlot(width: layout.panelWidth, layout: layout)
+                            }
                         }
-                        .id(roomID)
-                        .frame(width: 380)
-                        .transition(.move(edge: .trailing))
+                        // Too narrow for both: the panel slides over the conversation instead
+                        // of squeezing it, and the conversation dims a shade beneath it.
+                        if isPanelOut, !layout.sideBySide {
+                            Color.black.opacity(0.1)
+                                .allowsHitTesting(false)
+                                .transition(.opacity)
+                        }
+                        if !layout.sideBySide {
+                            panelSlot(width: layout.overlayWidth, layout: layout)
+                        }
                     }
                 }
-                .animation(.smooth(duration: 0.22), value: panel != nil)
+                .onAppear {
+                    shownPanel = panel
+                    isPanelOut = panel != nil
+                    roomForPanel = panel != nil
+                }
+                .onChange(of: panel) { _, new in panelChanged(to: new) }
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button {
@@ -52,6 +91,88 @@ struct RoomView: View {
         .navigationTitle(title)
         // In a direct chat, whether the other person is around.
         .navigationSubtitle(presenceLine)
+    }
+
+    /// The panel's place at the room's trailing edge. Closed, it is no width at all, and the
+    /// panel, pinned to its leading edge, waits beyond the window's edge; opening gives it its
+    /// width, so the panel rides in, and beside the conversation, the conversation gives way
+    /// in step.
+    private func panelSlot(width: CGFloat, layout: PanelLayout) -> some View {
+        ZStack(alignment: .leading) {
+            if let shownPanel {
+                threadPanel(shownPanel, width: width)
+                    // Over the conversation only, and fading with the slide, so none of it
+                    // lingers at the window's edge while the panel waits out of sight.
+                    .shadow(color: .black.opacity(!layout.sideBySide && isPanelOut ? 0.22 : 0), radius: 16, x: -6)
+                    .overlay(alignment: .leading) { resizeHandle(layout) }
+            }
+        }
+        .frame(width: isPanelOut ? width : 0, alignment: .leading)
+    }
+
+    /// Slides the panel in or out as it opens or closes; Reduce Motion leaves out the sliding,
+    /// and the panel's content fades in by itself.
+    ///
+    /// The conversation takes its new width first, all at once; the panel starts moving on the
+    /// next turn, once the conversation has settled. Opening, the panel is put in place out of
+    /// sight in that first turn too, so that it slides as a view already there.
+    private func panelChanged(to new: ThreadPanel.Content?) {
+        if let new {
+            let wasShown = shownPanel != nil
+            if wasShown, !isPanelOut, shownPanel != new { panelGeneration += 1 }
+            shownPanel = new
+            guard !isPanelOut else { return }
+            roomForPanel = true
+            if reduceMotion {
+                isPanelOut = true
+                return
+            }
+            DispatchQueue.main.async {
+                guard panel != nil, !isPanelOut else { return }
+                withAnimation(Motion.panelIn) { isPanelOut = true }
+            }
+        } else {
+            roomForPanel = false
+            if reduceMotion {
+                isPanelOut = false
+                shownPanel = nil
+                return
+            }
+            DispatchQueue.main.async {
+                guard panel == nil else { return }
+                // Gone once it is out of sight, without waiting for the spring's last fraction.
+                withAnimation(Motion.panelOut) {
+                    isPanelOut = false
+                } completion: {
+                    if panel == nil { shownPanel = nil }
+                }
+            }
+        }
+    }
+
+    private func threadPanel(_ content: ThreadPanel.Content, width: CGFloat) -> some View {
+        ThreadPanel(account: account, roomID: roomID, roomName: title, content: content) {
+            self.panel = $0
+        }
+        .id(panelGeneration)
+        .environment(\.timelineWidth, width)
+        .frame(width: width)
+        .frame(maxHeight: .infinity)
+        // Nothing in the panel may spill over the conversation beside it.
+        .clipped()
+    }
+
+    /// The panel's left edge: a hairline that can be dragged to make the panel wider or
+    /// narrower. Double-clicking it goes back to the automatic width.
+    private func resizeHandle(_ layout: PanelLayout) -> some View {
+        PanelResizeHandle(
+            onDrag: { translation in
+                let start = dragStartWidth ?? layout.shownWidth
+                dragStartWidth = start
+                preferredPanelWidth = Double(layout.clamped(start - translation))
+            },
+            onEnd: { dragStartWidth = nil },
+            onReset: { preferredPanelWidth = 0 })
     }
 
     private var presenceLine: String {
@@ -100,3 +221,98 @@ private struct InviteView: View {
     }
 }
 
+/// How the thread panel shares the room's width with the conversation.
+private struct PanelLayout {
+    let width: CGFloat
+    /// The width the user dragged the panel to, or 0 for automatic.
+    let preferred: CGFloat
+
+    /// The conversation needs this much to be readable beside the panel.
+    private static let conversationMinimum: CGFloat = 400
+    /// Narrower than this, a message with a picture or a voice message gets cramped.
+    static let panelMinimum: CGFloat = 340
+
+    /// The user's width if they have chosen one, otherwise two fifths of the room; within limits.
+    var panelWidth: CGFloat {
+        let wanted = preferred > 0 ? preferred : min(440, (width * 0.4).rounded())
+        return max(Self.panelMinimum, min(wanted, width - 1 - Self.conversationMinimum))
+    }
+
+    var sideBySide: Bool { width - Self.panelMinimum - 1 >= Self.conversationMinimum }
+
+    /// Laid over the conversation, leaving a strip of it showing.
+    var overlayWidth: CGFloat {
+        let wanted = preferred > 0 ? preferred : 360
+        return max(min(Self.panelMinimum, width - 56), min(wanted, width - 56))
+    }
+
+    var shownWidth: CGFloat { sideBySide ? panelWidth : overlayWidth }
+
+    /// A dragged width, kept within what this layout allows.
+    func clamped(_ value: CGFloat) -> CGFloat {
+        sideBySide ? max(Self.panelMinimum, min(value, width - 1 - Self.conversationMinimum))
+                   : max(min(Self.panelMinimum, width - 56), min(value, width - 56))
+    }
+}
+
+/// A one-point divider with a wider strip around it that takes the drag, and shows the
+/// resizing cursor while the pointer is over it.
+private struct PanelResizeHandle: View {
+    let onDrag: (CGFloat) -> Void
+    let onEnd: () -> Void
+    let onReset: () -> Void
+    @State private var isHovering = false
+    @State private var isDragging = false
+
+    var body: some View {
+        Rectangle()
+            .fill(.separator)
+            .frame(width: 1)
+            .frame(maxHeight: .infinity)
+            .overlay {
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        isHovering = hovering
+                        updateCursor()
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                if !isDragging {
+                                    isDragging = true
+                                    updateCursor()
+                                }
+                                onDrag(value.translation.width)
+                            }
+                            .onEnded { _ in
+                                isDragging = false
+                                updateCursor()
+                                onEnd()
+                            }
+                    )
+                    .onTapGesture(count: 2, perform: onReset)
+            }
+            .onDisappear {
+                if cursorShown { NSCursor.pop() }
+                cursorShown = false
+            }
+            .help("Drag to resize. Double-click for the standard width.")
+            .accessibilityElement()
+            .accessibilityLabel("Thread panel divider")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: "Standard width", onReset)
+    }
+
+    @State private var cursorShown = false
+
+    /// The resizing cursor while over the strip or dragging it; pushed and popped in pairs so
+    /// the cursor underneath comes back as it was.
+    private func updateCursor() {
+        let wanted = isHovering || isDragging
+        guard wanted != cursorShown else { return }
+        cursorShown = wanted
+        if wanted { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+    }
+}

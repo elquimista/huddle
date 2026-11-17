@@ -22,6 +22,8 @@ struct TimelineView: View {
     @State private var isDropTarget = false
     @State private var pasteInterceptor = PasteInterceptor()
     @State private var typeToCompose = TypeToCompose()
+    /// Where the rows on screen are; kept out of SwiftUI's state so scrolling doesn't redraw.
+    @State private var place = ReadingPlace()
     /// Lets a reader's avatar move from one message to another instead of vanishing and
     /// reappearing.
     @Namespace private var receipts
@@ -43,6 +45,7 @@ struct TimelineView: View {
     /// Whether the top of the loaded history is on screen, which is when to fetch more.
     @State private var historyEdgeVisible = false
     private static let bottomID = "timeline-bottom"
+    @Environment(\.timelineWidth) private var timelineWidth
 
     /// Messages arriving while the app is in the background stay unread until it is back in front.
     @State private var appIsActive = NSApp.isActive || DevHooks.assumesActive
@@ -84,6 +87,11 @@ struct TimelineView: View {
                                         searchingFor: searchingFor,
                                         receipts: receipts)
                             .id(row.id)
+                            .onGeometryChange(for: CGRect?.self) { proxy in
+                                guard let visible = proxy.bounds(of: .scrollView) else { return nil }
+                                let frame = proxy.frame(in: .local)
+                                return visible.intersects(frame) ? frame.offsetBy(dx: 0, dy: -visible.minY) : nil
+                            } action: { place.rows[row.id] = $0 }
                         if row.id == threadRootRowID {
                             RepliesDivider(count: replyCount)
                         }
@@ -98,30 +106,44 @@ struct TimelineView: View {
                         .onGeometryChange(for: Bool.self, of: Self.isOnScreen) { visible in
                             isAtBottom = visible
                             if visible {
-                                followsNewest = true
+                                // Not while the messages re-wrap around a held reading place:
+                                // rows above it shrinking can bring the end into view for a
+                                // moment, but the reader hasn't gone there. (Once it has
+                                // settled, `messagesWillRewrap` follows again if it is still in view.)
+                                if place.heldRow == nil { followsNewest = true }
                             } else if input.isRecent {
                                 // The user scrolled away.
                                 followsNewest = false
                             } else if followsNewest {
                                 // The content moved under the view; go back to the end.
                                 DispatchQueue.main.async {
-                                    if followsNewest { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                                    if followsNewest { jump(proxy, to: Self.bottomID, anchor: .bottom) }
                                 }
                             }
                         }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
+                // Laid out at the width the timeline is heading for, not at each width it passes
+                // through on the way: as the thread panel opens or closes, the messages re-wrap
+                // once, at the start, instead of again and again as the conversation narrows,
+                // each time jolting everything above the newest message.
+                .modifier(LaidOutAtWidth(width: messagesWidth))
                 // Rows keep changing height after they first appear: messages decrypt, reactions
                 // and thread summaries arrive, more batches load. Whenever the content's height
                 // changes while following the newest message, go back to the end.
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height.rounded() }) { _ in
-                    if followsNewest { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                    if followsNewest {
+                        jump(proxy, to: Self.bottomID, anchor: .bottom)
+                    } else if place.heldRow != nil {
+                        restoreReadingPlace(proxy)
+                    }
                 }
             }
             // A room opens at its newest message. A thread starts at its root message, so a short
             // one sits under the header; a long one is then scrolled to its newest reply.
             .defaultScrollAnchor(timeline.threadRoot == nil ? .bottom : .top)
+            .modifier(NewestMessageHold(isOn: followsNewest))
             .onChange(of: timeline.rows.last?.id) { previousLast, _ in
                 // The first content, or a new message while following the newest.
                 if previousLast == nil || followsNewest { scrollToBottom(proxy) }
@@ -129,16 +151,9 @@ struct TimelineView: View {
             .onAppear {
                 if !timeline.rows.isEmpty { scrollToBottom(proxy) }
             }
-            // Opening or closing the side panel changes the width and re-wraps every message;
-            // if the newest message was in view, keep it there once the change has finished.
-            .onGeometryChange(for: CGFloat.self, of: \.size.width) { _ in
-                guard followsNewest else { return }
-                scrollToBottom(proxy)
-                for delay in [0.05, 0.3] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        if followsNewest { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
-                    }
-                }
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.viewport = $0 }
+            .onChange(of: messagesWidth) { old, new in
+                if old != nil, old != new { messagesWillRewrap(proxy) }
             }
             .onChange(of: timeline.prependCount) {
                 // Older messages were added above. While following the newest message, stay
@@ -246,7 +261,62 @@ struct TimelineView: View {
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         isAtBottom = true
         followsNewest = true
-        proxy.scrollTo(Self.bottomID, anchor: .bottom)
+        jump(proxy, to: Self.bottomID, anchor: .bottom)
+    }
+
+    /// Scrolls at once, even in the middle of an animation (the thread panel sliding): a
+    /// scroll that animates trails the content it is meant to hold in place, and the
+    /// conversation bobs.
+    private func jump(_ proxy: ScrollViewProxy, to id: some Hashable, anchor: UnitPoint) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { proxy.scrollTo(id, anchor: anchor) }
+    }
+
+    /// The width messages are laid out at: the timeline's whole width, less a scroll bar that
+    /// takes room of its own, from the moment the timeline is given it.
+    private var messagesWidth: CGFloat? {
+        guard timelineWidth > 0 else { return nil }
+        let scroller = NSScroller.preferredScrollerStyle == .legacy
+            ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+        return max(0, timelineWidth - scroller)
+    }
+
+    /// The messages are about to re-wrap for a new width: the thread panel opening or closing,
+    /// or the window resized. If the newest message was in view, it stays there. If the reader
+    /// was further up, the message in the middle of the view goes back to exactly where it was
+    /// once every row has changed height, rather than the conversation sliding away under them.
+    private func messagesWillRewrap(_ proxy: ScrollViewProxy) {
+        if followsNewest {
+            for delay in [0.05, 0.3] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    if followsNewest { jump(proxy, to: Self.bottomID, anchor: .bottom) }
+                }
+            }
+            return
+        }
+        // Taken now, before the new layout: the rows' places are still the ones the reader sees.
+        guard let middle = place.middleRow(among: timeline.rows.map(\.id)) else { return }
+        place.heldRow = middle
+        for delay in [0.0, 0.05, 0.3] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                restoreReadingPlace(proxy)
+                if delay == 0.3 {
+                    place.heldRow = nil
+                    // Back in place and the newest message in view after all: follow it again.
+                    if isAtBottom { followsNewest = true }
+                }
+            }
+        }
+    }
+
+    /// Scrolls so the held row's top is where it was before the messages re-wrapped.
+    private func restoreReadingPlace(_ proxy: ScrollViewProxy) {
+        guard !followsNewest, let held = place.heldRow, let frame = place.rows[held.id] ?? nil,
+              place.viewport > frame.height else { return }
+        // Lines up the point this far down the row with the point as far down the view.
+        let fraction = held.top / (place.viewport - frame.height)
+        jump(proxy, to: held.id, anchor: UnitPoint(x: 0, y: fraction))
     }
 
     private func composer(_ proxy: ScrollViewProxy) -> some View {
@@ -576,7 +646,18 @@ private struct MessageView: View {
     }
     @State private var isHovering = false
     @State private var showsPicker = false
-    @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
+    @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
+    @Environment(\.forcedMessageLayout) private var forcedLayout
+    private var layout: MessageLayout { forcedLayout ?? chosenLayout }
+    @Environment(\.timelineWidth) private var timelineWidth
+
+    /// What is left for the message itself once the margins, the read-receipt gutter and the
+    /// avatar (or, in the IRC layout, the time and name columns) have taken theirs.
+    private var contentWidth: CGFloat {
+        guard timelineWidth > 0 else { return .infinity }
+        let beside: CGFloat = layout == .modern ? 32 + 10 : 54 + 8 + 88 + 8
+        return max(120, timelineWidth - 32 - ReceiptView.gutter - beside)
+    }
 
     private static let quickReactions = ["👍", "❤️", "😂"]
 
@@ -599,6 +680,7 @@ private struct MessageView: View {
             case .irc: ircRow
             }
         }
+        .environment(\.messageContentWidth, contentWidth)
         // A gutter on the right for read receipts, so they never sit on top of the text.
         .padding(.trailing, ReceiptView.gutter)
         .padding(.top, layout == .modern && message.showsHeader ? 9 : 3)
@@ -1245,4 +1327,78 @@ enum Motion {
 
     /// A reader's avatar moving on: unhurried, settling without a bounce.
     static let receipt = Animation.spring(duration: 0.45, bounce: 0.12).speed(1 / slowdown)
+
+    /// The thread panel arriving: a soft spring that decelerates into place, no overshoot.
+    static let panelIn = Animation.spring(duration: 0.42, bounce: 0.04).speed(1 / slowdown)
+    /// Leaving is a touch quicker than arriving, as things get out of the way.
+    static let panelOut = Animation.spring(duration: 0.32, bounce: 0).speed(1 / slowdown)
+    /// The panel's content settling, a beat after the panel itself.
+    static let panelContent = Animation.spring(duration: 0.5, bounce: 0).delay(0.06).speed(1 / slowdown)
+    /// Moving between the thread list and a thread inside the panel.
+    static let panelPush = Animation.spring(duration: 0.36, bounce: 0).speed(1 / slowdown)
+}
+
+/// Lays its content out at a given width while taking up only the width it is offered:
+/// content that is wider runs on past the edge (where the scroll view cuts it off), narrower
+/// content leaves a space beside it. A plain frame would grow to fit wider content, and the
+/// conversation would push the closing thread panel out of the window.
+private struct LaidOutAtWidth: ViewModifier {
+    let width: CGFloat?
+
+    func body(content: Content) -> some View {
+        FixedWidthLayout(width: width) { content }
+    }
+
+    private struct FixedWidthLayout: Layout {
+        let width: CGFloat?
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            guard let child = subviews.first else { return .zero }
+            let size = child.sizeThatFits(ProposedViewSize(width: width ?? proposal.width, height: proposal.height))
+            let offered = proposal.width.flatMap { $0.isFinite ? $0 : nil }
+            return CGSize(width: offered ?? size.width, height: size.height)
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            subviews.first?.place(at: bounds.origin, anchor: .topLeading,
+                                  proposal: ProposedViewSize(width: width ?? bounds.width, height: bounds.height))
+        }
+    }
+}
+
+/// Holds the newest message in place while the content changes height, within the same
+/// layout pass that changes it (macOS 15 and later). Otherwise the timeline only scrolls back
+/// to it afterwards, and for a moment the conversation dips and comes back.
+private struct NewestMessageHold: ViewModifier {
+    let isOn: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.defaultScrollAnchor(isOn ? .bottom : nil, for: .sizeChanges)
+        } else {
+            content
+        }
+    }
+}
+
+/// Where each row on screen sits, measured from the top of the visible area. Not observed:
+/// it changes on every scroll and is only read when the width changes.
+@MainActor
+final class ReadingPlace {
+    var rows: [String: CGRect?] = [:]
+    var viewport: CGFloat = 0
+    /// The row being read and where its top was, from just before the messages re-wrapped.
+    var heldRow: (id: String, top: CGFloat)?
+
+    /// The row nearest the middle of the view, and where its top is.
+    func middleRow(among order: [String]) -> (id: String, top: CGFloat)? {
+        let middle = viewport / 2
+        var best: (id: String, top: CGFloat, distance: CGFloat)?
+        for id in order {
+            guard let frame = rows[id] ?? nil else { continue }
+            let distance = abs(frame.midY - middle)
+            if best == nil || distance < best!.distance { best = (id, frame.minY, distance) }
+        }
+        return best.map { ($0.id, $0.top) }
+    }
 }

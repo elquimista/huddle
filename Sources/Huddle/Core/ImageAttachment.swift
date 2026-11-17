@@ -83,14 +83,19 @@ struct ImageAttachment: Equatable {
     /// How big to draw an image of this many pixels: its own size if that fits, otherwise scaled
     /// down to fit the box. Never scaled up. An extreme shape is cropped rather than reduced to
     /// a sliver.
-    func displaySize(for pixelSize: CGSize?) -> CGSize {
-        guard let pixelSize, pixelSize.width > 0, pixelSize.height > 0 else { return CGSize(width: 280, height: 210) }
-        let limit = isSticker ? CGSize(width: Self.stickerSide, height: Self.stickerSide) : Self.maximumSize
+    /// - Parameter maxWidth: the width there is room for, if less than the usual box.
+    func displaySize(for pixelSize: CGSize?, maxWidth: CGFloat = .infinity) -> CGSize {
+        let roomy = max(min(maxWidth, Self.maximumSize.width), 120)
+        guard let pixelSize, pixelSize.width > 0, pixelSize.height > 0 else {
+            return CGSize(width: min(280, roomy), height: (min(280, roomy) * 0.75).rounded())
+        }
+        let limit = isSticker ? CGSize(width: Self.stickerSide, height: Self.stickerSide)
+                              : CGSize(width: roomy, height: Self.maximumSize.height)
         let scale = min(1, limit.width / pixelSize.width, limit.height / pixelSize.height)
         let fitted = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
         // Small images keep their size; only large ones squeezed thin by the box are widened.
         let floor = min(Self.minimumSide, max(pixelSize.width, pixelSize.height))
-        return CGSize(width: max(fitted.width, min(floor, pixelSize.width)).rounded(),
+        return CGSize(width: min(max(fitted.width, min(floor, pixelSize.width)), limit.width).rounded(),
                       height: max(fitted.height, min(floor, pixelSize.height)).rounded())
     }
 

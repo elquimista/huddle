@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The panel beside a room's timeline: one thread, or the list of the room's threads.
 struct ThreadPanel: View {
-    enum Content: Equatable {
+    enum Content: Hashable {
         case thread(String)
         case threadList
     }
@@ -16,25 +16,99 @@ struct ThreadPanel: View {
 
     /// True when the open thread was reached from the list, so there is a way back to it.
     @State private var cameFromList = false
+    /// False for a moment as the panel arrives, so its content can fade in just behind it.
+    @State private var hasSettled = false
+    /// The pages laid out side by side, left to right: the one showing, or while moving from
+    /// one to another, both.
+    @State private var pages: [Content] = []
+    /// Whether the last of `pages` is the one in view, rather than the first.
+    @State private var showsLast = false
+    /// Counts moves, so one that has been overtaken doesn't tidy up after the next.
+    @State private var moveCount = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
             header
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: content)
             Divider()
-            switch content {
-            case .thread(let root):
-                ThreadTimelineHost(account: account, roomID: roomID, root: root)
-                    .id(root)
-            case .threadList:
-                ThreadListView(account: account, roomID: roomID) { root in
-                    cameFromList = true
-                    show(.thread(root))
+            // Moving between pages slides the strip they sit in, by layout rather than by
+            // shifting its picture: the scrolling parts of a page are drawn by AppKit, and
+            // a shifted picture leaves them behind, one page showing through the other.
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    ForEach(pages, id: \.self) { page in
+                        self.page(page)
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                    }
                 }
+                .frame(width: proxy.size.width, height: proxy.size.height,
+                       alignment: showsLast ? .trailing : .leading)
+            }
+            // Whatever it shows (a thread, the list, a short "No Threads Yet"), the panel is the
+            // full height of the room: shrunk to its content, it would float mid-column.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+        }
+        // The content fades in a beat behind the panel, so the panel seems to bring it along
+        // rather than arrive already full.
+        .opacity(hasSettled ? 1 : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(.background)
+        .onAppear {
+            if pages.isEmpty { pages = [content] }
+            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : Motion.panelContent) { hasSettled = true }
+        }
+        .onChange(of: content) { _, new in move(to: new) }
+    }
+
+    @ViewBuilder private func page(_ page: Content) -> some View {
+        switch page {
+        case .thread(let root):
+            ThreadTimelineHost(account: account, roomID: roomID, root: root)
+                .id(root)
+        case .threadList:
+            ThreadListView(account: account, roomID: roomID) { root in
+                cameFromList = true
+                show(.thread(root))
             }
         }
-        .background(.background)
-        .onChange(of: content) { _, new in
-            if new == .threadList { cameFromList = false }
+    }
+
+    /// Slides to `new`: in from the right going into a thread, from the left going back to
+    /// the list. The new page is put beside the old one first, out of sight, and the strip
+    /// moves on the next turn, once both are in place. Reduce Motion swaps them with a fade.
+    private func move(to new: Content) {
+        if new == .threadList { cameFromList = false }
+        let visible = (showsLast ? pages.last : pages.first) ?? new
+        moveCount += 1
+        guard visible != new else {
+            pages = [new]
+            showsLast = false
+            return
+        }
+        if reduceMotion {
+            withAnimation(.easeOut(duration: 0.18)) {
+                pages = [new]
+                showsLast = false
+            }
+            return
+        }
+        let forward = new != .threadList
+        pages = forward ? [visible, new] : [new, visible]
+        showsLast = !forward
+        let count = moveCount
+        DispatchQueue.main.async {
+            guard count == moveCount else { return }
+            // Tidied only once the strip has come fully to rest, or the swap could nudge it.
+            withAnimation(Motion.panelPush, completionCriteria: .removed) {
+                showsLast = forward
+            } completion: {
+                // Only the new page stays; it doesn't move as the strip loses the old one.
+                guard count == moveCount else { return }
+                pages = [new]
+                showsLast = false
+            }
         }
     }
 
@@ -51,10 +125,15 @@ struct ThreadPanel: View {
                 }
                 .buttonStyle(.plain)
                 .help("All threads")
+                .accessibilityLabel("All threads")
+                .transition(.opacity)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(content == .threadList ? "Threads" : "Thread")
                     .font(.headline)
+                    // Swapped outright as it glides aside for the back button: a crossfade
+                    // would show both words, one shifted against the other.
+                    .contentTransition(.identity)
                 Text(roomName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -90,6 +169,8 @@ private struct ThreadTimelineHost: View {
         Group {
             if let timeline {
                 TimelineView(timeline: timeline, media: account.media, placeholder: "Reply in thread")
+                    // The panel is narrow; the compact layout crams it.
+                    .environment(\.forcedMessageLayout, .modern)
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -120,6 +201,7 @@ private struct ThreadListView: View {
                         ContentUnavailableView("No Threads Yet",
                                                systemImage: "bubble.left.and.text.bubble.right",
                                                description: Text("Hover over a message and choose Reply in thread to start one."))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else {
                     ScrollView {

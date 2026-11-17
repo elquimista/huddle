@@ -34,8 +34,11 @@ struct ImageMessageView: View {
     }
 
     /// The frame, shaped like the picture itself once it is known.
+    @Environment(\.messageContentWidth) private var contentWidth
+
     private var displaySize: CGSize {
-        image.displaySize(for: correctedSize ?? ImageShapes.corrected(for: image) ?? image.pixelSize)
+        image.displaySize(for: correctedSize ?? ImageShapes.corrected(for: image) ?? image.pixelSize,
+                          maxWidth: contentWidth)
     }
 
     var body: some View {

@@ -26,6 +26,19 @@ enum MessageLayout: String, CaseIterable, Identifiable {
     }
 }
 
+extension EnvironmentValues {
+    /// A layout that overrides the user's choice, for places that need one (threads, whose
+    /// narrow panel suits only the modern layout).
+    @Entry var forcedMessageLayout: MessageLayout? = nil
+    /// How wide a message's content (text, pictures, players) can be where it is shown.
+    /// Pictures and players shrink to fit it instead of spilling out of a narrow column.
+    @Entry var messageContentWidth: CGFloat = .infinity
+    /// The width a timeline has been given, set by whatever lays it out. Measuring the timeline
+    /// itself won't do: its content sizes itself to the measurement, and a picture that is too
+    /// wide keeps the timeline too wide.
+    @Entry var timelineWidth: CGFloat = 0
+}
+
 struct SettingsView: View {
     @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
     @AppStorage(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault

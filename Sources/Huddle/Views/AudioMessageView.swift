@@ -19,7 +19,27 @@ struct AudioMessageView: View {
 
     private var playback: AudioPlayback { .shared }
 
-    private static let scrubberWidth: CGFloat = 192
+    private static let fullScrubberWidth: CGFloat = 192
+    @Environment(\.messageContentWidth) private var contentWidth
+
+    /// Whether the speed button is showing, which it is while the audio is open.
+    private var isOpen: Bool {
+        let phase = playback.phase(of: id)
+        return phase == .playing || phase == .paused
+    }
+
+    /// Everything beside the track: padding, the play button, the gaps, and the speed button
+    /// while it shows.
+    private var chrome: CGFloat { 8 + 30 + 10 + 12 + (isOpen ? 10 + 32 : 0) }
+
+    /// In a very narrow column the time is left out rather than let the player spill over.
+    private var showsTime: Bool { contentWidth - chrome - 8 - Self.timeWidth >= 48 }
+
+    /// The track: full length where there is room, shorter in a narrow column.
+    private var scrubberWidth: CGFloat {
+        let room = contentWidth - chrome - (showsTime ? 8 + Self.timeWidth : 0)
+        return max(48, min(Self.fullScrubberWidth, room))
+    }
     /// Room for "0:00"; longer times widen it.
     private static let timeWidth: CGFloat = 34
 
@@ -48,7 +68,7 @@ struct AudioMessageView: View {
                             .opacity(isUnplayable ? 0.45 : 1)
                             .allowsHitTesting(!isUnplayable)
                     }
-                    .frame(width: Self.scrubberWidth + 8 + Self.timeWidth, alignment: .leading)
+                    .frame(width: scrubberWidth + (showsTime ? 8 + Self.timeWidth : 0), alignment: .leading)
                 }
                 if isOpen {
                     speedButton
@@ -160,12 +180,14 @@ struct AudioMessageView: View {
 
             HStack(spacing: 8) {
                 scrubber(fraction: fraction, showsKnob: isOpen || scrub != nil)
-                Text(time)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: Self.timeWidth, alignment: .trailing)
-                    .fixedSize()
+                if showsTime {
+                    Text(time)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: Self.timeWidth, alignment: .trailing)
+                        .fixedSize()
+                }
             }
             // To VoiceOver and keyboard users this is an ordinary slider.
             .accessibilityRepresentation {
@@ -206,7 +228,7 @@ struct AudioMessageView: View {
                     }
             )
         }
-        .frame(width: Self.scrubberWidth, height: audio.waveform.isEmpty ? 16 : 26)
+        .frame(width: scrubberWidth, height: audio.waveform.isEmpty ? 16 : 26)
     }
 
     /// The sound's shape as bars, or a plain rounded track when the sender gave no waveform.
