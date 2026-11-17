@@ -13,9 +13,11 @@ struct TimelineView: View {
 
     /// Whether the newest message is on screen.
     @State private var isAtBottom = true
-    /// The intent to stay on the newest message. Unlike `isAtBottom` it survives the moment a
-    /// batch of messages or a resize pushes the newest one out of view, so the view can follow.
+    /// The intent to stay on the newest message. Unlike `isAtBottom` it survives a batch of
+    /// messages, a reload or a resize pushing the newest one out of view, so the view can follow.
+    /// Only the user scrolling away ends it.
     @State private var followsNewest = true
+    @State private var input = ScrollInputTracker()
     /// Whether the top of the loaded history is on screen, which is when to fetch more.
     @State private var historyEdgeVisible = false
     private static let bottomID = "timeline-bottom"
@@ -66,11 +68,13 @@ struct TimelineView: View {
                             isAtBottom = visible
                             if visible {
                                 followsNewest = true
-                            } else {
-                                // Cleared a beat later, so content that pushes the newest message
-                                // out of view can still be followed.
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                                    if !isAtBottom { followsNewest = false }
+                            } else if input.isRecent {
+                                // The user scrolled away.
+                                followsNewest = false
+                            } else if followsNewest {
+                                // The content moved under the view; go back to the end.
+                                DispatchQueue.main.async {
+                                    if followsNewest { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
                                 }
                             }
                         }
@@ -106,10 +110,9 @@ struct TimelineView: View {
                 }
             }
             .onChange(of: timeline.prependCount) {
-                // Older messages were added above. On the newest message, stay there; otherwise
-                // stay on the message being read. Someone at the top edge is reading history even
-                // if they left the newest message only a moment ago.
-                if isAtBottom || (followsNewest && !historyEdgeVisible) {
+                // Older messages were added above. While following the newest message, stay
+                // there; otherwise stay on the message being read.
+                if followsNewest {
                     scrollToBottom(proxy)
                 } else if let anchor = timeline.prependAnchorID {
                     proxy.scrollTo(anchor, anchor: .top)
@@ -150,8 +153,12 @@ struct TimelineView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             appIsActive = DevHooks.assumesActive
         }
-        .onAppear { composerFocused = true }
+        .onAppear {
+            composerFocused = true
+            input.start()
+        }
         .onDisappear {
+            input.stop()
             let timeline = timeline
             Task { await timeline.leave() }
         }
@@ -473,6 +480,32 @@ private struct ReceiptView: View {
             DeliveryMark(delivery: delivery, readDate: message.readDate,
                          readDateIsExact: message.readDateIsExact)
         }
+    }
+}
+
+/// Notes when the user last scrolled (wheel or trackpad, the scroller, paging keys), to
+/// tell their scrolling apart from the content moving by itself.
+@MainActor
+private final class ScrollInputTracker {
+    private var monitor: Any?
+    private var lastInput = Date.distantPast
+
+    var isRecent: Bool { Date().timeIntervalSince(lastInput) < 0.6 }
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .leftMouseDragged, .keyDown]) { [weak self] event in
+            // Page Up, Page Down, Home, End. Other keys are typing.
+            if event.type != .keyDown || [116, 121, 115, 119].contains(event.keyCode) {
+                self?.lastInput = Date()
+            }
+            return event
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
     }
 }
 
