@@ -80,6 +80,9 @@ struct MessageRow: Equatable {
     var thread: ThreadInfo?
     /// Read receipts placed on this message, as the SDK reports them. Resolved into `readers`.
     var receipts: [RawReceipt] = []
+    /// The sender's HTML formatting for a text message, if their client sent any.
+    var html: String?
+    var mentionsRoom = false
     /// Group rooms: other people whose latest read message is this one, most recent first.
     var readers: [Reader] = []
     /// Your own messages: how far this one has got. Nil when no indicator should show.
@@ -155,13 +158,16 @@ final class RoomTimeline {
     @ObservationIgnored private var items: [TimelineItem] = []
     @ObservationIgnored private var listenerHandle: TaskHandle?
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
-    @ObservationIgnored private var ownUserID: String
+    @ObservationIgnored private(set) var ownUserID: String
     /// Room timeline only. Replies newer than this are new: when you had last marked the room
     /// read, as of opening it.
     @ObservationIgnored private var unreadHorizon: Date?
     /// Room timeline only. When each thread was last read here, by root event ID.
     @ObservationIgnored private var threadSeen: [String: Date] = [:]
     /// Thread timeline only. Tells the room's timeline that this thread has been read.
+    /// Everyone else in the room, for mention suggestions. Empty until `loadMembers()`.
+    private(set) var members: [MentionCandidate] = []
+    @ObservationIgnored private var membersRequested = false
     @ObservationIgnored var onRead: (() -> Void)?
     @ObservationIgnored var onLatestReaction: ((ReactionPreview?) -> Void)?
     @ObservationIgnored private var latestReaction: ReactionPreview?
@@ -296,6 +302,9 @@ final class RoomTimeline {
         }
     }
 
+    /// A person's display name, if this timeline has come across it.
+    func knownName(for userID: String) -> String? { profiles[userID]?.name }
+
     /// The newest reaction, if it came after the newest message: the room list shows it as the
     /// room's latest activity.
     private func updateLatestReaction() {
@@ -309,7 +318,11 @@ final class RoomTimeline {
                       date > (newest?.date ?? .distantPast) else { continue }
                 let target: String
                 switch message.body {
-                case .text(let text), .emote(let text): target = "“\(text.replacingOccurrences(of: "\n", with: " ").prefix(60))”"
+                case .text(let text), .emote(let text):
+                    let plain = MessageFormatter.plainText(
+                        text: text, formatted: message.html.map { FormattedBody(format: .html, body: $0) },
+                        name: { [profiles] in profiles[$0]?.name })
+                    target = "“\(plain.prefix(60))”"
                 case .image: target = "an image"
                 case .attachment(_, let name): target = name
                 default: target = "a message"
@@ -405,10 +418,32 @@ final class RoomTimeline {
         }
     }
 
-    func send(_ text: String) async {
+    /// Loads the room's members for mention suggestions, once.
+    func loadMembers() async {
+        guard !membersRequested else { return }
+        membersRequested = true
+        guard let iterator = try? await room.members() else {
+            membersRequested = false
+            return
+        }
+        var found: [MentionCandidate] = []
+        while let chunk = iterator.nextChunk(chunkSize: 500) {
+            for member in chunk where member.membership == .join && member.userId != ownUserID {
+                found.append(MentionCandidate(id: member.userId,
+                                              name: member.displayName ?? member.userId.matrixLocalpart,
+                                              avatarURL: member.avatarUrl))
+                if profiles[member.userId] == nil, let name = member.displayName {
+                    profiles[member.userId] = (name, member.avatarUrl)
+                }
+            }
+        }
+        members = found.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func send(_ text: String, mentions: [ComposedMention] = []) async {
         guard let timeline else { return }
         do {
-            _ = try await timeline.send(msg: messageEventContentFromMarkdown(md: text))
+            _ = try await timeline.send(msg: MentionComposer.content(for: text, mentions: mentions))
             error = nil
             // Having answered, the user is caught up: nothing above is "new" any more.
             if threadRoot == nil { try? await timeline.markAsRead(receiptType: .fullyRead) }
@@ -469,10 +504,19 @@ extension TimelineRow.Kind {
 
         let body: MessageRow.Body
         var isEdited = false
+        var formatted: FormattedBody?
+        var mentionsRoom = false
         switch content.kind {
         case .message(let message):
             isEdited = message.isEdited
             body = .init(message: message)
+            mentionsRoom = message.mentions?.room ?? false
+            switch message.msgType {
+            case .text(let content): formatted = content.formatted
+            case .notice(let content): formatted = content.formatted
+            case .emote(let content): formatted = content.formatted
+            default: break
+            }
         case .sticker(let text, let info, let source):
             body = .image(MediaRef(source: source), caption: nil, aspectRatio: info.aspectRatio)
             _ = text
@@ -517,7 +561,9 @@ extension TimelineRow.Kind {
                 .map { userID, receipt in
                     MessageRow.RawReceipt(userID: userID, date: receipt.timestamp.map(Date.init(matrixTimestamp:)))
                 }
-                .sorted { $0.userID < $1.userID }))
+                .sorted { $0.userID < $1.userID },
+            html: formatted.flatMap { $0.format == .html ? $0.body : nil },
+            mentionsRoom: mentionsRoom))
     }
 }
 
@@ -562,7 +608,10 @@ extension TimelineItemContent {
                 case .video: text = "Video"
                 case .audio: text = "Audio"
                 case .file(let file): text = file.filename
-                case .emote(let emote): return "* \(who) \(emote.body)"
+                case .emote(let emote):
+                    return "* \(who) \(MessageFormatter.plainText(text: emote.body, formatted: emote.formatted))"
+                case .text(let content): text = MessageFormatter.plainText(text: content.body, formatted: content.formatted)
+                case .notice(let content): text = MessageFormatter.plainText(text: content.body, formatted: content.formatted)
                 default: text = message.body
                 }
             case .sticker: text = "Sticker"

@@ -1,0 +1,338 @@
+import Foundation
+import MatrixRustSDK
+import SwiftUI
+
+/// Turns a message into styled text: Matrix's HTML formatting (bold, code, lists, quotes),
+/// clickable links, and mentions drawn as pills with the person's name.
+enum MessageFormatter {
+    /// - Parameters:
+    ///   - text: the plain body, used when there is no HTML.
+    ///   - html: the formatted body, if the sender's client provided one.
+    ///   - mentionsRoom: whether the message is flagged as mentioning the whole room.
+    ///   - name: the display name for a user ID, if known.
+    static func render(text: String, html: String?, mentionsRoom: Bool, ownUserID: String,
+                       name: @escaping (String) -> String?) -> AttributedString {
+        var result: AttributedString
+        if let html {
+            var parser = HTMLParser(html: html, ownUserID: ownUserID, name: name)
+            result = parser.parse()
+            if result.characters.isEmpty { result = AttributedString(text) }
+        } else {
+            result = AttributedString(text)
+        }
+        pillBareUserIDs(in: &result, ownUserID: ownUserID, name: name)
+        if mentionsRoom { pillRoomMention(in: &result) }
+        linkBareURLs(in: &result)
+        return result
+    }
+
+    /// The same message as one line of plain text, for room list previews and notifications:
+    /// mentions read "@Name" and formatting is dropped.
+    static func plainText(text: String, formatted: FormattedBody?, name: @escaping (String) -> String? = { _ in nil }) -> String {
+        let html = formatted.flatMap { $0.format == .html ? $0.body : nil }
+        let styled = render(text: text, html: html, mentionsRoom: false, ownUserID: "", name: name)
+        return String(styled.characters)
+            .replacingOccurrences(of: "\u{202F}", with: "")
+            .replacingOccurrences(of: "\n", with: " ")
+    }
+
+    // MARK: Pills
+
+    static func pill(_ label: String, isOwn: Bool) -> AttributedString {
+        // Narrow no-break spaces pad the coloured background.
+        var pill = AttributedString("\u{202F}\(label)\u{202F}")
+        // Other people: coloured text, nothing more. A mention of you (or the room): bold on an
+        // amber wash, so it is the one that stands out.
+        if isOwn {
+            pill.inlinePresentationIntent = .stronglyEmphasized
+            pill.foregroundColor = Color(nsColor: .systemOrange)
+            pill.backgroundColor = Color(nsColor: .systemYellow).opacity(0.28)
+        } else {
+            pill.foregroundColor = .accentColor
+        }
+        pill[MentionAttribute.self] = true
+        return pill
+    }
+
+    static func mentionLabel(for userID: String, given label: String?, name: (String) -> String?) -> String {
+        var shown = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Some clients put the raw ID in the link text; a name reads better.
+        if shown.isEmpty || shown.hasPrefix("@") && shown.contains(":") {
+            shown = name(userID) ?? userID.matrixLocalpart
+        }
+        return shown.hasPrefix("@") ? shown : "@" + shown
+    }
+
+    private static let userIDPattern = try! NSRegularExpression(
+        pattern: #"(?<![\w/@.])@[A-Za-z0-9._=\-/+]+:[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*(:\d+)?"#)
+
+    /// "@alice:example.org" typed or pasted into plain text.
+    private static func pillBareUserIDs(in text: inout AttributedString, ownUserID: String, name: (String) -> String?) {
+        replaceMatches(of: userIDPattern, in: &text) { id in
+            pill(mentionLabel(for: id, given: nil, name: name), isOwn: id == ownUserID)
+        }
+    }
+
+    private static let roomPattern = try! NSRegularExpression(pattern: #"(?<![\w@])@room\b"#)
+
+    private static func pillRoomMention(in text: inout AttributedString) {
+        replaceMatches(of: roomPattern, in: &text) { _ in pill("@room", isOwn: true) }
+    }
+
+    private static func replaceMatches(of pattern: NSRegularExpression, in text: inout AttributedString,
+                                       with replacement: (String) -> AttributedString) {
+        let plain = String(text.characters)
+        let matches = pattern.matches(in: plain, range: NSRange(plain.startIndex..., in: plain))
+        // Back to front, so earlier ranges stay valid.
+        for match in matches.reversed() {
+            guard let range = Range(match.range, in: plain),
+                  let lower = AttributedString.Index(range.lowerBound, within: text),
+                  let upper = AttributedString.Index(range.upperBound, within: text) else { continue }
+            // Leave existing pills, links and code alone.
+            let slice = text[lower..<upper]
+            if slice.runs.contains(where: { $0[MentionAttribute.self] == true || $0.link != nil
+                || $0.inlinePresentationIntent?.contains(.code) == true }) { continue }
+            text.replaceSubrange(lower..<upper, with: replacement(String(plain[range])))
+        }
+    }
+
+    private static func linkBareURLs(in text: inout AttributedString) {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return }
+        let plain = String(text.characters)
+        for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
+            guard let url = match.url,
+                  let range = Range(match.range, in: plain),
+                  let lower = AttributedString.Index(range.lowerBound, within: text),
+                  let upper = AttributedString.Index(range.upperBound, within: text) else { continue }
+            if text[lower..<upper].runs.contains(where: { $0.link != nil || $0[MentionAttribute.self] == true }) { continue }
+            text[lower..<upper].link = url
+        }
+    }
+}
+
+/// Marks a run as a mention pill, so later passes leave it alone.
+enum MentionAttribute: AttributedStringKey {
+    typealias Value = Bool
+    static let name = "huddle.mention"
+}
+
+/// A small, forgiving reader for the subset of HTML that Matrix messages use.
+private struct HTMLParser {
+    let html: String
+    let ownUserID: String
+    let name: (String) -> String?
+
+    private var output = AttributedString()
+    private var bold = 0, italic = 0, strike = 0, code = 0, pre = 0, quote = 0
+    private var links: [URL?] = []
+    /// Collects a mention link's text until its closing tag.
+    private var mention: (userID: String, label: String)?
+    private var lists: [Int?] = []          // nil for bullets, a counter for numbered lists
+    private var skipDepth = 0               // inside <mx-reply>
+    private var atLineStart = true
+    private var paragraphJustEnded = false
+    private static let quoteBar = "▎ "
+
+    init(html: String, ownUserID: String, name: @escaping (String) -> String?) {
+        self.html = html
+        self.ownUserID = ownUserID
+        self.name = name
+    }
+
+    mutating func parse() -> AttributedString {
+        var index = html.startIndex
+        while index < html.endIndex {
+            if html[index] == "<", let close = html[index...].firstIndex(of: ">") {
+                handleTag(String(html[html.index(after: index)..<close]))
+                index = html.index(after: close)
+            } else {
+                let next = html[html.index(after: index)...].firstIndex(of: "<") ?? html.endIndex
+                handleText(String(html[index..<next]))
+                index = next
+            }
+        }
+        // Drop trailing line breaks left by closing block tags.
+        while let last = output.characters.last, last.isNewline {
+            output.removeSubrange(output.index(beforeCharacter: output.endIndex)..<output.endIndex)
+        }
+        return output
+    }
+
+    private mutating func handleText(_ raw: String) {
+        guard skipDepth == 0 else { return }
+        var text = Self.decodeEntities(raw)
+        if pre == 0 {
+            // HTML treats any run of whitespace, line breaks included, as one space.
+            text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            if atLineStart { text = String(text.drop(while: { $0 == " " })) }
+        }
+        guard !text.isEmpty else { return }
+        if mention != nil {
+            mention?.label += text
+            return
+        }
+        append(text)
+    }
+
+    private mutating func append(_ text: String) {
+        // Every quoted line starts with a bar.
+        if quote > 0, atLineStart, text != Self.quoteBar {
+            atLineStart = false
+            append(Self.quoteBar)
+        }
+        var piece = AttributedString(text)
+        var intent: InlinePresentationIntent = []
+        if bold > 0 { intent.insert(.stronglyEmphasized) }
+        if italic > 0 { intent.insert(.emphasized) }
+        if strike > 0 { intent.insert(.strikethrough) }
+        if code > 0 || pre > 0 { intent.insert(.code) }
+        if !intent.isEmpty { piece.inlinePresentationIntent = intent }
+        if quote > 0 { piece.foregroundColor = .secondary }
+        if let link = links.last, let link { piece.link = link }
+        output.append(piece)
+        atLineStart = text.last?.isNewline == true
+        paragraphJustEnded = false
+    }
+
+    /// Makes sure the output ends with at least `count` line breaks, unless it is empty.
+    private mutating func breakLine(_ count: Int = 1) {
+        guard !output.characters.isEmpty else { return }
+        var existing = 0
+        for character in output.characters.reversed() {
+            guard character == "\n" else { break }
+            existing += 1
+        }
+        if existing < count { output.append(AttributedString(String(repeating: "\n", count: count - existing))) }
+        atLineStart = true
+    }
+
+    private mutating func handleTag(_ raw: String) {
+        let isClosing = raw.hasPrefix("/")
+        let body = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        let tag = body.prefix { !$0.isWhitespace }.lowercased()
+
+        if tag == "mx-reply" {
+            skipDepth = max(0, skipDepth + (isClosing ? -1 : 1))
+            return
+        }
+        guard skipDepth == 0 else { return }
+
+        defer { if tag != "p" && tag != "div" || !isClosing { paragraphJustEnded = false } }
+        switch tag {
+        case "b", "strong": bold = max(0, bold + (isClosing ? -1 : 1))
+        case "i", "em": italic = max(0, italic + (isClosing ? -1 : 1))
+        case "del", "s", "strike": strike = max(0, strike + (isClosing ? -1 : 1))
+        case "code": code = max(0, code + (isClosing ? -1 : 1))
+        case "pre":
+            breakLine()
+            pre = max(0, pre + (isClosing ? -1 : 1))
+        case "br":
+            output.append(AttributedString("\n"))
+            atLineStart = true
+        case "p", "div":
+            // A blank line between two paragraphs, but not between a paragraph and a list,
+            // quote or code block next to it.
+            if isClosing {
+                breakLine()
+                paragraphJustEnded = true
+                return
+            }
+            breakLine(paragraphJustEnded ? 2 : 1)
+        case "h1", "h2", "h3", "h4", "h5", "h6":
+            breakLine(2)
+            bold = max(0, bold + (isClosing ? -1 : 1))
+        case "blockquote":
+            breakLine()
+            quote = max(0, quote + (isClosing ? -1 : 1))
+        case "ul":
+            breakLine()
+            if isClosing { _ = lists.popLast() } else { lists.append(nil) }
+        case "ol":
+            breakLine()
+            if isClosing { _ = lists.popLast() } else { lists.append(1) }
+        case "li":
+            breakLine()
+            guard !isClosing else { return }
+            let indent = String(repeating: "    ", count: max(0, lists.count - 1))
+            if let last = lists.indices.last, let number = lists[last] {
+                append("\(indent)\(number). ")
+                lists[last] = number + 1
+            } else {
+                append("\(indent)•  ")
+            }
+            atLineStart = true
+        case "hr":
+            breakLine()
+            append("———")
+            breakLine()
+        case "a":
+            if isClosing {
+                if let mention {
+                    self.mention = nil
+                    output.append(MessageFormatter.pill(
+                        MessageFormatter.mentionLabel(for: mention.userID, given: mention.label, name: name),
+                        isOwn: mention.userID == ownUserID))
+                    atLineStart = false
+                } else {
+                    _ = links.popLast()
+                }
+            } else {
+                let href = Self.attribute("href", in: body).map(Self.decodeEntities)
+                if let userID = href.flatMap(Self.mentionedUser) {
+                    mention = (userID, "")
+                } else {
+                    links.append(href.flatMap { URL(string: $0) })
+                }
+            }
+        case "img":
+            if let alt = Self.attribute("alt", in: body), !alt.isEmpty { handleText(alt) }
+        default:
+            break   // span, font, u and anything unknown: keep the text, drop the tag
+        }
+    }
+
+    /// The user ID in a matrix.to (or matrix:) link to a person, if that is what it is.
+    private static func mentionedUser(_ href: String) -> String? {
+        let decoded = href.removingPercentEncoding ?? href
+        if let range = decoded.range(of: "matrix.to/#/") {
+            let target = decoded[range.upperBound...].prefix { $0 != "?" && $0 != "/" }
+            return target.hasPrefix("@") ? String(target) : nil
+        }
+        if decoded.hasPrefix("matrix:u/") {
+            return "@" + decoded.dropFirst("matrix:u/".count).prefix { $0 != "?" }
+        }
+        return nil
+    }
+
+    private static func attribute(_ name: String, in tag: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: "\\b\(name)\\s*=\\s*(\"([^\"]*)\"|'([^']*)')", options: .caseInsensitive),
+              let match = regex.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)) else { return nil }
+        for group in [2, 3] {
+            if let range = Range(match.range(at: group), in: tag) { return String(tag[range]) }
+        }
+        return nil
+    }
+
+    private static let entities = ["&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'",
+                                   "&nbsp;": "\u{00A0}", "&amp;": "&"]
+
+    private static func decodeEntities(_ text: String) -> String {
+        guard text.contains("&") else { return text }
+        var result = text
+        // "&amp;" goes last (it is last in the list below) so "&amp;lt;" stays "&lt;".
+        for key in ["&lt;", "&gt;", "&quot;", "&#39;", "&apos;", "&nbsp;", "&amp;"] {
+            result = result.replacingOccurrences(of: key, with: entities[key]!)
+        }
+        // Numeric forms: &#8217; and &#x2019;
+        guard let regex = try? NSRegularExpression(pattern: "&#(x[0-9A-Fa-f]+|[0-9]+);") else { return result }
+        for match in regex.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
+            guard let whole = Range(match.range, in: result), let digits = Range(match.range(at: 1), in: result) else { continue }
+            let token = result[digits]
+            let value = token.hasPrefix("x") ? UInt32(token.dropFirst(), radix: 16) : UInt32(token)
+            if let value, let scalar = Unicode.Scalar(value) {
+                result.replaceSubrange(whole, with: String(Character(scalar)))
+            }
+        }
+        return result
+    }
+}

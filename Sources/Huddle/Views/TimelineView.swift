@@ -9,6 +9,11 @@ struct TimelineView: View {
     /// Opens a message's thread. Nil inside a thread, where there is nothing further to open.
     var onOpenThread: ((String) -> Void)?
     @State private var draft = ""
+    /// Mentions picked from the suggestions for the message being written.
+    @State private var composedMentions: [ComposedMention] = []
+    @State private var suggestionIndex = 0
+    /// A mention query the user closed with Escape; stays closed until they type on.
+    @State private var dismissedQuery: String?
     @FocusState private var composerFocused: Bool
 
     /// Whether the newest message is on screen.
@@ -199,6 +204,22 @@ struct TimelineView: View {
                     .lineLimit(1...8)
                     .focused($composerFocused)
                     .onSubmit { send(proxy) }
+                    // While suggestions are showing, the arrows move through them and Return
+                    // or Tab picks one instead of sending.
+                    .onKeyPress(.upArrow) { moveSuggestion(-1) }
+                    .onKeyPress(.downArrow) { moveSuggestion(1) }
+                    .onKeyPress(.return) { pickSelectedSuggestion() }
+                    .onKeyPress(.tab) { pickSelectedSuggestion() }
+                    .onKeyPress(.escape) {
+                        guard !suggestions.isEmpty else { return .ignored }
+                        dismissedQuery = mentionQuery
+                        return .handled
+                    }
+                    .onChange(of: draft) {
+                        suggestionIndex = 0
+                        if mentionQuery != dismissedQuery { dismissedQuery = nil }
+                        if mentionQuery != nil { Task { await timeline.loadMembers() } }
+                    }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
                     .background(.background, in: RoundedRectangle(cornerRadius: 14))
@@ -218,6 +239,17 @@ struct TimelineView: View {
         .background(.bar)
         // Not Divider: inside the room's HStack it would draw itself vertically.
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
+        // Floats over the messages, its bottom edge on the composer's top, so nothing moves.
+        .overlay(alignment: .top) {
+            // A zero-height line along the composer's top edge; the list hangs upward from it.
+            Color.clear.frame(height: 0).overlay(alignment: .bottom) {
+                if !suggestions.isEmpty {
+                    MentionSuggestions(candidates: suggestions, selected: suggestionIndex, media: media) { pick($0) }
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 4)
+                }
+            }
+        }
     }
 
     private var canSend: Bool {
@@ -227,9 +259,60 @@ struct TimelineView: View {
     private func send(_ proxy: ScrollViewProxy) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        let mentions = composedMentions
         draft = ""
+        composedMentions = []
         scrollToBottom(proxy)
-        Task { await timeline.send(text) }
+        Task { await timeline.send(text, mentions: mentions) }
+    }
+
+    // MARK: Mentions
+
+    /// What follows an "@" at the end of the draft, while a mention is being typed.
+    private var mentionQuery: String? {
+        guard let at = draft.lastIndex(of: "@") else { return nil }
+        if at > draft.startIndex, !draft[draft.index(before: at)].isWhitespace { return nil }
+        let query = draft[draft.index(after: at)...]
+        return query.contains(where: \.isWhitespace) ? nil : String(query)
+    }
+
+    private var suggestions: [MentionCandidate] {
+        guard let query = mentionQuery, query != dismissedQuery else { return [] }
+        let needle = query.lowercased()
+        var starts: [MentionCandidate] = []
+        var contains: [MentionCandidate] = []
+        for member in timeline.members + [.room] {
+            let name = member.name.lowercased()
+            let localpart = member.id.matrixLocalpart.lowercased()
+            if needle.isEmpty || name.hasPrefix(needle) || localpart.hasPrefix(needle) {
+                starts.append(member)
+            } else if name.contains(needle) || localpart.contains(needle) {
+                contains.append(member)
+            }
+        }
+        return Array((starts + contains).prefix(6))
+    }
+
+    private func moveSuggestion(_ step: Int) -> KeyPress.Result {
+        let count = suggestions.count
+        guard count > 0 else { return .ignored }
+        suggestionIndex = (suggestionIndex + step + count) % count
+        return .handled
+    }
+
+    private func pickSelectedSuggestion() -> KeyPress.Result {
+        let current = suggestions
+        guard !current.isEmpty else { return .ignored }
+        pick(current[min(suggestionIndex, current.count - 1)])
+        return .handled
+    }
+
+    private func pick(_ candidate: MentionCandidate) {
+        guard let at = draft.lastIndex(of: "@") else { return }
+        draft.replaceSubrange(at..., with: candidate.label + " ")
+        let mention = ComposedMention(label: candidate.label, userID: candidate.isRoom ? nil : candidate.id)
+        if !composedMentions.contains(mention) { composedMentions.append(mention) }
+        composerFocused = true
     }
 }
 
@@ -475,14 +558,20 @@ private struct MessageView: View {
         .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
     }
 
+    /// The message with its formatting, links and mention pills.
+    private func styled(_ text: String) -> AttributedString {
+        MessageFormatter.render(text: text, html: message.html, mentionsRoom: message.mentionsRoom,
+                                ownUserID: timeline.ownUserID, name: timeline.knownName(for:))
+    }
+
     @ViewBuilder private var bodyView: some View {
         switch message.body {
         case .text(let text):
-            (Text(text.linkified) + Text(message.isEdited ? " (edited)" : "").font(.caption).foregroundStyle(.secondary))
+            (Text(styled(text)) + Text(message.isEdited ? " (edited)" : "").font(.caption).foregroundStyle(.secondary))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         case .emote(let text):
-            Text("* \(message.senderName) \(text)")
+            (Text("* \(message.senderName) ") + Text(styled(text)))
                 .italic()
                 .textSelection(.enabled)
         case .image(let ref, let caption, let aspectRatio):
@@ -508,6 +597,52 @@ private struct MessageView: View {
             Text(text)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// People matching the "@…" being typed, listed above the composer.
+private struct MentionSuggestions: View {
+    let candidates: [MentionCandidate]
+    let selected: Int
+    let media: MediaLoader
+    let onPick: (MentionCandidate) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
+                Button { onPick(candidate) } label: {
+                    HStack(spacing: 8) {
+                        if candidate.isRoom {
+                            Image(systemName: "person.3.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22, height: 22)
+                                .background(.quaternary, in: Circle())
+                        } else {
+                            AvatarView(media: media, url: candidate.avatarURL, name: candidate.name,
+                                       seed: candidate.id, size: 22)
+                        }
+                        Text(candidate.isRoom ? "@room" : candidate.name)
+                            .fontWeight(.medium)
+                        Text(candidate.isRoom ? "Notify everyone in the room" : candidate.id)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(index == selected ? Color.accentColor.opacity(0.22) : .clear,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.separator) }
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
     }
 }
 

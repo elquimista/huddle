@@ -105,9 +105,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         switch content {
         case .roomMessage(let type, _):
             switch type {
-            case .text(let content): return content.body
-            case .notice(let content): return content.body
-            case .emote(let content): return "* \(content.body)"
+            case .text(let content): return MessageFormatter.plainText(text: content.body, formatted: content.formatted)
+            case .notice(let content): return MessageFormatter.plainText(text: content.body, formatted: content.formatted)
+            case .emote(let content): return "* " + MessageFormatter.plainText(text: content.body, formatted: content.formatted)
             case .image(let content): return content.caption ?? "Sent an image"
             case .video(let content): return content.caption ?? "Sent a video"
             case .audio(let content): return content.caption ?? "Sent an audio message"
