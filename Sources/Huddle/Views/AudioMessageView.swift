@@ -77,7 +77,7 @@ struct AudioMessageView: View {
                     } else {
                         Text(failure.message)
                             .foregroundStyle(.secondary)
-                        Button("Save…") { AudioSaver.save(audio, media: media) }
+                        Button("Save…") { AttachmentSaver.save(audio, media: media) }
                             .buttonStyle(.link)
                     }
                 }
@@ -283,21 +283,33 @@ private struct LoadingArc: View {
     }
 }
 
-/// Saves an audio message's file, exactly as it was sent, to a place the user picks.
+/// Saves an attachment's file, exactly as it was sent, to a place the user picks.
 @MainActor
-enum AudioSaver {
+enum AttachmentSaver {
     static func save(_ audio: AudioAttachment, media: MediaLoader) {
+        save(named: audio.filename.isEmpty ? "Audio" : audio.filename, kind: "audio") {
+            try await media.audioFile(source: audio.media.source)
+        }
+    }
+
+    static func save(_ image: ImageAttachment, media: MediaLoader) {
+        save(named: image.suggestedFilename, kind: "image") {
+            try await media.imageFile(source: image.media.source)
+        }
+    }
+
+    private static func save(named name: String, kind: String, load: @escaping () async throws -> Data) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = audio.filename.isEmpty ? "Audio" : audio.filename
+        panel.nameFieldStringValue = name
         panel.canCreateDirectories = true
         let finish: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .OK, let url = panel.url else { return }
             Task {
                 do {
-                    try await media.audioFile(source: audio.media.source).write(to: url, options: .atomic)
+                    try await load().write(to: url, options: .atomic)
                 } catch {
                     let alert = NSAlert()
-                    alert.messageText = "The audio couldn't be saved."
+                    alert.messageText = "The \(kind) couldn't be saved."
                     alert.informativeText = (error as? AudioLoadError) == .download
                         ? "It couldn't be downloaded. Check your connection and try again."
                         : error.localizedDescription

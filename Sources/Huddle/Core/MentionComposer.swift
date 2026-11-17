@@ -27,22 +27,30 @@ enum MentionComposer {
     /// The event to send: plain markdown when nobody is mentioned; otherwise a message whose
     /// HTML links each mentioned person and which names them, so their client notifies them.
     static func content(for text: String, mentions: [ComposedMention]) -> RoomMessageEventContentWithoutRelation {
+        guard mentions.contains(where: { text.contains($0.label) }) else {
+            return messageEventContentFromMarkdown(md: text)
+        }
+        let parts = parts(for: text, mentions: mentions)
+        let html = parts.html ?? escape(parts.plain).replacingOccurrences(of: "\n", with: "<br>")
+        return messageEventContentFromHtml(body: parts.plain, htmlBody: html)
+            .withMentions(mentions: parts.mentions ?? Mentions(userIds: [], room: false))
+    }
+
+    /// The same text as the pieces an attachment's caption needs: plain text, HTML if any
+    /// formatting or mention calls for it, and who is mentioned.
+    static func parts(for text: String, mentions: [ComposedMention]) -> (plain: String, html: String?, mentions: Mentions?) {
         // Longest label first, so "@Ann" doesn't claim the start of "@Anna".
         let used = mentions.filter { text.contains($0.label) }.sorted { $0.label.count > $1.label.count }
-        guard !used.isEmpty else { return messageEventContentFromMarkdown(md: text) }
-
         var plain = ""
         var html = ""
         var userIDs: [String] = []
         var mentionsRoom = false
         var pending = ""        // ordinary text since the last mention
-
         func flush() {
             plain += pending
             html += inlineHTML(fromMarkdown: pending)
             pending = ""
         }
-
         var index = text.startIndex
         while index < text.endIndex {
             if text[index] == "@", let mention = used.first(where: { text[index...].hasPrefix($0.label) }) {
@@ -64,8 +72,10 @@ enum MentionComposer {
             }
         }
         flush()
-        return messageEventContentFromHtml(body: plain, htmlBody: html)
-            .withMentions(mentions: Mentions(userIds: userIDs, room: mentionsRoom))
+        // HTML that says nothing the plain text doesn't is left out.
+        let plainAsHTML = escape(plain).replacingOccurrences(of: "\n", with: "<br>")
+        let hasMentions = !userIDs.isEmpty || mentionsRoom
+        return (plain, html == plainAsHTML ? nil : html, hasMentions ? Mentions(userIds: userIDs, room: mentionsRoom) : nil)
     }
 
     /// Bold, italic, code, strikethrough and links from markdown, as HTML. Line breaks are kept.

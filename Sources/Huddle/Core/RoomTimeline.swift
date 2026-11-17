@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MatrixRustSDK
 import Observation
@@ -34,7 +35,7 @@ struct MessageRow: Equatable {
     enum Body: Equatable {
         case text(String)
         case emote(String)
-        case image(MediaRef, caption: String?, aspectRatio: Double)
+        case image(ImageAttachment)
         case audio(AudioAttachment)
         case attachment(icon: String, name: String)
         case undecryptable
@@ -42,7 +43,12 @@ struct MessageRow: Equatable {
         case unsupported(String)
     }
 
-    enum SendState: Equatable { case sending, failed }
+    enum SendState: Equatable {
+        /// Queued behind another attachment that is still uploading.
+        case waiting
+        case sending
+        case failed
+    }
 
     enum Delivery: Equatable { case sending, sent, read }
 
@@ -92,6 +98,11 @@ struct MessageRow: Equatable {
     var mentionsRoom = false
     /// The message this one answers, if it is a reply.
     var replyTo: ReplyPreview?
+    /// While an attachment is being sent: how much has been uploaded, from 0 to 1, if known.
+    var uploadProgress: Double?
+    /// For an image waiting its turn to upload: the picture to show, since there is nothing
+    /// to load yet.
+    var localPreview: NSImage?
     /// Group rooms: other people whose latest read message is this one, most recent first.
     var readers: [Reader] = []
     /// Your own messages: how far this one has got. Nil when no indicator should show.
@@ -178,6 +189,10 @@ final class RoomTimeline {
     private(set) var members: [MentionCandidate] = []
     @ObservationIgnored private var membersRequested = false
     @ObservationIgnored private var requestedReplyDetails: Set<String> = []
+    @ObservationIgnored private var imageQueue: [QueuedImage] = []
+    @ObservationIgnored private var imageQueueTask: Task<Void, Never>?
+    /// The queued image just given to the SDK, and which unsent image rows existed before it.
+    @ObservationIgnored private var handover: (id: UUID, before: Set<String>)?
     @ObservationIgnored var onRead: (() -> Void)?
     @ObservationIgnored var onLatestReaction: ((ReactionPreview?) -> Void)?
     @ObservationIgnored private var latestReaction: ReactionPreview?
@@ -198,6 +213,7 @@ final class RoomTimeline {
     private var hasReadToEnd = false
 
     func stop() {
+        imageQueueTask?.cancel()
         updatesTask?.cancel()
         listenerHandle?.cancel()
     }
@@ -276,6 +292,8 @@ final class RoomTimeline {
                 }
             }
         }
+        appendQueuedImages(to: &rows, after: previous)
+
         // A thread's history ends at its root message.
         if let threadRoot, let first = rows.first(where: \.isMessage),
            case .message(let message) = first.kind, message.eventID == threadRoot {
@@ -406,7 +424,7 @@ final class RoomTimeline {
 
             if !message.isOwn || message.sendState == .failed {
                 message.delivery = nil
-            } else if message.sendState == .sending {
+            } else if message.sendState == .sending || message.sendState == .waiting {
                 message.delivery = .sending
             } else if isOneToOne {
                 message.delivery = readByOthers ? .read : .sent
@@ -497,11 +515,149 @@ final class RoomTimeline {
         }
     }
 
+    // MARK: Images
+
+    /// An image waiting its turn to be uploaded.
+    private struct QueuedImage {
+        let id = UUID()
+        let queuedAt = Date()
+        let image: StagedImage
+        let caption: (plain: String, html: String?, mentions: Mentions?)?
+        let replyTo: String?
+    }
+
+    private static let queuedPrefix = "queued-"
+
+    /// Sends images, each as a message of its own, in the order given. The caption, and the
+    /// reply if this is one, go with the first.
+    ///
+    /// They are uploaded one at a time. Handed to the SDK together they upload side by side and
+    /// arrive in whatever order they finish, which is rarely the order they were chosen in.
+    func send(images: [StagedImage], caption: String, mentions: [ComposedMention] = [], replyTo: String? = nil) {
+        let captionParts = caption.isEmpty ? nil : MentionComposer.parts(for: caption, mentions: mentions)
+        for (index, image) in images.enumerated() {
+            imageQueue.append(QueuedImage(image: image, caption: index == 0 ? captionParts : nil,
+                                          replyTo: index == 0 ? replyTo : nil))
+        }
+        rebuildRows()
+        runImageQueue()
+        if threadRoot == nil, let timeline { Task { try? await timeline.markAsRead(receiptType: .fullyRead) } }
+    }
+
+    private func runImageQueue() {
+        guard imageQueueTask == nil else { return }
+        imageQueueTask = Task { [weak self] in
+            while let self, let next = self.imageQueue.first, let timeline = self.timeline, !Task.isCancelled {
+                // Its own row, from the SDK, takes over from the placeholder once it shows up.
+                self.handover = (next.id, self.unsentImageRows(in: self.rows))
+                do {
+                    let handle = try timeline.sendAttachment(params: Self.parameters(for: next),
+                                                             attachment: Self.attachment(for: next.image))
+                    try? await handle.join()
+                    self.error = nil
+                } catch {
+                    self.error = error.userMessage
+                    self.dequeue(next.id)
+                    continue
+                }
+                var row: String?
+                for _ in 0..<40 where row == nil {
+                    row = self.unsentImageRows(in: self.rows).subtracting(self.handover?.before ?? []).first
+                    if row == nil { try? await Task.sleep(for: .milliseconds(75)) }
+                }
+                self.dequeue(next.id)
+                // Wait for it to be sent, or given up on, before starting the next.
+                while let row, !Task.isCancelled, self.unsentImageRows(in: self.rows).contains(row) {
+                    try? await Task.sleep(for: .milliseconds(150))
+                }
+            }
+            self?.imageQueueTask = nil
+        }
+    }
+
+    private func dequeue(_ id: UUID) {
+        imageQueue.removeAll { $0.id == id }
+        if handover?.id == id { handover = nil }
+        rebuildRows()
+    }
+
+    /// Rows for images of ours that the SDK is uploading, or has failed to.
+    private func unsentImageRows(in rows: [TimelineRow]) -> Set<String> {
+        Set(rows.compactMap { row in
+            guard case .message(let message) = row.kind, case .image = message.body,
+                  message.sendState == .sending || message.sendState == .failed else { return nil }
+            return row.id
+        })
+    }
+
+    /// Images still waiting are drawn after everything else, as messages of ours.
+    private func appendQueuedImages(to rows: inout [TimelineRow], after last: MessageRow?) {
+        guard !imageQueue.isEmpty else { return }
+        var previous = last
+        for queued in imageQueue {
+            // The one just handed over has its real row by now: don't show it twice.
+            if let handover, handover.id == queued.id, !unsentImageRows(in: rows).subtracting(handover.before).isEmpty { continue }
+            let id = Self.queuedPrefix + queued.id.uuidString
+            var message = MessageRow(
+                itemID: .transactionId(transactionId: id),
+                sender: ownUserID,
+                senderName: profiles[ownUserID]?.name ?? ownUserID.matrixLocalpart,
+                senderAvatarURL: profiles[ownUserID]?.avatarURL,
+                isOwn: true,
+                date: queued.queuedAt,
+                body: .image(ImageAttachment(staged: queued.image, caption: queued.caption?.plain, id: queued.id)),
+                sendState: .waiting,
+                localPreview: queued.image.preview)
+            if let previous, previous.sender == ownUserID, message.date.timeIntervalSince(previous.date) < 300 {
+                message.showsHeader = false
+            }
+            previous = message
+            rows.append(TimelineRow(id: id, kind: .message(message)))
+        }
+    }
+
+    private static func parameters(for queued: QueuedImage) -> UploadParameters {
+        UploadParameters(
+            source: .data(bytes: queued.image.data, filename: queued.image.filename),
+            caption: queued.caption?.plain,
+            formattedCaption: queued.caption?.html.map { FormattedBody(format: .html, body: $0) },
+            mentions: queued.caption?.mentions,
+            inReplyTo: queued.replyTo,
+            extraContentJson: nil)
+    }
+
+    private static func attachment(for image: StagedImage) -> AttachmentKind {
+        let info = ImageInfo(
+            height: UInt64(image.pixelSize.height),
+            width: UInt64(image.pixelSize.width),
+            mimetype: image.mimetype,
+            size: UInt64(image.data.count),
+            thumbnailInfo: image.thumbnail.map {
+                ThumbnailInfo(height: UInt64($0.size.height), width: UInt64($0.size.width),
+                              mimetype: $0.mimetype, size: UInt64($0.data.count))
+            },
+            thumbnailSource: nil,
+            blurhash: image.blurhash,
+            isAnimated: image.isAnimated)
+        return .image(imageInfo: info, thumbnailSource: image.thumbnail.map { .data(bytes: $0.data, filename: "thumbnail") })
+    }
+
+    /// Gives up on a message that hasn't been sent: stops its upload and removes it.
+    func discard(_ itemID: EventOrTransactionId) async {
+        if case .transactionId(let id) = itemID, id.hasPrefix(Self.queuedPrefix) {
+            if let queued = imageQueue.first(where: { Self.queuedPrefix + $0.id.uuidString == id }) { dequeue(queued.id) }
+            return
+        }
+        try? await timeline?.redactEvent(eventOrTransactionId: itemID, reason: nil)
+    }
+
     func toggleReaction(_ key: String, on itemID: EventOrTransactionId) async {
         _ = try? await timeline?.toggleReaction(itemId: itemID, key: key)
     }
 
     func retry(_ itemID: EventOrTransactionId) async {
+        // After a failure the room's queue may be switched off; nothing is sent until it is on.
+        room.enableSendQueue(enable: true)
         _ = try? await timeline?.retrySend(itemId: itemID, target: .event)
     }
 
@@ -563,8 +719,7 @@ extension TimelineRow.Kind {
             default: break
             }
         case .sticker(let text, let info, let source):
-            body = .image(MediaRef(source: source), caption: nil, aspectRatio: info.aspectRatio)
-            _ = text
+            body = .image(ImageAttachment(sticker: source, info: info, name: text))
         case .poll(let question, _, _, _, _, _, _):
             body = .unsupported("Poll: \(question)")
         case .redacted:
@@ -576,8 +731,13 @@ extension TimelineRow.Kind {
         }
 
         var sendState: MessageRow.SendState?
+        var uploadProgress: Double?
         switch event.localSendState {
-        case .notSentYet: sendState = .sending
+        case .notSentYet(let progress):
+            sendState = .sending
+            if let upload = progress?.progress, upload.total > 0 {
+                uploadProgress = min(Double(upload.current) / Double(upload.total), 1)
+            }
         case .sendingFailed: sendState = .failed
         default: break
         }
@@ -609,7 +769,8 @@ extension TimelineRow.Kind {
                 .sorted { $0.userID < $1.userID },
             html: formatted.flatMap { $0.format == .html ? $0.body : nil },
             mentionsRoom: mentionsRoom,
-            replyTo: content.inReplyTo.map(ReplyPreview.init)))
+            replyTo: content.inReplyTo.map(ReplyPreview.init),
+            uploadProgress: uploadProgress))
     }
 }
 
@@ -619,10 +780,7 @@ extension MessageRow.Body {
         case .text(let content): self = .text(content.body)
         case .notice(let content): self = .text(content.body)
         case .emote(let content): self = .emote(content.body)
-        case .image(let content):
-            self = .image(MediaRef(source: content.source),
-                          caption: content.caption,
-                          aspectRatio: content.info?.aspectRatio ?? 1.5)
+        case .image(let content): self = .image(ImageAttachment(content))
         case .video(let content): self = .attachment(icon: "film", name: content.filename)
         case .audio(let content): self = .audio(AudioAttachment(content))
         case .file(let content): self = .attachment(icon: "doc", name: content.filename)

@@ -7,6 +7,7 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Multiple accounts:** an avatar rail switches accounts (⌘1–9); each has its own unread badge and its own encrypted local store.
 - **Sign-in:** username and password in the app wherever the homeserver accepts them, with OAuth in your browser as the alternative (needed for single sign-on, passkeys and two-step verification) or where it is the only way.
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions with a searchable emoji picker, formatted messages with mention pills, and a markdown composer that suggests people as you type "@". Settings (⌘,) switches between the modern message layout and a compact IRC-style one.
+- **Images:** pictures show at their own size up to a sensible limit, with the sender's blurred preview while they load; GIFs play in place. Clicking one opens it in Quick Look, and the context menu copies or saves it. Send images with the + button, by pasting, or by dragging them in: they wait in the composer with a caption, upload one at a time in order with progress, and can be cancelled or retried. HEIC and TIFF are converted so every client can show them.
 - **Replies:** reply to any message from its hover actions or context menu. A reply shows the message it answers above it, and clicking that jumps to the original, loading older history if needed. Works inside threads too.
 - **Audio:** voice messages and audio files play in the timeline, with a waveform or track to scrub through, 1×/1.5×/2× speed, and Save As. Ogg Opus, which macOS can't play by itself, is decoded in the app.
 - **Threads:** Slack-style. Replies stay out of the room; the root message shows a reply count that opens the thread in a side panel with its own composer. A toolbar button lists all of a room's threads.
@@ -14,7 +15,7 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Notifications:** macOS alerts for new messages, mentions and invitations, following your account's notification rules (muted rooms stay silent; direct messages and mentions play a sound). Clicking one opens that account, room and thread, and reading a room clears its alerts. Settings (⌘,) turns alerts or their sound off; they start off in the Dev build.
 - **Encryption:** end-to-end encrypted rooms work, and a new session is verified with your recovery key.
 
-Not built yet: sending attachments, edits, spaces, and emoji verification.
+Not built yet: sending files other than images, edits, spaces, and emoji verification.
 
 ## Requirements
 
@@ -73,6 +74,7 @@ dev/synapse/seed.py say bob General "hello"   # send one live message
 dev/synapse/seed.py read bob General           # Bob reads General up to its newest message
 dev/synapse/seed.py threads   # three threads in General, one with 40 replies
 dev/synapse/seed.py audio     # voice messages and audio files in General
+dev/synapse/seed.py images    # pictures of every shape in Design, an animation, and a missing one
 dev/synapse/seed.py reply bob General "team lunch" "hi"   # reply in the thread containing that text
 dev/synapse/seed.py respond bob General "hello" "hi back"  # inline reply to the message containing that text
 ```

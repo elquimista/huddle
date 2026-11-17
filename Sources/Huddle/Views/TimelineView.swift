@@ -1,4 +1,5 @@
 import MatrixRustSDK
+import QuickLook
 import SwiftUI
 
 /// A scrolling list of messages with a composer: a room's timeline, or one thread's.
@@ -15,6 +16,17 @@ struct TimelineView: View {
     @State private var highlightedRow: String?
     /// The message being looked for after clicking a quote, while older history loads.
     @State private var searchingFor: String?
+    /// Images waiting in the composer to be sent.
+    @State private var stagedImages: [StagedImage] = []
+    /// Something about attaching or opening an image that the user should know.
+    @State private var imageNotice: String?
+    @State private var isDropTarget = false
+    @State private var pasteInterceptor = PasteInterceptor()
+    /// The image open in the full-size viewer, as the file Quick Look is showing.
+    @State private var previewURL: URL?
+    /// The image being fetched to open, by its address.
+    @State private var openingImage: String?
+    private static let mostImagesAtOnce = 10
     /// Mentions picked from the suggestions for the message being written.
     @State private var composedMentions: [ComposedMention] = []
     @State private var suggestionIndex = 0
@@ -65,9 +77,11 @@ struct TimelineView: View {
                         TimelineRowView(row: row, timeline: timeline, media: media,
                                         actions: MessageActions(openThread: onOpenThread,
                                                                 reply: { startReply(to: $0) },
-                                                                showOriginal: { showOriginal($0, proxy) }),
+                                                                showOriginal: { showOriginal($0, proxy) },
+                                                                openImage: { openImage($0) }),
                                         isHighlighted: row.id == highlightedRow,
-                                        searchingFor: searchingFor)
+                                        searchingFor: searchingFor,
+                                        openingImage: openingImage)
                             .id(row.id)
                         if row.id == threadRootRowID {
                             RepliesDivider(count: replyCount)
@@ -172,9 +186,33 @@ struct TimelineView: View {
         .onAppear {
             composerFocused = true
             input.start()
+            pasteInterceptor.onImages = { stage($0) }
+            pasteInterceptor.start()
+            _ = media.uploadLimit       // learn the server's size limit before it is needed
+            if timeline.threadRoot == nil, !DevHooks.stagedImagePaths.isEmpty, !DevHooks.didStageImages {
+                DevHooks.didStageImages = true
+                stage(DevHooks.stagedImagePaths.map { .file(URL(fileURLWithPath: $0)) })
+            }
+        }
+        .onChange(of: composerFocused, initial: true) { pasteInterceptor.isActive = composerFocused }
+        // Images dragged anywhere over the conversation land in the composer.
+        .onDrop(of: ImageDrop.types, isTargeted: $isDropTarget) { providers in
+            Task { stage(await ImageDrop.sources(from: providers)) }
+            return true
+        }
+        .overlay {
+            if isDropTarget { DropTargetOverlay() }
+        }
+        .animation(.easeOut(duration: 0.12), value: isDropTarget)
+        // The full-size viewer is Quick Look, as in Finder and Messages.
+        .quickLookPreview($previewURL)
+        .onChange(of: previewURL) { old, new in
+            if let old, old != new { ImagePreviewFiles.remove(old) }
         }
         .onDisappear {
             input.stop()
+            pasteInterceptor.stop()
+            if let previewURL { ImagePreviewFiles.remove(previewURL) }
             AudioPlayback.shared.stop(owner: timeline)
             let timeline = timeline
             Task { await timeline.leave() }
@@ -209,17 +247,33 @@ struct TimelineView: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .padding(.leading, 36)
+            }
+            if let imageNotice {
+                Text(imageNotice)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.leading, 36)
+            }
+            if !stagedImages.isEmpty {
+                StagedImagesRow(images: stagedImages) { image in
+                    stagedImages.removeAll { $0.id == image.id }
+                }
+                .padding(.leading, 36)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             if let replyTarget {
                 ReplyComposerBar(reply: replyTarget) { self.replyTarget = nil }
                     // Lined up with the text field below: its text on the left, its edge on the right.
-                    .padding(.leading, 10)
+                    .padding(.leading, 46)
                     .padding(.trailing, 42)
                     .padding(.bottom, 2)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             HStack(alignment: .bottom, spacing: 8) {
-                TextField(placeholder, text: $draft, axis: .vertical)
+                AttachButton { pickImages() }
+                    .padding(.bottom, 1)
+                TextField(stagedImages.isEmpty ? placeholder : "Add a caption…", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...8)
                     .focused($composerFocused)
@@ -262,6 +316,7 @@ struct TimelineView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .animation(.snappy(duration: 0.2), value: replyTarget?.eventID)
+        .animation(.snappy(duration: 0.2), value: stagedImages.map(\.id))
         .background(.bar)
         // Not Divider: inside the room's HStack it would draw itself vertically.
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
@@ -279,19 +334,88 @@ struct TimelineView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !stagedImages.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func send(_ proxy: ScrollViewProxy) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let images = stagedImages
+        guard !text.isEmpty || !images.isEmpty else { return }
         let mentions = composedMentions
         let replyTo = replyTarget?.eventID
         draft = ""
         composedMentions = []
         replyTarget = nil
+        stagedImages = []
+        imageNotice = nil
         scrollToBottom(proxy)
-        Task { await timeline.send(text, mentions: mentions, replyTo: replyTo) }
+        if images.isEmpty {
+            Task { await timeline.send(text, mentions: mentions, replyTo: replyTo) }
+        } else {
+            // With images, what was typed is their caption.
+            timeline.send(images: images, caption: text, mentions: mentions, replyTo: replyTo)
+        }
+    }
+
+    // MARK: Images
+
+    private func pickImages() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Attach"
+        panel.message = "Choose images to send"
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            if response == .OK { stage(panel.urls.map(ImageSource.file)) }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            panel.begin(completionHandler: finish)
+        }
+    }
+
+    /// Readies picked, pasted or dropped images and puts them in the composer.
+    private func stage(_ sources: [ImageSource]) {
+        guard !sources.isEmpty else { return }
+        imageNotice = nil
+        Task {
+            // If the server's size limit isn't known yet, the server itself will say so on upload.
+            let limit = media.uploadLimit
+            for source in sources {
+                guard stagedImages.count < Self.mostImagesAtOnce else {
+                    imageNotice = "Up to \(Self.mostImagesAtOnce) images can be sent at once."
+                    break
+                }
+                // Decoding and scaling can take a moment for a large photo: not on the main thread.
+                let result = await Task.detached(priority: .userInitiated) {
+                    Result { try ImagePreparer.prepare(source, uploadLimit: limit) }
+                }.value
+                switch result {
+                case .success(let image): stagedImages.append(image)
+                case .failure(let error):
+                    imageNotice = (error as? ImagePreparationError)?.message ?? "That image couldn't be read."
+                }
+            }
+            composerFocused = true
+        }
+    }
+
+    /// Opens an image at full size in Quick Look.
+    private func openImage(_ image: ImageAttachment) {
+        guard openingImage == nil else { return }
+        openingImage = image.media.source.url()
+        Task {
+            defer { openingImage = nil }
+            do {
+                let data = try await media.imageFile(source: image.media.source)
+                previewURL = try ImagePreviewFiles.write(data, named: image.suggestedFilename)
+                imageNotice = nil
+            } catch {
+                imageNotice = "That image couldn't be loaded. Check your connection and try again."
+            }
+        }
     }
 
     // MARK: Replies
@@ -400,12 +524,13 @@ private struct TimelineRowView: View {
     let actions: MessageActions
     let isHighlighted: Bool
     let searchingFor: String?
+    let openingImage: String?
 
     var body: some View {
         switch row.kind {
         case .message(let message):
             MessageView(message: message, timeline: timeline, media: media, actions: actions,
-                        isHighlighted: isHighlighted, searchingFor: searchingFor)
+                        isHighlighted: isHighlighted, searchingFor: searchingFor, openingImage: openingImage)
         case .notice(let text):
             Text(text)
                 .font(.callout)
@@ -439,11 +564,17 @@ private struct MessageView: View {
     /// Lit up briefly after being jumped to from a reply.
     let isHighlighted: Bool
     let searchingFor: String?
+    let openingImage: String?
 
     /// Opens this message's thread, when it can have one from here.
     private var openThread: (() -> Void)? {
         guard let onOpenThread = actions.openThread, let eventID = message.eventID else { return nil }
         return { onOpenThread(eventID) }
+    }
+
+    private var isImage: Bool {
+        if case .image = message.body { return true }
+        return false
     }
 
     /// Starts a reply to this message. Nil for one that hasn't been sent yet or was deleted.
@@ -476,7 +607,7 @@ private struct MessageView: View {
         .padding(.trailing, ReceiptView.gutter)
         .padding(.top, layout == .modern && message.showsHeader ? 9 : 3)
         .padding(.bottom, 3)
-        .opacity(message.sendState == .sending ? 0.55 : 1)
+        .opacity(message.sendState != nil && message.sendState != .failed && !isImage ? 0.55 : 1)
         .background {
             if isHighlighted {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -520,7 +651,16 @@ private struct MessageView: View {
                 Button(message.thread == nil ? "Reply in Thread" : "Open Thread", action: openThread)
             }
             if case .audio(let audio) = message.body {
-                Button("Save Audio As…") { AudioSaver.save(audio, media: media) }
+                Button("Save Audio As…") { AttachmentSaver.save(audio, media: media) }
+            }
+            if case .image(let image) = message.body, message.sendState == nil {
+                Button("Open") { actions.openImage(image) }
+                Button("Copy Image") {
+                    Task {
+                        if let data = try? await media.imageFile(source: image.media.source) { ImagePasteboard.copy(data) }
+                    }
+                }
+                Button("Save Image As…") { AttachmentSaver.save(image, media: media) }
             }
             if case .text(let text) = message.body {
                 Button("Copy") {
@@ -561,19 +701,24 @@ private struct MessageView: View {
 
     /// Time, sender, text on one line, with the names in a column so the text lines up.
     private var ircRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(message.date.formatted(date: .omitted, time: .shortened))
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(.tertiary)
-                .frame(width: 54, alignment: .trailing)
-            Text(message.senderName)
-                .fontWeight(.semibold)
-                .foregroundStyle(AvatarView.color(for: message.sender))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: 88, alignment: .trailing)
-                .help(message.sender)
+        // Time and name share a baseline with each other, and sit at the top of the message. The
+        // name is set in the body's own size, so against text its baseline matches the first
+        // line; against a picture or an audio player, which have no baseline, it marks the top.
+        HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(message.date.formatted(date: .omitted, time: .shortened))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 54, alignment: .trailing)
+                Text(message.senderName)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(AvatarView.color(for: message.sender))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: 88, alignment: .trailing)
+                    .help(message.sender)
+            }
             VStack(alignment: .leading, spacing: 3) { content }
             Spacer(minLength: 0)
         }
@@ -608,12 +753,15 @@ private struct MessageView: View {
             ThreadChip(thread: thread, media: media, action: openThread)
         }
         if message.sendState == .failed {
-            Button("Failed to send. Retry") {
-                Task { await timeline.retry(message.itemID) }
+            HStack(spacing: 8) {
+                Label("Not sent", systemImage: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
+                Button("Try Again") { Task { await timeline.retry(message.itemID) } }
+                    .buttonStyle(.link)
+                Button("Delete") { Task { await timeline.discard(message.itemID) } }
+                    .buttonStyle(.link)
             }
-            .buttonStyle(.link)
             .font(.caption)
-            .foregroundStyle(.red)
         }
     }
 
@@ -673,12 +821,19 @@ private struct MessageView: View {
             (Text("* \(message.senderName) ") + Text(styled(text)))
                 .italic()
                 .textSelection(.enabled)
-        case .image(let ref, let caption, let aspectRatio):
+        case .image(let image):
             VStack(alignment: .leading, spacing: 4) {
-                MediaImageView(media: media, ref: ref, aspectRatio: aspectRatio)
+                ImageMessageView(image: image, media: media, sendState: message.sendState,
+                                 uploadProgress: message.uploadProgress,
+                                 localPreview: message.localPreview,
+                                 isOpening: openingImage == image.media.source.url(),
+                                 open: { actions.openImage(image) },
+                                 cancelUpload: message.sendState == nil ? nil : {
+                                     Task { await timeline.discard(message.itemID) }
+                                 })
                     .padding(.vertical, 3)
-                if let caption {
-                    Text(caption.linkified).textSelection(.enabled)
+                if let caption = image.caption {
+                    Text(styled(caption)).textSelection(.enabled)
                 }
             }
         case .audio(let audio):
@@ -827,7 +982,7 @@ private final class ScrollInputTracker {
     private var monitor: Any?
     private var lastInput = Date.distantPast
 
-    var isRecent: Bool { Date().timeIntervalSince(lastInput) < 0.6 }
+    var isRecent: Bool { DevHooks.freeScroll || Date().timeIntervalSince(lastInput) < 0.6 }
 
     func start() {
         guard monitor == nil else { return }
@@ -985,34 +1140,6 @@ private struct ThreadChip: View {
         .onHover { isHovering = $0 }
         .padding(.leading, -6)
         .padding(.top, 1)
-    }
-}
-
-private struct MediaImageView: View {
-    let media: MediaLoader
-    let ref: MediaRef
-    let aspectRatio: Double
-    @State private var image: NSImage?
-
-    private var size: CGSize {
-        let width = min(360, 280 * max(aspectRatio, 0.5))
-        return CGSize(width: width, height: min(width / aspectRatio, 420))
-    }
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10).fill(.quaternary)
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            }
-        }
-        .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .task(id: ref.source.url()) {
-            image = await media.thumbnail(source: ref.source, size: 400)
-        }
     }
 }
 

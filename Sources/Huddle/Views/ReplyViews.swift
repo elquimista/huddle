@@ -8,6 +8,8 @@ struct MessageActions {
     var reply: (MessageRow) -> Void
     /// Goes to the message a reply answers.
     var showOriginal: (ReplyPreview) -> Void
+    /// Opens an image at full size.
+    var openImage: (ImageAttachment) -> Void
 }
 
 /// The message being answered, shown above a reply: a bar in the sender's colour, their name,

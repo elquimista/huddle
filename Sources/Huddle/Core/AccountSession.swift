@@ -112,6 +112,8 @@ final class AccountSession: Identifiable {
             verification = client.encryption().verificationState()
 
             Notifier.shared.activate()
+            // Lets an image being sent show how far its upload has got.
+            client.enableSendQueueUploadProgress(enable: true)
             await client.registerNotificationHandler(listener: NotificationListener { [weak self] item, roomID in
                 Task { @MainActor in
                     guard let self, self.syncService != nil else { return }
@@ -136,6 +138,10 @@ final class AccountSession: Identifiable {
             restartAttempts = 0
             restartTask?.cancel()
             restartTask = nil
+            // A send that failed for want of a connection switches its room's queue off.
+            // Now that there is one again, switch them back on so what is waiting goes out.
+            let client = client
+            Task.detached { await client.enableAllSendQueues(enable: true) }
         case .error, .terminated:
             guard restartTask == nil, syncService != nil, !needsReauth else { return }
             let delay = min(60.0, 2.0 * pow(2.0, Double(restartAttempts)))

@@ -6,6 +6,7 @@ Run after setup.sh. Does nothing if alice already has rooms.
   seed.py                                   rooms, history, images, a DM, an encrypted room, an invite
   seed.py threads                           three threads in General, one long
   seed.py audio                             voice messages and audio files in General
+  seed.py images                            pictures of every shape in Design, an animation, and one that is missing
   seed.py say <user> <room> <text>          one live message
   seed.py read <user> <room> [fragment]     send a read receipt, for the newest message or a named one
   seed.py reply <user> <room> <fragment> <text>   one reply in the thread whose text contains <fragment>
@@ -146,8 +147,40 @@ def seed_audio():
     audio(bob, "field-recording.xyz", b"not really audio " * 400, "application/octet-stream", 5000)
     print("Seeded audio in General.")
 
+def seed_images():
+    """Pictures in Design: a large one with a caption, a very tall and a very wide one, a tiny
+    one, an animation that plays in place and one too big to, and one the server doesn't have."""
+    fixtures = os.path.join(os.path.dirname(__file__), "fixtures")
+    meta = json.load(open(os.path.join(fixtures, "images.json")))
+    bob = login("bob")
+    design = find_room(bob, "Design")
+
+    def image(name, body=None, uri=None, **overrides):
+        data = open(os.path.join(fixtures, name), "rb").read()
+        info = {"w": meta[name]["w"], "h": meta[name]["h"], "mimetype": meta[name]["mimetype"], "size": len(data)}
+        if "blurhash" in meta[name]:
+            info["xyz.amorgan.blurhash"] = meta[name]["blurhash"]
+        info.update(overrides)
+        uri = uri or upload(bob, name, data, meta[name]["mimetype"])
+        # A caption is the body, with the file's name alongside; without one the body is the name.
+        extra = {"filename": name} if body else {}
+        return send(bob, design, body or name, "m.image", url=uri, info=info, **extra)
+
+    send(bob, design, "A few pictures from this week")
+    image("photo.jpg", "Sunset from the office roof, taken on the way out")
+    image("tall.png")
+    image("wide.jpg")
+    image("tiny.png")
+    image("anim.gif")
+    image("anim.gif", "A long recording", size=12 * 1024 * 1024)       # says it is too big to play unasked
+    image("photo.jpg", "This one was removed from the server", uri="mxc://localhost/noSuchImage")
+    print("Seeded images in Design.")
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else None
+    if command == "images":   # seed.py images: pictures of every shape in Design
+        seed_images()
+        return
     if command == "respond":  # seed.py respond <user> <room> <fragment> <text>: an inline reply
         _, _, user, room_name, fragment, text = sys.argv
         token = login(user)

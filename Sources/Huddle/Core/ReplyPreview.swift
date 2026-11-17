@@ -55,8 +55,8 @@ struct ReplyPreview: Equatable {
             text = MessageFormatter.plainText(text: body, formatted: formatted)
         case .emote(let body):
             text = "* \(message.senderName) " + MessageFormatter.plainText(text: body, formatted: formatted)
-        case .image(_, let caption, _):
-            (text, icon) = (caption ?? "Image", "photo")
+        case .image(let image):
+            (text, icon) = (image.caption ?? (image.isSticker ? "Sticker" : "Image"), image.isSticker ? "face.smiling" : "photo")
         case .audio(let audio):
             (text, icon) = (audio.isVoice ? "Voice message" : audio.filename, "waveform")
         case .attachment(let symbol, let name):

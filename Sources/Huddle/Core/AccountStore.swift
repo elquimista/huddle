@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MatrixRustSDK
 import Observation
@@ -22,6 +23,11 @@ final class AccountStore {
     func restore() async {
         DevHooks.applyAppearance()
         Notifier.shared.store = self
+        // Images opened in the viewer are written to a private folder; leave none behind.
+        ImagePreviewFiles.removeAll()
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+            ImagePreviewFiles.removeAll()
+        }
         if !DevHooks.startsFresh { await restoreStoredAccounts() }
         isRestoring = false
         await DevHooks.run(store: self)
