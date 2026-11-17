@@ -68,6 +68,8 @@ struct MessageRow: Equatable {
         var key: String
         var count: Int
         var isOwn: Bool
+        /// Everyone who reacted this way, earliest first.
+        var senders: [String] = []
         /// Who added this reaction most recently, and when.
         var latestSender: String?
         var latestDate: Date?
@@ -756,6 +758,7 @@ extension TimelineRow.Kind {
                 return .init(key: reaction.key,
                              count: reaction.senders.count,
                              isOwn: reaction.senders.contains { $0.senderId == ownUserID },
+                             senders: reaction.senders.sorted { $0.timestamp < $1.timestamp }.map(\.senderId),
                              latestSender: latest?.senderId,
                              latestDate: latest.map { Date(matrixTimestamp: $0.timestamp) })
             },

@@ -711,17 +711,9 @@ private struct MessageView: View {
         if !message.reactions.isEmpty {
             HStack(spacing: 4) {
                 ForEach(message.reactions) { reaction in
-                    Button {
+                    ReactionChipView(reaction: reaction, names: reactorNames(reaction)) {
                         Task { await timeline.toggleReaction(reaction.key, on: message.itemID) }
-                    } label: {
-                        Text("\(reaction.key) \(reaction.count)")
-                            .font(.callout)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(reaction.isOwn ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.15),
-                                        in: Capsule())
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -779,6 +771,13 @@ private struct MessageView: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.separator) }
         .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+    }
+
+    /// The people behind a reaction, by name, with "You" for this account and first.
+    private func reactorNames(_ reaction: MessageRow.ReactionChip) -> [String] {
+        let others = reaction.senders.filter { $0 != timeline.ownUserID }
+            .map { timeline.knownName(for: $0) ?? $0.matrixLocalpart }
+        return reaction.isOwn ? ["You"] + others : others
     }
 
     /// The message with its formatting, links and mention pills.
@@ -881,6 +880,62 @@ private struct MentionSuggestions: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.separator) }
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+    }
+}
+
+/// One reaction under a message: the emoji and how many chose it. Yours are drawn in the accent
+/// colour, filled and outlined, so they stand apart from other people's at a glance. Clicking
+/// adds or takes back your own.
+private struct ReactionChipView: View {
+    let reaction: MessageRow.ReactionChip
+    /// Who reacted, "You" first if you did.
+    let names: [String]
+    let toggle: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 4) {
+                Text(reaction.key)
+                    .font(.system(size: 14))
+                Text("\(reaction.count)")
+                    .font(.system(size: 12, weight: reaction.isOwn ? .bold : .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(reaction.isOwn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+            }
+            .padding(.leading, 7)
+            .padding(.trailing, 8)
+            .frame(height: 24)
+            .background(fill, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(stroke, lineWidth: reaction.isOwn ? 1.2 : 0.5)
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(summary)
+        .accessibilityLabel("\(reaction.key), \(reaction.count)")
+        .accessibilityValue(summary)
+        .accessibilityHint(reaction.isOwn ? "Removes your reaction" : "Adds your reaction")
+        .accessibilityAddTraits(reaction.isOwn ? .isSelected : [])
+    }
+
+    private var fill: Color {
+        reaction.isOwn
+            ? Color.accentColor.opacity(isHovering ? 0.26 : 0.17)
+            : Color.primary.opacity(isHovering ? 0.11 : 0.06)
+    }
+
+    private var stroke: Color {
+        reaction.isOwn ? Color.accentColor.opacity(0.85) : Color.primary.opacity(isHovering ? 0.18 : 0.1)
+    }
+
+    /// "You and Bob reacted with 👍", "Bob, Carol and 3 others reacted with 🎉".
+    private var summary: String {
+        let shown = names.count > 4 ? Array(names.prefix(3)) + ["\(names.count - 3) others"] : names
+        let who = shown.isEmpty ? "\(reaction.count) people" : shown.formatted(.list(type: .and))
+        return "\(who) reacted with \(reaction.key)"
     }
 }
 
