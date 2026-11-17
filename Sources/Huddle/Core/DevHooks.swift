@@ -81,6 +81,9 @@ enum DevHooks {
     static var didStageImages = false
 
     static let freeScroll = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_FREE_SCROLL"] != nil
+    /// Gives every message its actions as accessibility actions even without VoiceOver, so tests
+    /// can reach them.
+    static let accessibilityActions = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_AX_ACTIONS"] != nil
 
     /// Images to stage in the composer of the room opened at launch.
     static let stagedImagePaths: [String] = AppEnvironment.isDev

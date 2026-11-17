@@ -9,6 +9,9 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions with a searchable emoji picker, formatted messages with mention pills, and a markdown composer that suggests people as you type "@". Settings (⌘,) switches between the modern message layout and a compact IRC-style one.
 - **Images:** pictures show at their own size up to a sensible limit, with the sender's blurred preview while they load; GIFs play in place. Clicking one opens it full size over the window, where it can be zoomed, rotated, moved, copied and saved; a click outside it, or Escape, closes it. Send images with the + button, by pasting, or by dragging them in: they wait in the composer with a caption, upload one at a time in order with progress, and can be cancelled or retried. HEIC and TIFF are converted so every client can show them.
 - **Replies:** reply to any message from its hover actions or context menu. A reply shows the message it answers above it, and clicking that jumps to the original, loading older history if needed. Works inside threads too.
+- **Editing and deleting:** edit your messages, or a picture's caption, from the ⋯ button in a message's hover actions or its context menu; the message goes into the composer with its mentions intact, and whatever you were writing is set aside until you save (Return) or cancel (Escape). Up arrow in an empty composer edits your last message. Delete asks first; room moderators can remove other people's messages.
+- **Pinning:** pin messages for everyone in the room (where the room allows it). A banner at the top of the room shows the pinned messages one at a time; clicking it goes to that message and then the one pinned before it, and View All lists them in the side panel. A message from far back (a pin, or the original of a reply) opens in a view of its own around it, without loading the whole room's history up to it; Jump to Latest goes back.
+- **Forwarding:** send any message, picture or file on to other rooms from the ⋯ menu: search for a room and press Send beside each one it should go to.
 - **Audio:** voice messages and audio files play in the timeline, with a waveform or track to scrub through, 1×/1.5×/2× speed, and Save As. Ogg Opus, which macOS can't play by itself, is decoded in the app.
 - **Threads:** Slack-style. Replies stay out of the room; the root message shows a reply count that opens the thread in a side panel with its own composer, beside the conversation when the window has room and over it when it hasn't. The panel slides in from the window's edge, and moving between the thread list and a thread slides like a page turn; with Reduce Motion on, these become fades. Drag the panel's edge to resize it (double-click for the standard width). Threads always use the modern layout. A toolbar button lists all of a room's threads.
 - **Presence:** direct chats show whether the other person is online (green) or away (amber) on their avatar, and "Online" or "Last seen 5 min ago" under the room's name. Huddle tells your server you're online while it's in front and away a couple of minutes after; Settings can turn sharing off. Servers that don't do presence simply show nothing.
@@ -75,6 +78,7 @@ dev/synapse/seed.py           # rooms, history, images, a DM, an encrypted room,
 dev/synapse/seed.py say bob General "hello"   # send one live message
 dev/synapse/seed.py read bob General           # Bob reads General up to its newest message
 dev/synapse/seed.py threads   # three threads in General, one with 40 replies
+dev/synapse/seed.py pin alice General "History message 3"   # pin messages, however far back
 dev/synapse/seed.py audio     # voice messages and audio files in General
 dev/synapse/seed.py images    # pictures of every shape in Design, an animation, and a missing one
 dev/synapse/seed.py reply bob General "team lunch" "hi"   # reply in the thread containing that text
@@ -97,7 +101,7 @@ To wipe either one, run `docker compose down && rm -rf data` in its folder.
 Scripts/run-dev.sh alice/General
 ```
 
-The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_THREAD`, `HUDDLE_DEV_SIGN_OUT`, `HUDDLE_DEV_HOVER`, `HUDDLE_DEV_MUTE_AUDIO` (set by `run-dev.sh`, so test runs make no sound), `HUDDLE_DEV_SLOW_ANIMATIONS` (a factor such as `20`, to watch an animation frame by frame), and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
+The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_THREAD`, `HUDDLE_DEV_SIGN_OUT`, `HUDDLE_DEV_HOVER`, `HUDDLE_DEV_MUTE_AUDIO` (set by `run-dev.sh`, so test runs make no sound), `HUDDLE_DEV_SLOW_ANIMATIONS` (a factor such as `20`, to watch an animation frame by frame), `HUDDLE_DEV_PERF` (prints how long each room takes to appear), `HUDDLE_DEV_AX_ACTIONS` (gives messages their actions as accessibility actions even without VoiceOver, for scripted tests), and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
 
 ## Releases
 

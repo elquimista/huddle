@@ -25,6 +25,11 @@ struct TimelineRow: Identifiable, Equatable {
         return false
     }
 
+    var message: MessageRow? {
+        if case .message(let message) = kind { return message }
+        return nil
+    }
+
     var messageDate: Date? {
         if case .message(let message) = kind { return message.date }
         return nil
@@ -89,6 +94,10 @@ struct MessageRow: Equatable {
     var date: Date
     var body: Body
     var isEdited = false
+    /// Whether the SDK will let this account change the message: its own text, or a caption.
+    var isEditable = false
+    /// Whether the message is one of the room's pinned messages.
+    var isPinned = false
     var reactions: [ReactionChip] = []
     var sendState: SendState?
     /// Present on a message that has thread replies.
@@ -195,6 +204,28 @@ final class RoomTimeline {
     let room: Room
     /// Set for a thread's timeline: the root message's event ID.
     let threadRoot: String?
+    /// True for the timeline of the room's pinned messages, which is only read, never sent to.
+    let isPinnedList: Bool
+    /// Set for a timeline around one message far back in the room, opened to show it without
+    /// loading everything since: that message's event ID.
+    let focusedEvent: String?
+    /// The room's own conversation as it is now, rather than a thread, the pinned messages, or
+    /// a stretch around an older message.
+    var isLive: Bool { threadRoot == nil && !isPinnedList && focusedEvent == nil }
+    /// Focused timeline only: whether there are newer messages still to load before the present.
+    private(set) var hasMoreNewer = true
+    /// Focused timeline only: counts finished requests for newer messages.
+    private(set) var newerRequests = 0
+    @ObservationIgnored private var isPaginatingForwards = false
+    /// Changes whenever a name is learned, so text naming people by their ID is drawn again.
+    @ObservationIgnored private(set) var nameVersion = 0
+    /// The room's pinned messages, by event ID, in the order they were pinned (oldest first).
+    private(set) var pinnedEventIDs: [String] = []
+    /// What this account may do to messages here.
+    private(set) var permissions = TimelinePermissions()
+    /// A message another view wants this one to go to and light up, such as one picked from
+    /// the pinned messages in the side panel. Cleared once it has been dealt with.
+    var requestedJump: String?
     private(set) var rows: [TimelineRow] = []
     private(set) var isLoading = true
     private(set) var hasMoreHistory = true
@@ -234,12 +265,17 @@ final class RoomTimeline {
     /// Names and avatars for read receipts, learned from messages and fetched for the rest.
     @ObservationIgnored private var profiles: [String: (name: String, avatarURL: String?)] = [:]
     @ObservationIgnored private var requestedProfiles: Set<String> = []
+    @ObservationIgnored private var infoHandle: TaskHandle?
+    @ObservationIgnored private var infoTask: Task<Void, Never>?
 
-    init(room: Room, threadRoot: String? = nil) {
+    init(room: Room, threadRoot: String? = nil, isPinnedList: Bool = false, focusedOn focusedEvent: String? = nil) {
         self.room = room
         self.threadRoot = threadRoot
+        self.isPinnedList = isPinnedList
+        self.focusedEvent = focusedEvent
         ownUserID = room.ownUserId()
         updatesTask = Task { [weak self] in await self?.run() }
+        infoTask = Task { [weak self] in await self?.followRoomInfo() }
     }
 
     private var hasReadToEnd = false
@@ -248,14 +284,42 @@ final class RoomTimeline {
         imageQueueTask?.cancel()
         updatesTask?.cancel()
         listenerHandle?.cancel()
+        infoTask?.cancel()
+        infoHandle?.cancel()
+    }
+
+    /// Keeps the pinned messages and this account's permissions up to date.
+    private func followRoomInfo() async {
+        if let info = try? await room.roomInfo() { apply(info) }
+        let (stream, continuation) = AsyncStream.makeStream(of: RoomInfo.self)
+        infoHandle = room.subscribeToRoomInfoUpdates(listener: RoomInfoObserver { continuation.yield($0) })
+        for await info in stream {
+            guard !Task.isCancelled else { break }
+            apply(info)
+        }
+    }
+
+    private func apply(_ info: RoomInfo) {
+        let permissions = info.powerLevels.map(TimelinePermissions.init) ?? self.permissions
+        guard info.pinnedEventIds != pinnedEventIDs || permissions != self.permissions else { return }
+        pinnedEventIDs = info.pinnedEventIds
+        self.permissions = permissions
+        rebuildRows()
     }
 
     private func run() async {
         do {
             // The room's own timeline leaves thread replies out; a thread's timeline is its root
             // message followed by its replies, and sends into that thread.
-            let focus: TimelineFocus = threadRoot.map { .thread(rootEventId: $0) }
-                ?? .live(hideThreadedEvents: true)
+            let focus: TimelineFocus
+            if isPinnedList {
+                focus = .pinnedEvents
+            } else if let focusedEvent {
+                focus = .event(eventId: focusedEvent, numContextEvents: 40,
+                               threadMode: .automatic(hideThreadedEvents: true))
+            } else {
+                focus = threadRoot.map { .thread(rootEventId: $0) } ?? .live(hideThreadedEvents: true)
+            }
             let timeline = try await room.timelineWithConfiguration(configuration: TimelineConfiguration(
                 focus: focus,
                 filter: .all,
@@ -266,7 +330,7 @@ final class RoomTimeline {
             self.timeline = timeline
             let (stream, continuation) = AsyncStream.makeStream(of: [TimelineDiff].self)
             listenerHandle = await timeline.addListener(listener: TimelineDiffListener { continuation.yield($0) })
-            if threadRoot == nil { unreadHorizon = await lastReadTime() }
+            if isLive { unreadHorizon = await lastReadTime() }
             let isDirect = await room.isDirect()
             isOneToOne = isDirect && room.activeMembersCount() <= 2
             isLoading = false
@@ -295,17 +359,29 @@ final class RoomTimeline {
         var rows: [TimelineRow] = []
         rows.reserveCapacity(items.count)
         var previous: MessageRow?
+        let pinned = Set(pinnedEventIDs)
         for item in items {
             let id = item.uniqueId().id
             if let event = item.asEvent() {
                 switch TimelineRow.Kind(event: event, ownUserID: ownUserID) {
                 case .message(var message):
+                    message.isPinned = message.eventID.map(pinned.contains) ?? false
                     if let previous, previous.sender == message.sender,
                        message.date.timeIntervalSince(previous.date) < 300 {
                         message.showsHeader = false
                     }
                     previous = message
                     rows.append(TimelineRow(id: id, kind: .message(message)))
+                case .notice(let text)?:
+                    previous = nil
+                    // Pinning several messages in a row reads as one line: "pinned 3 messages".
+                    if let pin = PinNotice(text), let last = rows.last, case .notice(let lastText) = last.kind,
+                       let earlier = PinNotice(lastText), earlier.who == pin.who, earlier.verb == pin.verb {
+                        rows[rows.count - 1].kind = .notice(PinNotice(who: pin.who, verb: pin.verb,
+                                                                      count: earlier.count + pin.count).text)
+                    } else {
+                        rows.append(TimelineRow(id: id, kind: .notice(text)))
+                    }
                 case let other?:
                     previous = nil
                     rows.append(TimelineRow(id: id, kind: other))
@@ -338,7 +414,7 @@ final class RoomTimeline {
             rows.remove(at: marker)
         }
 
-        if threadRoot == nil {
+        if threadRoot == nil, !isPinnedList {
             for index in rows.indices {
                 guard case .message(var message) = rows[index].kind, var thread = message.thread,
                       let root = message.eventID, let latest = thread.latestDate else { continue }
@@ -355,7 +431,7 @@ final class RoomTimeline {
         let oldFirst = self.rows.first(where: \.isMessage)?.id
         let newFirst = rows.first(where: \.isMessage)?.id
         self.rows = rows
-        if threadRoot == nil { updateLatestReaction() }
+        if isLive { updateLatestReaction() }
         if let oldFirst, oldFirst != newFirst, rows.contains(where: { $0.id == oldFirst }) {
             prependAnchorID = oldFirst
             prependCount += 1
@@ -380,7 +456,7 @@ final class RoomTimeline {
         let limit = rows.count + 600
         for _ in 0..<60 {
             if let row = rows.first(where: { $0.eventID == eventID }) { return row.id }
-            guard hasMoreHistory, rows.count < limit else { return nil }
+            guard hasMoreHistory, rows.count < limit, !Task.isCancelled else { return nil }
             await loadOlder()
             // The loaded messages reach `rows` through the update stream, a moment later.
             try? await Task.sleep(for: .milliseconds(120))
@@ -407,6 +483,7 @@ final class RoomTimeline {
         for row in rows {
             if case .message(let message) = row.kind, profiles[message.sender] == nil {
                 profiles[message.sender] = (message.senderName, message.senderAvatarURL)
+                nameVersion += 1
             }
         }
 
@@ -457,6 +534,7 @@ final class RoomTimeline {
                 let avatar = try? await room.memberAvatarUrl(userId: userID)
                 guard let self else { return }
                 self.profiles[userID] = (name ?? userID, avatar ?? nil)
+                self.nameVersion += 1
                 self.rebuildRows()
             }
         }
@@ -481,6 +559,23 @@ final class RoomTimeline {
         }
     }
 
+    /// Focused timeline: loads the next newer messages. Returns true once the present is reached.
+    @discardableResult
+    func loadNewer() async -> Bool {
+        guard let timeline, focusedEvent != nil, hasMoreNewer, !isPaginatingForwards else { return !hasMoreNewer }
+        isPaginatingForwards = true
+        defer {
+            isPaginatingForwards = false
+            newerRequests += 1
+        }
+        do {
+            if try await timeline.paginateForwards(numEvents: 40) { hasMoreNewer = false }
+        } catch {
+            self.error = error.userMessage
+        }
+        return !hasMoreNewer
+    }
+
     /// Loads the room's members for mention suggestions, once.
     func loadMembers() async {
         guard !membersRequested else { return }
@@ -497,6 +592,7 @@ final class RoomTimeline {
                                               avatarURL: member.avatarUrl))
                 if profiles[member.userId] == nil, let name = member.displayName {
                     profiles[member.userId] = (name, member.avatarUrl)
+                    nameVersion += 1
                 }
             }
         }
@@ -517,7 +613,7 @@ final class RoomTimeline {
             }
             error = nil
             // Having answered, the user is caught up: nothing above is "new" any more.
-            if threadRoot == nil { try? await timeline.markAsRead(receiptType: .fullyRead) }
+            if isLive { try? await timeline.markAsRead(receiptType: .fullyRead) }
         } catch {
             self.error = error.userMessage
         }
@@ -659,6 +755,70 @@ final class RoomTimeline {
         try? await timeline?.redactEvent(eventOrTransactionId: itemID, reason: nil)
     }
 
+    /// Replaces a message's text, or a picture's or recording's caption, with `text`.
+    func edit(_ itemID: EventOrTransactionId, kind: MessageRow.EditKind, to text: String,
+              mentions: [ComposedMention]) async {
+        guard let timeline else { return }
+        let content: EditedContent
+        switch kind {
+        case .text:
+            content = .roomMessage(content: MentionComposer.content(for: text, mentions: mentions))
+        case .emote:
+            content = .roomMessage(content: messageEventContentFromMarkdownAsEmote(md: text))
+        case .caption:
+            let parts = MentionComposer.parts(for: text, mentions: mentions)
+            content = .mediaCaption(caption: parts.plain.isEmpty ? nil : parts.plain,
+                                    formattedCaption: parts.html.map { FormattedBody(format: .html, body: $0) },
+                                    mentions: parts.mentions)
+        }
+        do {
+            try await timeline.edit(eventOrTransactionId: itemID, newContent: content)
+            error = nil
+        } catch {
+            self.error = error.userMessage
+        }
+    }
+
+    /// Deletes a message for everyone. One that hasn't been sent yet is simply dropped.
+    func delete(_ itemID: EventOrTransactionId) async {
+        do {
+            try await timeline?.redactEvent(eventOrTransactionId: itemID, reason: nil)
+            error = nil
+        } catch {
+            self.error = error.userMessage
+        }
+    }
+
+    /// Pins or unpins a message. Shown at once; the room's own record catches up as it syncs.
+    func setPinned(_ pinned: Bool, eventID: String) async {
+        guard let timeline else { return }
+        let before = pinnedEventIDs
+        pinnedEventIDs.removeAll { $0 == eventID }
+        if pinned { pinnedEventIDs.append(eventID) }
+        rebuildRows()
+        do {
+            _ = pinned ? try await timeline.pinEvent(eventId: eventID) : try await timeline.unpinEvent(eventId: eventID)
+            error = nil
+        } catch {
+            pinnedEventIDs = before
+            rebuildRows()
+            self.error = error.userMessage
+        }
+    }
+
+    /// A message's content as it can be sent again elsewhere: without what it answered or
+    /// belonged to, and without its mentions, so the people it named aren't notified twice.
+    func forwardableContent(for itemID: EventOrTransactionId) -> RoomMessageEventContentWithoutRelation? {
+        for item in items {
+            guard let event = item.asEvent(), event.eventOrTransactionId == itemID,
+                  case .msgLike(let content) = event.content,
+                  case .message(let message) = content.kind else { continue }
+            return (try? contentWithoutRelationFromMessage(message: message))?
+                .withMentions(mentions: Mentions(userIds: [], room: false))
+        }
+        return nil
+    }
+
     func toggleReaction(_ key: String, on itemID: EventOrTransactionId) async {
         _ = try? await timeline?.toggleReaction(itemId: itemID, key: key)
     }
@@ -673,13 +833,14 @@ final class RoomTimeline {
     /// up to on arriving, and stays put while they are here; if they reached the newest message,
     /// move it there so it is gone when they come back.
     func leave() async {
-        guard threadRoot == nil, hasReadToEnd, let timeline else { return }
+        guard isLive, hasReadToEnd, let timeline else { return }
         hasReadToEnd = false
         try? await timeline.markAsRead(receiptType: .fullyRead)
     }
 
     func markAsRead() async {
-        guard let timeline else { return }
+        // A stretch of older messages isn't where the room has been read up to.
+        guard let timeline, focusedEvent == nil, !isPinnedList else { return }
         try? await timeline.markAsRead(receiptType: .read)
         hasReadToEnd = true
         guard threadRoot != nil else { return }
@@ -759,6 +920,7 @@ extension TimelineRow.Kind {
             date: Date(matrixTimestamp: event.timestamp),
             body: body,
             isEdited: isEdited,
+            isEditable: event.isEditable,
             reactions: event.reactions.map { reaction in
                 let latest = reaction.senders.max { $0.timestamp < $1.timestamp }
                 return .init(key: reaction.key,
@@ -866,10 +1028,109 @@ extension TimelineItemContent {
             case .roomAvatar: return "\(who) changed the room picture"
             case .roomCreate: return "\(who) created the room"
             case .roomEncryption: return "Encryption enabled"
+            case .roomPinnedEvents(let change):
+                switch change {
+                case .added: return "\(who) pinned a message"
+                case .removed: return "\(who) unpinned a message"
+                case .changed: return "\(who) changed the pinned messages"
+                }
             default: return nil
             }
         case .failedToParseMessageLike, .failedToParseState:
             return nil
         }
+    }
+}
+
+/// What this account may do to the messages in a room, from its power levels.
+struct TimelinePermissions: Equatable {
+    var canDeleteOwn = true
+    var canDeleteOthers = false
+    var canPin = false
+
+    init() {}
+
+    init(_ levels: RoomPowerLevels) {
+        canDeleteOwn = levels.canOwnUserRedactOwn()
+        canDeleteOthers = levels.canOwnUserRedactOther()
+        canPin = levels.canOwnUserPinUnpin()
+    }
+}
+
+extension MessageRow {
+    /// What editing a message changes: its text, or the caption under a picture or recording.
+    enum EditKind: Equatable {
+        case text
+        case emote
+        case caption
+    }
+
+    /// How this message can be edited, if at all.
+    var editKind: EditKind? {
+        guard isEditable, eventID != nil else { return nil }
+        switch body {
+        case .text: return .text
+        case .emote: return .emote
+        case .image(let image): return image.isSticker ? nil : .caption
+        case .audio: return .caption
+        default: return nil
+        }
+    }
+
+    /// The text an edit starts from.
+    var editableText: String {
+        switch body {
+        case .text(let text), .emote(let text): return text
+        case .image(let image): return image.caption ?? ""
+        case .audio(let audio): return audio.caption ?? ""
+        default: return ""
+        }
+    }
+
+    /// Whether this is something that can be sent on to another room.
+    var canForward: Bool {
+        guard eventID != nil else { return false }
+        switch body {
+        case .text, .emote, .audio, .attachment: return true
+        case .image(let image): return !image.isSticker
+        case .undecryptable, .redacted, .unsupported: return false
+        }
+    }
+}
+
+/// "Alice pinned a message", or several of them: "Alice pinned 3 messages".
+struct PinNotice {
+    let who: String
+    /// "pinned" or "unpinned".
+    let verb: String
+    var count = 1
+
+    init(who: String, verb: String, count: Int) {
+        self.who = who
+        self.verb = verb
+        self.count = count
+    }
+
+    /// Reads a notice written by this struct (or by `TimelineItemContent.preview`).
+    init?(_ text: String) {
+        for verb in ["unpinned", "pinned"] {
+            guard let range = text.range(of: " \(verb) ") else { continue }
+            let rest = text[range.upperBound...]
+            if rest == "a message" {
+                count = 1
+            } else if rest.hasSuffix(" messages"), let number = Int(rest.dropLast(" messages".count)) {
+                count = number
+            } else {
+                return nil
+            }
+            who = String(text[..<range.lowerBound])
+            self.verb = verb
+            return
+        }
+        return nil
+    }
+
+    var text: String {
+        "\(who) \(verb) " + (count == 1 ? "a message" : "\(count) messages")
     }
 }

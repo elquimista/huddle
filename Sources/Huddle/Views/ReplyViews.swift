@@ -10,6 +10,12 @@ struct MessageActions {
     var showOriginal: (ReplyPreview) -> Void
     /// Opens an image at full size, with what the timeline is showing of it to start from.
     var openImage: (ImageAttachment, NSImage?) -> Void
+    /// Starts editing a message in the composer.
+    var edit: (MessageRow) -> Void
+    /// Asks whether to delete a message, and does.
+    var delete: (MessageRow) -> Void
+    /// Offers to send a message on to other rooms.
+    var forward: (MessageRow) -> Void
 }
 
 /// The message being answered, shown above a reply: a bar in the sender's colour, their name,
@@ -93,8 +99,43 @@ struct ReplyComposerBar: View {
     }
 }
 
+/// Above the composer while editing a message: what it said before, and a way out.
+struct EditComposerBar: View {
+    let original: ReplyPreview
+    let isCaption: Bool
+    let cancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Capsule()
+                .fill(Color.accentColor)
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(isCaption ? "Editing caption" : "Editing message")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                ReplySnippet(reply: original)
+            }
+            Spacer(minLength: 8)
+            Button(action: cancel) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .background(.quaternary, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Cancel editing (Esc)")
+            .accessibilityLabel("Cancel editing")
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// One line standing for a message: its text, or what kind of thing it is.
-private struct ReplySnippet: View {
+struct ReplySnippet: View {
     let reply: ReplyPreview
 
     var body: some View {

@@ -26,6 +26,30 @@ enum MessageFormatter {
         return result
     }
 
+    /// `render`, remembered: a message is drawn again whenever anything about its row changes
+    /// (a reaction, a read receipt, the pointer passing over it), and its text rarely has.
+    /// - Parameter names: changes whenever the names `name` knows change, so text that named
+    ///   someone by their ID is drawn again once their name is known.
+    static func renderCached(text: String, html: String?, mentionsRoom: Bool, ownUserID: String,
+                             names: Int, name: @escaping (String) -> String?) -> AttributedString {
+        let key = "\(names)\u{1}\(ownUserID)\u{1}\(mentionsRoom)\u{1}\(html ?? "")\u{1}\(text)" as NSString
+        if let cached = renderCache.object(forKey: key) { return cached.value }
+        let rendered = render(text: text, html: html, mentionsRoom: mentionsRoom, ownUserID: ownUserID, name: name)
+        renderCache.setObject(RenderedText(rendered), forKey: key)
+        return rendered
+    }
+
+    private final class RenderedText {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    private static let renderCache: NSCache<NSString, RenderedText> = {
+        let cache = NSCache<NSString, RenderedText>()
+        cache.countLimit = 3000
+        return cache
+    }()
+
     /// The same message as one line of plain text, for room list previews and notifications:
     /// mentions read "@Name" and formatting is dropped.
     static func plainText(text: String, formatted: FormattedBody?, name: @escaping (String) -> String? = { _ in nil }) -> String {
@@ -106,8 +130,11 @@ enum MessageFormatter {
         }
     }
 
+    /// Made once: building a detector is costly, and every message on screen goes through one.
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     private static func linkBareURLs(in text: inout AttributedString) {
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return }
+        guard let detector = linkDetector else { return }
         let plain = String(text.characters)
         for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
             guard let url = match.url,

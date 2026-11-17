@@ -140,6 +140,12 @@ final class TimelineDiffListener: TimelineListener, @unchecked Sendable {
     func onUpdate(diff: [TimelineDiff]) { handler(diff) }
 }
 
+final class RoomInfoObserver: RoomInfoListener, @unchecked Sendable {
+    private let handler: (RoomInfo) -> Void
+    init(_ handler: @escaping (RoomInfo) -> Void) { self.handler = handler }
+    func call(roomInfo: RoomInfo) { handler(roomInfo) }
+}
+
 final class SyncStateListener: SyncServiceStateObserver, @unchecked Sendable {
     private let handler: (SyncServiceState) -> Void
     init(_ handler: @escaping (SyncServiceState) -> Void) { self.handler = handler }

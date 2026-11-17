@@ -41,7 +41,11 @@ final class AccountSession: Identifiable {
     private(set) var needsReauth = false
     private(set) var startError: String?
     var selectedRoomID: String? {
-        didSet { if selectedRoomID != oldValue { updatePresenceWatch() } }
+        didSet {
+            guard selectedRoomID != oldValue else { return }
+            PerfLog.began("room selected")
+            updatePresenceWatch()
+        }
     }
     /// Who is around, for the direct chats on screen.
     let presence: PresenceTracker
@@ -183,6 +187,8 @@ final class AccountSession: Identifiable {
         handles.removeAll()
         timelines.values.forEach { $0.stop() }
         timelines.removeAll()
+        bannerPinTimelines.values.forEach { $0.stop() }
+        bannerPinTimelines.removeAll()
         subscriptionTask?.cancel()
         presence.stop()
         ownPresence.stop()
@@ -313,6 +319,48 @@ final class AccountSession: Identifiable {
         return thread
     }
 
+    /// A fresh timeline around one message, for showing it without loading the whole room's
+    /// history up to it. The caller owns it and stops it when done.
+    func focusedTimeline(roomID: String, eventID: String) -> RoomTimeline? {
+        room(id: roomID).map { RoomTimeline(room: $0, focusedOn: eventID) }
+    }
+
+    /// A fresh timeline of a room's pinned messages. The caller owns it and stops it when done.
+    func pinnedTimeline(roomID: String) -> RoomTimeline? {
+        room(id: roomID).map { RoomTimeline(room: $0, isPinnedList: true) }
+    }
+
+    /// The pinned messages for a room's banner, kept as long as the room's own timeline is
+    /// kept warm: coming back to the room, the banner is there from the first frame instead of
+    /// arriving a moment later and pushing the conversation down.
+    func bannerPins(for roomID: String) -> RoomTimeline? {
+        if let pins = bannerPinTimelines[roomID] { return pins }
+        guard let pins = pinnedTimeline(roomID: roomID) else { return nil }
+        bannerPinTimelines[roomID] = pins
+        return pins
+    }
+
+    /// The room has no pinned messages any more.
+    func dropBannerPins(for roomID: String) {
+        bannerPinTimelines.removeValue(forKey: roomID)?.stop()
+    }
+
+    @ObservationIgnored private var bannerPinTimelines: [String: RoomTimeline] = [:]
+
+    /// Sends a message's content, as it is, to another room.
+    func forward(_ content: RoomMessageEventContentWithoutRelation, to roomID: String) async throws {
+        guard let room = room(id: roomID) else { throw ForwardError.roomUnavailable }
+        // The room's send queue takes it from here, as for anything typed in the room itself.
+        room.enableSendQueue(enable: true)
+        let timeline = try await room.timeline()
+        _ = try await timeline.send(msg: content)
+    }
+
+    enum ForwardError: LocalizedError {
+        case roomUnavailable
+        var errorDescription: String? { "That room isn't available." }
+    }
+
     func threadList(roomID: String) -> RoomThreadList? {
         room(id: roomID).map { RoomThreadList(room: $0) }
     }
@@ -380,12 +428,28 @@ final class AccountSession: Identifiable {
         }
     }
 
+    /// Called when a room is left for another. A room whose loaded history has grown long (from
+    /// scrolling back through it) is let go rather than kept warm: every message loaded is laid
+    /// out each time the room is shown, so coming back to it would be slow. Opening it again
+    /// starts from the local cache, which is quick, and earlier messages load as before.
+    func roomWasLeft(_ roomID: String) {
+        guard let timeline = timelines[roomID], timeline.rows.count > Self.longestWarmTimeline else { return }
+        timelines.removeValue(forKey: roomID)
+        dropBannerPins(for: roomID)
+        timelineOrder.removeAll { $0 == roomID }
+        timeline.stop()
+        updateSubscriptions()
+    }
+
+    private static let longestWarmTimeline = 150
+
     private func touch(_ roomID: String) {
         timelineOrder.removeAll { $0 == roomID }
         timelineOrder.append(roomID)
         while timelineOrder.count > Self.maxCachedTimelines {
             let evicted = timelineOrder.removeFirst()
             timelines.removeValue(forKey: evicted)?.stop()
+            dropBannerPins(for: evicted)
             // Still on screen, it needs a probe again; and its subscription may lapse.
             updateSubscriptions()
         }
@@ -398,6 +462,7 @@ final class AccountSession: Identifiable {
     func leave(roomID: String) async throws {
         try await room(id: roomID)?.leave()
         timelines.removeValue(forKey: roomID)?.stop()
+        dropBannerPins(for: roomID)
         if selectedRoomID == roomID { selectedRoomID = nil }
     }
 

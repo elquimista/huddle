@@ -5,6 +5,7 @@ struct ThreadPanel: View {
     enum Content: Hashable {
         case thread(String)
         case threadList
+        case pinned
     }
 
     let account: AccountSession
@@ -72,6 +73,8 @@ struct ThreadPanel: View {
                 cameFromList = true
                 show(.thread(root))
             }
+        case .pinned:
+            PinnedListView(account: account, roomID: roomID)
         }
     }
 
@@ -94,7 +97,19 @@ struct ThreadPanel: View {
             }
             return
         }
-        let forward = new != .threadList
+        // Into a thread goes deeper, from the right; out of one comes back, from the left.
+        // Between the two lists, which sit side by side, it is a quick fade.
+        let forward: Bool
+        switch (visible, new) {
+        case (_, .thread): forward = true
+        case (.thread, _): forward = false
+        default:
+            withAnimation(.easeOut(duration: 0.18)) {
+                pages = [new]
+                showsLast = false
+            }
+            return
+        }
         pages = forward ? [visible, new] : [new, visible]
         showsLast = !forward
         let count = moveCount
@@ -109,6 +124,14 @@ struct ThreadPanel: View {
                 pages = [new]
                 showsLast = false
             }
+        }
+    }
+
+    private var title: String {
+        switch content {
+        case .thread: "Thread"
+        case .threadList: "Threads"
+        case .pinned: "Pinned Messages"
         }
     }
 
@@ -129,7 +152,7 @@ struct ThreadPanel: View {
                 .transition(.opacity)
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(content == .threadList ? "Threads" : "Thread")
+                Text(title)
                     .font(.headline)
                     // Swapped outright as it glides aside for the back button: a crossfade
                     // would show both words, one shifted against the other.

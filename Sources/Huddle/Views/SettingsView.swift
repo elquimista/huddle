@@ -30,6 +30,9 @@ extension EnvironmentValues {
     /// A layout that overrides the user's choice, for places that need one (threads, whose
     /// narrow panel suits only the modern layout).
     @Entry var forcedMessageLayout: MessageLayout? = nil
+    /// The layout a timeline's messages are drawn in, read once by the timeline rather than by
+    /// every message, each of which would otherwise keep its own watch on the setting.
+    @Entry var messageLayout: MessageLayout = .modern
     /// How wide a message's content (text, pictures, players) can be where it is shown.
     /// Pictures and players shrink to fit it instead of spilling out of a narrow column.
     @Entry var messageContentWidth: CGFloat = .infinity
@@ -37,6 +40,9 @@ extension EnvironmentValues {
     /// itself won't do: its content sizes itself to the measurement, and a picture that is too
     /// wide keeps the timeline too wide.
     @Entry var timelineWidth: CGFloat = 0
+    /// The account whose room is on screen, for what reaches beyond one timeline: forwarding a
+    /// message to another of its rooms, or the room's pinned messages.
+    @Entry var accountSession: AccountSession? = nil
 }
 
 struct SettingsView: View {

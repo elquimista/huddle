@@ -27,6 +27,10 @@ struct RoomView: View {
     /// before the panel moves, and not animated, so its messages re-wrap once, at the start,
     /// rather than at every width the conversation passes through as the panel slides.
     @State private var roomForPanel = false
+    /// A view around an older message, standing in for the live timeline while it is open.
+    @State private var focused: RoomTimeline?
+    /// Which pinned message the banner shows.
+    @State private var pinIndex = 0
     /// Changed when the panel comes back with something else on it before it had quite gone,
     /// so that it starts afresh rather than moving over from what it showed.
     @State private var panelGeneration = 0
@@ -44,9 +48,16 @@ struct RoomView: View {
                     let layout = PanelLayout(width: geometry.size.width, preferred: CGFloat(preferredPanelWidth))
                     ZStack(alignment: .trailing) {
                         HStack(spacing: 0) {
-                            TimelineView(timeline: timeline, media: account.media) { root in
-                                panel = .thread(root)
-                            }
+                            TimelineView(timeline: focused ?? timeline, media: account.media,
+                                         onOpenThread: { root in panel = .thread(root) },
+                                         room: RoomContext(live: timeline, pins: bannerPins(timeline), pinIndex: $pinIndex,
+                                                           showPinned: { panel = .pinned },
+                                                           focus: { focus(on: $0) },
+                                                           returnToLive: returnToLive))
+                            // A fresh view for each timeline it shows: where it is scrolled to
+                            // belongs to that timeline.
+                            .id(focused.map(ObjectIdentifier.init))
+                            .transition(.opacity)
                             .environment(\.timelineWidth, roomForPanel && layout.sideBySide
                                          ? layout.width - layout.panelWidth : layout.width)
                             // Takes what is left, and never more: overflowing, it would be cut off.
@@ -73,6 +84,9 @@ struct RoomView: View {
                     isPanelOut = panel != nil
                     roomForPanel = panel != nil
                 }
+                .onChange(of: timeline.pinnedEventIDs.isEmpty) { _, none in
+                    if none { account.dropBannerPins(for: roomID) }
+                }
                 .onChange(of: panel) { _, new in panelChanged(to: new) }
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
@@ -87,6 +101,12 @@ struct RoomView: View {
             } else {
                 ContentUnavailableView("Room Unavailable", systemImage: "questionmark.bubble")
             }
+        }
+        .environment(\.accountSession, account)
+        .onDisappear {
+            focused?.stop()
+            focused = nil
+            account.roomWasLeft(roomID)
         }
         .navigationTitle(title)
         // In a direct chat, whether the other person is around.
@@ -148,6 +168,26 @@ struct RoomView: View {
                 }
             }
         }
+    }
+
+    /// The room's pinned messages for the banner, while it has any. Kept by the account with
+    /// the room's timeline, so they are ready the moment the room is shown again.
+    private func bannerPins(_ timeline: RoomTimeline) -> RoomTimeline? {
+        timeline.pinnedEventIDs.isEmpty ? nil : account.bannerPins(for: roomID)
+    }
+
+    /// Shows a message far back in the room in a view of its own, around it.
+    private func focus(on eventID: String) {
+        guard let timeline = account.focusedTimeline(roomID: roomID, eventID: eventID) else { return }
+        let previous = focused
+        withAnimation(.easeOut(duration: 0.15)) { focused = timeline }
+        previous?.stop()
+    }
+
+    private func returnToLive() {
+        let previous = focused
+        withAnimation(.easeOut(duration: 0.15)) { focused = nil }
+        previous?.stop()
     }
 
     private func threadPanel(_ content: ThreadPanel.Content, width: CGFloat) -> some View {

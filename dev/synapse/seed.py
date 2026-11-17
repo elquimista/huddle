@@ -95,6 +95,19 @@ def find_plain_message(token, room, fragment):
             return event["event_id"]
     sys.exit(f"No recent message containing {fragment!r}")
 
+def find_exact_message(token, room, text):
+    """Event ID of the newest message whose text is exactly `text`, however far back it is."""
+    path = f"/_matrix/client/v3/rooms/{room}/messages?dir=b&limit=100"
+    page = call("GET", path, token)
+    while page.get("chunk"):
+        for event in page["chunk"]:
+            if event["type"] == "m.room.message" and event["content"].get("body") == text:
+                return event["event_id"]
+        if "end" not in page:
+            break
+        page = call("GET", path + "&from=" + urllib.parse.quote(page["end"]), token)
+    sys.exit(f"No message reading {text!r}")
+
 def seed_threads():
     alice, bob, carol = login("alice"), login("bob"), login("carol")
     general = find_room(alice, "General")
@@ -212,6 +225,21 @@ def main():
             event = call("GET", f"/_matrix/client/v3/rooms/{room}/messages?dir=b&limit=1", token)["chunk"][0]["event_id"]
         call("POST", f"/_matrix/client/v3/rooms/{room}/receipt/m.read/{event}", token, {})
         print(event)
+        return
+    if command == "pin":      # seed.py pin <user> <room> <exact text>...: pins those messages (old ones too)
+        user, room_name, texts = sys.argv[2], sys.argv[3], sys.argv[4:]
+        token = login(user)
+        room = find_room(token, room_name)
+        try:
+            pinned = call("GET", f"/_matrix/client/v3/rooms/{room}/state/m.room.pinned_events", token)["pinned"]
+        except urllib.error.HTTPError:
+            pinned = []
+        for text in texts:
+            event = find_exact_message(token, room, text)
+            if event not in pinned:
+                pinned.append(event)
+        call("PUT", f"/_matrix/client/v3/rooms/{room}/state/m.room.pinned_events", token, {"pinned": pinned})
+        print("\n".join(pinned))
         return
     if command == "threads":  # seed.py threads: three threads in General
         seed_threads()

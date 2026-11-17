@@ -36,6 +36,46 @@ enum MentionComposer {
             .withMentions(mentions: parts.mentions ?? Mentions(userIds: [], room: false))
     }
 
+    /// A sent message as it would have been typed: each mention back as "@Name", with the
+    /// person it names, so that editing the message keeps its mentions.
+    static func draft(body: String, html: String?, mentionsRoom: Bool) -> (text: String, mentions: [ComposedMention]) {
+        var text = body
+        var mentions: [ComposedMention] = []
+        if let html {
+            let pattern = #/<a\s+href="([^"]*)"\s*>([^<]*)<\/a>/#
+            var cursor = text.startIndex
+            for match in html.matches(of: pattern) {
+                let href = String(match.output.1).removingPercentEncoding ?? String(match.output.1)
+                guard let range = href.range(of: "matrix.to/#/@") else { continue }
+                let userID = String(href[href.index(before: range.upperBound)...])
+                    .split(separator: "?").first.map(String.init) ?? ""
+                let name = decodeEntities(String(match.output.2))
+                guard !userID.isEmpty, !name.isEmpty,
+                      let found = text.range(of: name, range: cursor..<text.endIndex) else { continue }
+                let label = name.hasPrefix("@") ? name : "@" + name
+                let alreadyAt = found.lowerBound > text.startIndex && text[text.index(before: found.lowerBound)] == "@"
+                if alreadyAt || name.hasPrefix("@") {
+                    cursor = found.upperBound
+                } else {
+                    text.replaceSubrange(found, with: label)
+                    cursor = text.index(found.lowerBound, offsetBy: label.count)
+                }
+                let mention = ComposedMention(label: label, userID: userID)
+                if !mentions.contains(mention) { mentions.append(mention) }
+            }
+        }
+        if mentionsRoom, text.contains("@room") { mentions.append(ComposedMention(label: "@room", userID: nil)) }
+        return (text, mentions)
+    }
+
+    private static func decodeEntities(_ text: String) -> String {
+        text.replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+
     /// The same text as the pieces an attachment's caption needs: plain text, HTML if any
     /// formatting or mention calls for it, and who is mentioned.
     static func parts(for text: String, mentions: [ComposedMention]) -> (plain: String, html: String?, mentions: Mentions?) {

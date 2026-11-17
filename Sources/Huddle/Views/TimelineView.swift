@@ -8,6 +8,25 @@ struct TimelineView: View {
     var placeholder = "Message"
     /// Opens a message's thread. Nil inside a thread, where there is nothing further to open.
     var onOpenThread: ((String) -> Void)?
+    /// The room around the conversation, for the room's own timeline (live, or a stretch around
+    /// an older message); nil in a thread.
+    var room: RoomContext?
+
+    init(timeline: RoomTimeline, media: MediaLoader, placeholder: String = "Message",
+         onOpenThread: ((String) -> Void)? = nil, room: RoomContext? = nil) {
+        self.timeline = timeline
+        self.media = media
+        self.placeholder = placeholder
+        self.onOpenThread = onOpenThread
+        self.room = room
+        // A view around an older message isn't at the newest one, from the very start.
+        _followsNewest = State(initialValue: timeline.focusedEvent == nil)
+        // Only the newest rows of a long timeline are drawn, from the very first frame.
+        let rows = timeline.rows
+        if timeline.focusedEvent == nil, rows.count > Self.rowsAtFirst {
+            _firstShownID = State(initialValue: rows[rows.count - Self.rowsAtFirst].id)
+        }
+    }
     @State private var draft = ""
     /// The message being replied to, while writing a reply.
     @State private var replyTarget: ReplyPreview?
@@ -33,6 +52,31 @@ struct TimelineView: View {
     @State private var suggestionIndex = 0
     /// A mention query the user closed with Escape; stays closed until they type on.
     @State private var dismissedQuery: String?
+    /// The message being edited in the composer, while one is.
+    @State private var editTarget: EditTarget?
+    /// What was in the composer when editing began, put back when it ends.
+    @State private var stashedDraft = StashedDraft()
+    /// Whether the newest message was being followed when editing began, to go back to it after.
+    @State private var followedBeforeEdit = false
+    /// Set when editing ends to bring the conversation back to its newest message.
+    @State private var returnsToNewest = false
+    /// The message the user has asked to delete, while they confirm.
+    @State private var pendingDeletion: MessageRow?
+    /// The message being forwarded, while the room picker is open.
+    @State private var forwarding: ForwardRequest?
+    /// Whether the pinned banner slides in or out when it comes or goes: not while the room is
+    /// still opening.
+    @State private var bannerAnimates = false
+    /// Focused timeline: whether the message it was opened for has been shown.
+    @State private var hasShownFocus = false
+    /// Focused timeline: until when that message stays in the middle as earlier messages load
+    /// above it, unless the reader scrolls first.
+    @State private var centersFocusUntil: Date?
+    /// Paging back through a thread for a message, while it goes on.
+    @State private var searchTask: Task<Void, Never>?
+    @Environment(\.accountSession) private var account
+    @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
+    @Environment(\.forcedMessageLayout) private var forcedLayout
     @FocusState private var composerFocused: Bool
 
     /// Whether the newest message is on screen.
@@ -59,6 +103,43 @@ struct TimelineView: View {
     private struct HistoryTrigger: Equatable {
         let edgeVisible: Bool
         let finishedRequests: Int
+        var shown = 0
+    }
+
+    /// The first row drawn, when the newest ones are drawn and not all of those loaded. A room
+    /// opens with its newest few dozen messages drawn, however many are loaded, since every
+    /// row drawn adds to the time it takes to show the room; scrolling up draws more.
+    @State private var firstShownID: String?
+    private static let rowsAtFirst = 30
+
+    /// The rows drawn: from `firstShownID` on, or all of them.
+    private var shownRows: ArraySlice<TimelineRow> {
+        guard let firstShownID, let start = timeline.rows.firstIndex(where: { $0.id == firstShownID }) else {
+            return timeline.rows[...]
+        }
+        return timeline.rows[start...]
+    }
+
+    /// Whether earlier rows are loaded but not drawn.
+    private var hasUndrawnRows: Bool { shownRows.startIndex > timeline.rows.startIndex }
+
+    /// Draws the next few dozen earlier rows, keeping the message being read where it is.
+    private func drawEarlierRows(_ proxy: ScrollViewProxy) {
+        let start = shownRows.startIndex
+        guard start > timeline.rows.startIndex else { return }
+        let newStart = max(timeline.rows.startIndex, start - Self.rowsAtFirst)
+        firstShownID = newStart == timeline.rows.startIndex ? nil : timeline.rows[newStart].id
+        holdReadingPlace(proxy, rowsKeepTheirSize: true)
+    }
+
+    /// Makes sure a row is drawn, drawing it and a few before it if it was among the undrawn.
+    /// Returns whether anything changed, in which case it is on screen only after the next layout.
+    private func drawRow(_ rowID: String) -> Bool {
+        guard let index = timeline.rows.firstIndex(where: { $0.id == rowID }),
+              index < shownRows.startIndex else { return false }
+        let newStart = max(timeline.rows.startIndex, index - 10)
+        firstShownID = newStart == timeline.rows.startIndex ? nil : timeline.rows[newStart].id
+        return true
     }
 
     var body: some View {
@@ -68,22 +149,26 @@ struct TimelineView: View {
                 // drawn, so scrolling to the newest message lands in the wrong place, gets
                 // corrected a frame later (flicker), and sometimes leaves the view blank.
                 VStack(alignment: .leading, spacing: 0) {
-                    if timeline.hasMoreHistory, !timeline.isLoading {
+                    if timeline.hasMoreHistory || hasUndrawnRows, !timeline.isLoading {
                         ProgressView()
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .padding(12)
                             .onGeometryChange(for: Bool.self, of: Self.isOnScreen) { historyEdgeVisible = $0 }
                     }
-                    ForEach(timeline.rows) { row in
+                    ForEach(shownRows) { row in
                         TimelineRowView(row: row, timeline: timeline, media: media,
                                         actions: MessageActions(openThread: onOpenThread,
                                                                 reply: { startReply(to: $0) },
                                                                 showOriginal: { showOriginal($0, proxy) },
                                                                 openImage: { image, shown in
                                                                     ImageViewerState.shared.open(image, media: media, placeholder: shown)
-                                                                }),
+                                                                },
+                                                                edit: { startEdit($0) },
+                                                                delete: { askToDelete($0) },
+                                                                forward: { startForward($0) }),
                                         isHighlighted: row.id == highlightedRow,
+                                        editingItem: editTarget?.itemID,
                                         searchingFor: searchingFor,
                                         receipts: receipts)
                             .id(row.id)
@@ -110,7 +195,7 @@ struct TimelineView: View {
                                 // rows above it shrinking can bring the end into view for a
                                 // moment, but the reader hasn't gone there. (Once it has
                                 // settled, `messagesWillRewrap` follows again if it is still in view.)
-                                if place.heldRow == nil { followsNewest = true }
+                                if place.heldRow == nil, timeline.focusedEvent == nil { followsNewest = true }
                             } else if input.isRecent {
                                 // The user scrolled away.
                                 followsNewest = false
@@ -124,6 +209,7 @@ struct TimelineView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
+                .environment(\.messageLayout, forcedLayout ?? chosenLayout)
                 // Laid out at the width the timeline is heading for, not at each width it passes
                 // through on the way: as the thread panel opens or closes, the messages re-wrap
                 // once, at the start, instead of again and again as the conversation narrows,
@@ -142,14 +228,87 @@ struct TimelineView: View {
             }
             // A room opens at its newest message. A thread starts at its root message, so a short
             // one sits under the header; a long one is then scrolled to its newest reply.
-            .defaultScrollAnchor(timeline.threadRoot == nil ? .bottom : .top)
+            .defaultScrollAnchor(timeline.threadRoot == nil && timeline.focusedEvent == nil ? .bottom : .top)
             .modifier(NewestMessageHold(isOn: followsNewest))
+            .safeAreaInset(edge: .top, spacing: 0) {
+                pinnedBanner(proxy)
+                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
+                        let changed = height != place.topInset
+                        place.topInset = height
+                        // The banner arriving (the room's pins load a moment after it opens)
+                        // makes the view shorter: back to the very end, once it has settled.
+                        guard changed, followsNewest else { return }
+                        for delay in [0.0, 0.3] {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                if followsNewest { jump(proxy, to: Self.bottomID, anchor: .bottom) }
+                            }
+                        }
+                    }
+            }
+            // Slides in when a message is pinned while the room is open; just there when the room
+            // opens with pins already.
+            .animation(bannerAnimates ? .snappy(duration: 0.25) : nil, value: pinnedMessages.isEmpty)
+            // The message being edited stays in sight: Up arrow can reach one scrolled away, and
+            // the editing bar, as the composer grows, can push one at the edge out of view.
+            .onChange(of: editTarget?.itemID) { _, itemID in
+                guard let itemID else { return }
+                // Once the composer has grown.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    guard editTarget?.itemID == itemID,
+                          let row = timeline.rows.first(where: { $0.message?.itemID == itemID }),
+                          !place.isFullyVisible(row.id) else { return }
+                    if row.id == timeline.rows.last(where: \.isMessage)?.id {
+                        // The newest message: the end of the conversation shows it.
+                        scrollToBottom(proxy)
+                    } else {
+                        followsNewest = false
+                        withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo(row.id, anchor: .bottom) }
+                    }
+                }
+            }
+            // Done editing, having started at the newest message: back there, once the composer
+            // has shrunk again.
+            .onChange(of: returnsToNewest) { _, returns in
+                guard returns else { return }
+                returnsToNewest = false
+                scrollToBottom(proxy)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    if followsNewest { jump(proxy, to: Self.bottomID, anchor: .bottom) }
+                }
+            }
+            // Asked for from elsewhere (the pinned messages in the side panel): through the room's
+            // live timeline, so it reaches whichever view of the room is on screen.
+            // Also when this view has only just appeared, sent back here to show one.
+            .onChange(of: (room?.live ?? timeline).requestedJump, initial: true) { _, eventID in
+                guard let eventID else { return }
+                (room?.live ?? timeline).requestedJump = nil
+                // After the view has settled on its newest message.
+                DispatchQueue.main.async { jump(to: eventID, proxy) }
+            }
             .onChange(of: timeline.rows.last?.id) { previousLast, _ in
                 // The first content, or a new message while following the newest.
+                guard timeline.focusedEvent == nil else { return }
                 if previousLast == nil || followsNewest { scrollToBottom(proxy) }
             }
+            // A view around an older message opens on that message, lit up.
+            .onChange(of: timeline.rows.count, initial: true) {
+                guard let focus = timeline.focusedEvent, !hasShownFocus,
+                      let row = timeline.rows.first(where: { $0.eventID == focus }) else { return }
+                hasShownFocus = true
+                centersFocusUntil = Date().addingTimeInterval(2)
+                DispatchQueue.main.async { show(row.id, proxy, animated: false) }
+            }
+            .task {
+                try? await Task.sleep(for: .seconds(1))
+                bannerAnimates = true
+            }
             .onAppear {
-                if !timeline.rows.isEmpty { scrollToBottom(proxy) }
+                if timeline.threadRoot == nil { PerfLog.markDrawn("room on screen, \(shownRows.count) of \(timeline.rows.count) rows drawn") }
+                if timeline.focusedEvent != nil {
+                    followsNewest = false
+                } else if !timeline.rows.isEmpty {
+                    scrollToBottom(proxy)
+                }
             }
             .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.viewport = $0 }
             .onChange(of: messagesWidth) { old, new in
@@ -157,19 +316,49 @@ struct TimelineView: View {
             }
             .onChange(of: timeline.prependCount) {
                 // Older messages were added above. While following the newest message, stay
-                // there; otherwise stay on the message being read.
+                // there; otherwise stay on the message being read, wherever it is in the view.
                 if followsNewest {
                     scrollToBottom(proxy)
-                } else if let anchor = timeline.prependAnchorID {
-                    proxy.scrollTo(anchor, anchor: .top)
+                } else if let until = centersFocusUntil, Date() < until, !input.isRecent,
+                          let focus = timeline.focusedEvent,
+                          let row = timeline.rows.first(where: { $0.eventID == focus }) {
+                    // Still settling on the message it was opened for: keep that in the middle.
+                    DispatchQueue.main.async { jump(proxy, to: row.id, anchor: .center) }
+                } else {
+                    holdReadingPlace(proxy, rowsKeepTheirSize: true)
                 }
             }
             // Fetches history while its top edge is on screen, again after each request finishes.
-            .task(id: HistoryTrigger(edgeVisible: historyEdgeVisible, finishedRequests: timeline.historyRequests)) {
-                if historyEdgeVisible, timeline.hasMoreHistory { await timeline.loadOlder() }
+            .task(id: HistoryTrigger(edgeVisible: historyEdgeVisible, finishedRequests: timeline.historyRequests,
+                                     shown: shownRows.count)) {
+                guard historyEdgeVisible else { return }
+                if hasUndrawnRows {
+                    // Already loaded: drawn at once, no need to ask the server.
+                    drawEarlierRows(proxy)
+                } else if timeline.hasMoreHistory {
+                    await timeline.loadOlder()
+                }
+            }
+            // A view around an older message fills in newer ones as its end comes into sight.
+            .task(id: HistoryTrigger(edgeVisible: isAtBottom, finishedRequests: timeline.newerRequests)) {
+                if timeline.focusedEvent != nil, isAtBottom, timeline.hasMoreNewer { await timeline.loadNewer() }
             }
             .overlay(alignment: .bottomTrailing) {
-                if !isAtBottom, !followsNewest, !timeline.rows.isEmpty {
+                if timeline.focusedEvent != nil, let room {
+                    // Looking at an older stretch of the room: the way back to now.
+                    Button(action: room.returnToLive) {
+                        Label("Jump to Latest", systemImage: "arrow.down")
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(.regularMaterial, in: Capsule())
+                            .overlay { Capsule().strokeBorder(.separator) }
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(12)
+                    .help("Back to the newest messages")
+                } else if !isAtBottom, !followsNewest, !timeline.rows.isEmpty {
                     Button {
                         scrollToBottom(proxy)
                     } label: {
@@ -187,7 +376,10 @@ struct TimelineView: View {
             .overlay {
                 if timeline.isLoading { ProgressView() }
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) { composer(proxy) }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                composer(proxy)
+                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.bottomInset = $0 }
+            }
         }
         // Runs when a new message arrives and when the newest one scrolls into view.
         .task(id: ReadTrigger(lastRow: timeline.rows.last?.id, isAtBottom: isAtBottom, appIsActive: appIsActive)) {
@@ -222,6 +414,22 @@ struct TimelineView: View {
             }
         }
         .onChange(of: composerFocused, initial: true) { pasteInterceptor.isActive = composerFocused }
+        .alert(pendingDeletion?.isOwn == false ? "Remove this message?" : "Delete this message?",
+               isPresented: Binding(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }),
+               presenting: pendingDeletion) { message in
+            Button(message.isOwn ? "Delete" : "Remove", role: .destructive) {
+                if editTarget?.itemID == message.itemID { finishEdit() }
+                Task { await timeline.delete(message.itemID) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("It will be removed for everyone in the room. This can't be undone.")
+        }
+        .sheet(item: $forwarding) { request in
+            if let account {
+                ForwardSheet(account: account, request: request)
+            }
+        }
         .background { WindowReader { typeToCompose.window = $0 } }
         // Images dragged anywhere over the conversation land in the composer.
         .onDrop(of: ImageDrop.types, isTargeted: $isDropTarget) { providers in
@@ -233,6 +441,7 @@ struct TimelineView: View {
         }
         .animation(.easeOut(duration: 0.12), value: isDropTarget)
         .onDisappear {
+            searchTask?.cancel()
             input.stop()
             pasteInterceptor.stop()
             typeToCompose.stop()
@@ -250,8 +459,9 @@ struct TimelineView: View {
 
     /// In a thread, the root message's row: replies are set off below it.
     private var threadRootRowID: String? {
-        guard timeline.threadRoot != nil else { return nil }
-        return timeline.rows.first(where: \.isMessage)?.id
+        // The root itself, not whichever message loaded first: replies can arrive before it.
+        guard let root = timeline.threadRoot else { return nil }
+        return timeline.rows.first(where: { $0.eventID == root })?.id
     }
 
     private var replyCount: Int {
@@ -295,27 +505,46 @@ struct TimelineView: View {
             }
             return
         }
-        // Taken now, before the new layout: the rows' places are still the ones the reader sees.
+        holdReadingPlace(proxy)
+    }
+
+    /// Keeps the message in the middle of the view where it is through a change to the rows
+    /// around it. Called before the change is laid out, while the rows' places are still the
+    /// ones the reader sees.
+    /// - Parameter rowsKeepTheirSize: true when rows are only being added above (history, or
+    ///   rows drawn), so the held one is the same height after: it is put back in that same
+    ///   update, before anything is drawn. Otherwise (the text re-wrapping) once laid out anew.
+    private func holdReadingPlace(_ proxy: ScrollViewProxy, rowsKeepTheirSize: Bool = false) {
         guard let middle = place.middleRow(among: timeline.rows.map(\.id)) else { return }
         place.heldRow = middle
+        if rowsKeepTheirSize, let frame = place.rows[middle.id] ?? nil {
+            let span = place.viewport - place.topInset
+            if span > frame.height {
+                jump(proxy, to: middle.id, anchor: UnitPoint(x: 0, y: middle.top / (span - frame.height)))
+            }
+        }
         for delay in [0.0, 0.05, 0.3] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 restoreReadingPlace(proxy)
                 if delay == 0.3 {
                     place.heldRow = nil
                     // Back in place and the newest message in view after all: follow it again.
-                    if isAtBottom { followsNewest = true }
+                    if isAtBottom, timeline.focusedEvent == nil { followsNewest = true }
                 }
             }
         }
     }
 
-    /// Scrolls so the held row's top is where it was before the messages re-wrapped.
+    /// Scrolls so the held row's top is where it was before the rows around it changed.
     private func restoreReadingPlace(_ proxy: ScrollViewProxy) {
         guard !followsNewest, let held = place.heldRow, let frame = place.rows[held.id] ?? nil,
-              place.viewport > frame.height else { return }
-        // Lines up the point this far down the row with the point as far down the view.
-        let fraction = held.top / (place.viewport - frame.height)
+              abs(frame.minY - held.top) > 0.5 else { return }    // already where it was
+        // Rows are measured from just below the pinned banner, and scrolling to a point of a row
+        // lines it up with the point as far down the rest of the view (the composer counts in
+        // that rest: it floats over the scroll view's foot).
+        let span = place.viewport - place.topInset
+        guard span > frame.height else { return }
+        let fraction = held.top / (span - frame.height)
         jump(proxy, to: held.id, anchor: UnitPoint(x: 0, y: fraction))
     }
 
@@ -340,6 +569,13 @@ struct TimelineView: View {
                 .padding(.leading, 36)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
+            if let editTarget {
+                EditComposerBar(original: editTarget.original, isCaption: editTarget.kind == .caption) { finishEdit() }
+                    .padding(.leading, 46)
+                    .padding(.trailing, 42)
+                    .padding(.bottom, 2)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             if let replyTarget {
                 ReplyComposerBar(reply: replyTarget) { self.replyTarget = nil }
                     // Lined up with the text field below: its text on the left, its edge on the right.
@@ -349,16 +585,28 @@ struct TimelineView: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             HStack(alignment: .bottom, spacing: 8) {
-                AttachButton { pickImages() }
-                    .padding(.bottom, 1)
-                TextField(stagedImages.isEmpty ? placeholder : "Add a caption…", text: $draft, axis: .vertical)
+                Group {
+                    if editTarget == nil {
+                        AttachButton { pickImages() }
+                    } else {
+                        // Nothing to attach to an edit: the place says what the field is doing.
+                        Image(systemName: "pencil")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .frame(width: 28, height: 28)
+                            .background(Color.accentColor.opacity(0.14), in: Circle())
+                            .accessibilityHidden(true)
+                    }
+                }
+                .padding(.bottom, 1)
+                TextField(composerPlaceholder, text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...8)
                     .focused($composerFocused)
                     .onSubmit { send(proxy) }
                     // While suggestions are showing, the arrows move through them and Return
                     // or Tab picks one instead of sending.
-                    .onKeyPress(.upArrow) { moveSuggestion(-1) }
+                    .onKeyPress(.upArrow) { upArrow() }
                     .onKeyPress(.downArrow) { moveSuggestion(1) }
                     .onKeyPress(.return) { pickSelectedSuggestion() }
                     .onKeyPress(.tab) { pickSelectedSuggestion() }
@@ -366,6 +614,10 @@ struct TimelineView: View {
                         // Escape closes the mention list if it is open; otherwise it cancels a reply.
                         if !suggestions.isEmpty {
                             dismissedQuery = mentionQuery
+                            return .handled
+                        }
+                        if editTarget != nil {
+                            finishEdit()
                             return .handled
                         }
                         guard replyTarget != nil else { return .ignored }
@@ -382,18 +634,22 @@ struct TimelineView: View {
                     .background(.background, in: RoundedRectangle(cornerRadius: 14))
                     .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(.separator) }
                 Button { send(proxy) } label: {
-                    Image(systemName: "arrow.up.circle.fill")
+                    Image(systemName: editTarget == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill")
                         .font(.system(size: 24))
+                        .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
                 .disabled(!canSend)
-                .help("Send (Return). Option-Return for a new line.")
+                .help(editTarget == nil ? "Send (Return). Option-Return for a new line."
+                                        : "Save (Return). Esc to cancel.")
+                .accessibilityLabel(editTarget == nil ? "Send" : "Save")
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .animation(.snappy(duration: 0.2), value: replyTarget?.eventID)
+        .animation(.snappy(duration: 0.2), value: editTarget?.itemID)
         .animation(.snappy(duration: 0.2), value: stagedImages.map(\.id))
         .background(.bar)
         // Not Divider: inside the room's HStack it would draw itself vertically.
@@ -412,10 +668,23 @@ struct TimelineView: View {
     }
 
     private var canSend: Bool {
-        !stagedImages.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if let editTarget {
+            // A caption can be emptied; a message can't.
+            return editTarget.kind == .caption || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return !stagedImages.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var composerPlaceholder: String {
+        if let editTarget { return editTarget.kind == .caption ? "Edit caption" : "Edit message" }
+        return stagedImages.isEmpty ? placeholder : "Add a caption…"
     }
 
     private func send(_ proxy: ScrollViewProxy) {
+        if let edit = editTarget {
+            saveEdit(edit)
+            return
+        }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = stagedImages
         guard !text.isEmpty || !images.isEmpty else { return }
@@ -433,6 +702,8 @@ struct TimelineView: View {
             // With images, what was typed is their caption.
             timeline.send(images: images, caption: text, mentions: mentions, replyTo: replyTo)
         }
+        // Sent from a view of older messages: it arrives at the end of the room, so go there.
+        if timeline.focusedEvent != nil { room?.returnToLive() }
     }
 
     // MARK: Images
@@ -457,6 +728,10 @@ struct TimelineView: View {
     /// Readies picked, pasted or dropped images and puts them in the composer.
     private func stage(_ sources: [ImageSource]) {
         guard !sources.isEmpty else { return }
+        guard editTarget == nil else {
+            imageNotice = "Finish editing to attach images."
+            return
+        }
         imageNotice = nil
         Task {
             // If the server's size limit isn't known yet, the server itself will say so on upload.
@@ -484,6 +759,7 @@ struct TimelineView: View {
 
     private func startReply(to message: MessageRow) {
         guard let target = ReplyPreview(replyingTo: message) else { return }
+        if editTarget != nil { finishEdit() }
         replyTarget = target
         composerFocused = true
     }
@@ -491,26 +767,173 @@ struct TimelineView: View {
     /// Goes to the message a reply answers and lights it up, loading older history if it isn't
     /// on screen yet.
     private func showOriginal(_ reply: ReplyPreview, _ proxy: ScrollViewProxy) {
+        jump(to: reply.eventID, proxy)
+    }
+
+    /// Goes to a message and lights it up. In the room, one that isn't loaded opens in a view
+    /// of its own, around it: loading the room's history up to a message far back would be
+    /// slow, and leave every later moment in the room slow too. A thread is short enough to
+    /// page back through.
+    private func jump(to eventID: String, _ proxy: ScrollViewProxy) {
+        if let row = timeline.rows.first(where: { $0.eventID == eventID }) {
+            if drawRow(row.id) {
+                DispatchQueue.main.async { show(row.id, proxy) }
+            } else {
+                show(row.id, proxy)
+            }
+            return
+        }
+        if let room {
+            if timeline.focusedEvent != nil, room.live.rows.contains(where: { $0.eventID == eventID }) {
+                // Recent enough to be in the room as it is now: back there, to it.
+                room.live.requestedJump = eventID
+                room.returnToLive()
+            } else {
+                room.focus(eventID)
+            }
+            return
+        }
         guard searchingFor == nil else { return }
-        searchingFor = reply.eventID
-        Task {
-            let rowID = await timeline.rowID(forEvent: reply.eventID)
+        searchingFor = eventID
+        searchTask = Task {
+            let rowID = await timeline.rowID(forEvent: eventID)
             searchingFor = nil
+            guard !Task.isCancelled else { return }
             guard let rowID else {
                 // Too far back, or not something the server will give us.
                 if !DevHooks.mutesAudio { NSSound.beep() }
                 return
             }
-            // Leaving the newest message on purpose: don't follow it back.
-            followsNewest = false
+            if drawRow(rowID) {
+                DispatchQueue.main.async { show(rowID, proxy) }
+            } else {
+                show(rowID, proxy)
+            }
+        }
+    }
+
+    /// Scrolls to a row and lights it up for a moment.
+    private func show(_ rowID: String, _ proxy: ScrollViewProxy, animated: Bool = true) {
+        // Leaving the newest message on purpose: don't follow it back, and don't let a held
+        // reading place pull the view back to where it was.
+        followsNewest = false
+        place.heldRow = nil
+        if animated {
             withAnimation(.snappy(duration: 0.3)) {
                 proxy.scrollTo(rowID, anchor: .center)
                 highlightedRow = rowID
             }
+        } else {
+            jump(proxy, to: rowID, anchor: .center)
+            withAnimation(.easeOut(duration: 0.2)) { highlightedRow = rowID }
+        }
+        Task {
             try? await Task.sleep(for: .seconds(1.8))
             if highlightedRow == rowID {
                 withAnimation(.easeOut(duration: 0.6)) { highlightedRow = nil }
             }
+        }
+    }
+
+    // MARK: Editing
+
+    /// Puts a message in the composer to be changed. Whatever was being written is set aside
+    /// and comes back when the edit is saved or cancelled.
+    private func startEdit(_ message: MessageRow) {
+        guard let kind = message.editKind, let original = ReplyPreview(replyingTo: message) else { return }
+        if editTarget == nil {
+            stashedDraft = StashedDraft(text: draft, mentions: composedMentions, reply: replyTarget, images: stagedImages)
+            followedBeforeEdit = followsNewest
+        }
+        let restored = kind == .text
+            ? MentionComposer.draft(body: message.editableText, html: message.html, mentionsRoom: message.mentionsRoom)
+            : (text: message.editableText, mentions: [])
+        draft = restored.text
+        composedMentions = restored.mentions
+        replyTarget = nil
+        stagedImages = []
+        imageNotice = nil
+        dismissedQuery = nil
+        editTarget = EditTarget(itemID: message.itemID, kind: kind, text: restored.text, original: original)
+        composerFocused = true
+    }
+
+    private func saveEdit(_ edit: EditTarget) {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard edit.kind == .caption || !text.isEmpty else { return }
+        let mentions = composedMentions
+        finishEdit()
+        guard text != edit.text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        Task { await timeline.edit(edit.itemID, kind: edit.kind, to: text, mentions: mentions) }
+    }
+
+    /// Leaves editing and puts back what was being written before.
+    private func finishEdit() {
+        let stash = stashedDraft
+        stashedDraft = StashedDraft()
+        editTarget = nil
+        if followedBeforeEdit { returnsToNewest = true }
+        followedBeforeEdit = false
+        draft = stash.text
+        composedMentions = stash.mentions
+        replyTarget = stash.reply
+        stagedImages = stash.images
+    }
+
+    /// Up arrow: moves through mention suggestions; in an empty composer, edits your last message.
+    private func upArrow() -> KeyPress.Result {
+        if !suggestions.isEmpty { return moveSuggestion(-1) }
+        guard draft.isEmpty, editTarget == nil, stagedImages.isEmpty,
+              let message = timeline.rows.reversed().lazy.compactMap(\.message)
+                .first(where: { $0.isOwn && ($0.editKind == .text || $0.editKind == .emote) })
+        else { return .ignored }
+        startEdit(message)
+        return .handled
+    }
+
+    // MARK: Deleting and forwarding
+
+    private func askToDelete(_ message: MessageRow) {
+        if message.sendState != nil {
+            // Never reached anyone: nothing to confirm.
+            Task { await timeline.discard(message.itemID) }
+        } else {
+            pendingDeletion = message
+        }
+    }
+
+    private func startForward(_ message: MessageRow) {
+        guard let preview = ReplyPreview(replyingTo: message),
+              let content = timeline.forwardableContent(for: message.itemID) else {
+            if !DevHooks.mutesAudio { NSSound.beep() }
+            return
+        }
+        forwarding = ForwardRequest(preview: preview, content: content)
+    }
+
+    // MARK: Pinned messages
+
+    /// The pinned messages that have loaded, most recently pinned first.
+    private var pinnedMessages: [MessageRow] {
+        guard let pins = room?.pins else { return [] }
+        var byID: [String: MessageRow] = [:]
+        for case let message? in pins.rows.map(\.message) {
+            if let id = message.eventID { byID[id] = message }
+        }
+        return pins.pinnedEventIDs.reversed().compactMap { byID[$0] }
+    }
+
+    @ViewBuilder private func pinnedBanner(_ proxy: ScrollViewProxy) -> some View {
+        let messages = pinnedMessages
+        if let room, !messages.isEmpty {
+            let index = min(room.pinIndex.wrappedValue, messages.count - 1)
+            PinnedBanner(messages: messages, index: index, showAll: room.showPinned) {
+                guard let eventID = messages[index].eventID else { return }
+                // The next click goes on to the one pinned before it.
+                withAnimation(.snappy(duration: 0.3)) { room.pinIndex.wrappedValue = (index + 1) % messages.count }
+                jump(to: eventID, proxy)
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
@@ -585,6 +1008,8 @@ private struct TimelineRowView: View {
     let media: MediaLoader
     let actions: MessageActions
     let isHighlighted: Bool
+    /// The message being edited in the composer, if any.
+    let editingItem: EventOrTransactionId?
     let searchingFor: String?
     let receipts: Namespace.ID
 
@@ -592,7 +1017,8 @@ private struct TimelineRowView: View {
         switch row.kind {
         case .message(let message):
             MessageView(message: message, timeline: timeline, media: media, actions: actions,
-                        isHighlighted: isHighlighted, searchingFor: searchingFor, receipts: receipts)
+                        isHighlighted: isHighlighted, isBeingEdited: editingItem == message.itemID,
+                        searchingFor: searchingFor, receipts: receipts)
         case .notice(let text):
             Text(text)
                 .font(.callout)
@@ -625,6 +1051,8 @@ private struct MessageView: View {
     let actions: MessageActions
     /// Lit up briefly after being jumped to from a reply.
     let isHighlighted: Bool
+    /// Tinted while its text is in the composer being edited.
+    let isBeingEdited: Bool
     let searchingFor: String?
     let receipts: Namespace.ID
 
@@ -646,9 +1074,9 @@ private struct MessageView: View {
     }
     @State private var isHovering = false
     @State private var showsPicker = false
-    @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
-    @Environment(\.forcedMessageLayout) private var forcedLayout
-    private var layout: MessageLayout { forcedLayout ?? chosenLayout }
+    /// True while the "More" menu is open, which keeps the actions up under it.
+    @State private var isMenuOpen = false
+    @Environment(\.messageLayout) private var layout
     @Environment(\.timelineWidth) private var timelineWidth
 
     /// What is left for the message itself once the margins, the read-receipt gutter and the
@@ -665,7 +1093,8 @@ private struct MessageView: View {
     private var showsActions: Bool {
         // Not under the image viewer: the pointer that opened it is still over this message,
         // and no "left" arrives once the viewer is in the way.
-        (isHovering || showsPicker || isDevHovered) && message.sendState == nil && ImageViewerState.shared.item == nil
+        (isHovering || showsPicker || isMenuOpen || isDevHovered) && message.sendState == nil
+            && ImageViewerState.shared.item == nil
     }
 
     private var isDevHovered: Bool {
@@ -687,6 +1116,13 @@ private struct MessageView: View {
         .padding(.bottom, 3)
         .opacity(message.sendState != nil && message.sendState != .failed && !isImage ? 0.55 : 1)
         .background {
+            if isBeingEdited {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.1))
+                    .padding(.horizontal, -8)
+                    .padding(.top, layout == .modern && message.showsHeader ? 4 : 0)
+                    .transition(.opacity)
+            }
             if isHighlighted {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.accentColor.opacity(0.2))
@@ -721,32 +1157,68 @@ private struct MessageView: View {
         }
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
-        .contextMenu {
-            if let reply {
-                Button("Reply", action: reply)
-            }
-            if let openThread {
-                Button(message.thread == nil ? "Reply in Thread" : "Open Thread", action: openThread)
-            }
-            if case .audio(let audio) = message.body {
-                Button("Save Audio As…") { AttachmentSaver.save(audio, media: media) }
-            }
-            if case .image(let image) = message.body, message.sendState == nil {
-                Button("Open") { actions.openImage(image, nil) }
-                Button("Copy Image") {
-                    Task {
-                        if let data = try? await media.imageFile(source: image.media.source) { ImagePasteboard.copy(data) }
-                    }
-                }
-                Button("Save Image As…") { AttachmentSaver.save(image, media: media) }
-            }
-            if case .text(let text) = message.body {
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                }
-            }
+        .modifier(MessageActionsMenus(sections: menuSections(includingReplies: true)))
+        .animation(.easeOut(duration: 0.15), value: isBeingEdited)
+    }
+
+    // MARK: Menus
+
+    /// Everything that can be done to this message, in groups: answering it, changing it,
+    /// passing it on, and deleting it. The hover bar has its own buttons for answering, so its
+    /// "More" menu leaves those out.
+    private func menuSections(includingReplies: Bool) -> [[MessageMenuItem]] {
+        var respond: [MessageMenuItem] = []
+        if includingReplies, let reply { respond.append(.init("Reply", action: reply)) }
+        if includingReplies, let openThread {
+            respond.append(.init(message.thread == nil ? "Reply in Thread" : "Open Thread", action: openThread))
         }
+
+        var change: [MessageMenuItem] = []
+        if let kind = message.editKind {
+            let title = kind != .caption ? "Edit" : message.editableText.isEmpty ? "Add Caption" : "Edit Caption"
+            change.append(.init(title) { actions.edit(message) })
+        }
+        if timeline.permissions.canPin, !timeline.isPinnedList, let eventID = message.eventID,
+           message.body != .redacted {
+            change.append(.init(message.isPinned ? "Unpin" : "Pin") {
+                Task { await timeline.setPinned(!message.isPinned, eventID: eventID) }
+            })
+        }
+
+        var share: [MessageMenuItem] = []
+        if message.canForward { share.append(.init("Forward…") { actions.forward(message) }) }
+        switch message.body {
+        case .text(let text), .emote(let text):
+            share.append(.init("Copy Text") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            })
+        case .image(let image) where message.sendState == nil:
+            share.append(.init("Open") { actions.openImage(image, nil) })
+            share.append(.init("Copy Image") {
+                Task {
+                    if let data = try? await media.imageFile(source: image.media.source) { ImagePasteboard.copy(data) }
+                }
+            })
+            share.append(.init("Save Image As…") { AttachmentSaver.save(image, media: media) })
+        case .audio(let audio):
+            share.append(.init("Save Audio As…") { AttachmentSaver.save(audio, media: media) })
+        default:
+            break
+        }
+
+        var remove: [MessageMenuItem] = []
+        if canDelete { remove.append(.init(message.isOwn ? "Delete…" : "Remove…") { actions.delete(message) }) }
+
+        return [respond, change, share, remove].filter { !$0.isEmpty }
+    }
+
+    /// Your own messages, if the room lets you; anyone's, if you are a moderator here.
+    private var canDelete: Bool {
+        guard message.body != .redacted, !timeline.isPinnedList else { return false }
+        if message.sendState != nil { return message.isOwn }
+        guard message.eventID != nil else { return false }
+        return message.isOwn ? timeline.permissions.canDeleteOwn : timeline.permissions.canDeleteOthers
     }
 
     private var modernRow: some View {
@@ -769,6 +1241,7 @@ private struct MessageView: View {
                         Text(message.date.formatted(date: .omitted, time: .shortened))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if message.isPinned { PinnedMark() }
                     }
                 }
                 content
@@ -804,6 +1277,10 @@ private struct MessageView: View {
 
     /// The message itself with what hangs under it; shared by both layouts.
     @ViewBuilder private var content: some View {
+        // In the modern layout a message that starts a group says so beside its time.
+        if message.isPinned, !(layout == .modern && message.showsHeader) {
+            PinnedMark()
+        }
         if let reply = message.replyTo {
             ReplyQuoteView(reply: reply, isSearching: searchingFor == reply.eventID) {
                 actions.showOriginal(reply)
@@ -855,9 +1332,7 @@ private struct MessageView: View {
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }
             }
-            if reply != nil || openThread != nil {
-                Divider().frame(height: 16).padding(.horizontal, 3)
-            }
+            Divider().frame(height: 16).padding(.horizontal, 3)
             if let reply {
                 ActionButton(help: "Reply", action: reply) {
                     Image(systemName: "arrowshape.turn.up.left")
@@ -867,6 +1342,9 @@ private struct MessageView: View {
                 ActionButton(help: "Reply in thread", action: openThread) {
                     Image(systemName: "bubble.left.and.text.bubble.right")
                 }
+            }
+            if !menuSections(includingReplies: false).isEmpty {
+                MoreActionsButton(sections: { menuSections(includingReplies: false) }, isOpen: $isMenuOpen)
             }
         }
         .padding(3)
@@ -884,18 +1362,24 @@ private struct MessageView: View {
 
     /// The message with its formatting, links and mention pills.
     private func styled(_ text: String) -> AttributedString {
-        MessageFormatter.render(text: text, html: message.html, mentionsRoom: message.mentionsRoom,
-                                ownUserID: timeline.ownUserID, name: timeline.knownName(for:))
+        MessageFormatter.renderCached(text: text, html: message.html, mentionsRoom: message.mentionsRoom,
+                                      ownUserID: timeline.ownUserID, names: timeline.nameVersion,
+                                      name: timeline.knownName(for:))
+    }
+
+    /// " (edited)" after a message that has been changed since it was sent.
+    private var editedLabel: Text {
+        Text(message.isEdited ? " (edited)" : "").font(.caption).foregroundStyle(.secondary)
     }
 
     @ViewBuilder private var bodyView: some View {
         switch message.body {
         case .text(let text):
-            (Text(styled(text)) + Text(message.isEdited ? " (edited)" : "").font(.caption).foregroundStyle(.secondary))
+            (Text(styled(text)) + editedLabel)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         case .emote(let text):
-            (Text("* \(message.senderName) ") + Text(styled(text)))
+            (Text("* \(message.senderName) ") + Text(styled(text)) + editedLabel)
                 .italic()
                 .textSelection(.enabled)
         case .image(let image):
@@ -909,7 +1393,7 @@ private struct MessageView: View {
                                  })
                     .padding(.vertical, 3)
                 if let caption = image.caption {
-                    Text(styled(caption)).textSelection(.enabled)
+                    (Text(styled(caption)) + editedLabel).textSelection(.enabled)
                 }
             }
         case .audio(let audio):
@@ -917,7 +1401,7 @@ private struct MessageView: View {
                 AudioMessageView(id: message.eventID ?? audio.media.source.url(), audio: audio,
                                  media: media, owner: timeline)
                 if let caption = audio.caption {
-                    Text(caption.linkified).textSelection(.enabled)
+                    (Text(caption.linkified) + editedLabel).textSelection(.enabled)
                 }
             }
             .padding(.vertical, 2)
@@ -1042,7 +1526,7 @@ private struct ReactionChipView: View {
 }
 
 /// One button in a message's floating action bar.
-private struct ActionButton<Label: View>: View {
+struct ActionButton<Label: View>: View {
     let help: String
     let action: () -> Void
     @ViewBuilder var label: Label
@@ -1132,7 +1616,9 @@ private final class ScrollInputTracker {
 
     func start() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .leftMouseDragged, .keyDown]) { [weak self] event in
+        // Not clicks: a click on a button (a message's actions, the composer's) isn't scrolling,
+        // and counting it would take the composer growing under it for the user scrolling away.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged, .keyDown]) { [weak self] event in
             // Page Up, Page Down, Home, End. Other keys are typing.
             if event.type != .keyDown || [116, 121, 115, 119].contains(event.keyCode) {
                 self?.lastInput = Date()
@@ -1387,6 +1873,16 @@ private struct NewestMessageHold: ViewModifier {
 final class ReadingPlace {
     var rows: [String: CGRect?] = [:]
     var viewport: CGFloat = 0
+    /// What covers the top and bottom of the view: the pinned banner and the composer.
+    var topInset: CGFloat = 0
+    var bottomInset: CGFloat = 0
+
+    /// Whether all of a row can be seen, clear of the banner and the composer. Rows are measured
+    /// from just below the banner; the composer covers the foot of what is left.
+    func isFullyVisible(_ id: String) -> Bool {
+        guard let frame = rows[id] ?? nil else { return false }
+        return frame.minY >= -1 && frame.maxY <= viewport - topInset - bottomInset + 1
+    }
     /// The row being read and where its top was, from just before the messages re-wrapped.
     var heldRow: (id: String, top: CGFloat)?
 
@@ -1401,4 +1897,69 @@ final class ReadingPlace {
         }
         return best.map { ($0.id, $0.top) }
     }
+}
+
+/// A message being edited in the composer.
+struct EditTarget: Equatable {
+    let itemID: EventOrTransactionId
+    let kind: MessageRow.EditKind
+    /// The text the edit started from, as it was put in the composer.
+    let text: String
+    /// The message as it was, for the bar above the composer.
+    let original: ReplyPreview
+}
+
+/// What the composer held when an edit began.
+struct StashedDraft {
+    var text = ""
+    var mentions: [ComposedMention] = []
+    var reply: ReplyPreview?
+    var images: [StagedImage] = []
+}
+
+/// A message on its way to other rooms: what it looks like, and what to send.
+struct ForwardRequest: Identifiable {
+    let id = UUID()
+    let preview: ReplyPreview
+    let content: RoomMessageEventContentWithoutRelation
+}
+
+/// A message's actions as its context menu, and the same for VoiceOver, which can't reach the
+/// hover bar or the context menu. One list, worked out once each time the row is drawn.
+///
+/// The VoiceOver actions only while VoiceOver is on: every row carrying its own accessibility
+/// actions makes a room noticeably slower to open, for nobody's benefit otherwise.
+private struct MessageActionsMenus: ViewModifier {
+    let sections: [[MessageMenuItem]]
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverIsOn
+
+    func body(content: Content) -> some View {
+        let menu = content.contextMenu { MessageContextMenu(sections: sections) }
+        if voiceOverIsOn || DevHooks.accessibilityActions {
+            menu
+                .accessibilityElement(children: .contain)
+                .accessibilityActions {
+                    ForEach(sections.flatMap { $0 }) { item in
+                        Button(item.title.replacingOccurrences(of: "…", with: ""), action: item.action)
+                    }
+                }
+        } else {
+            menu
+        }
+    }
+}
+
+/// What a room's main conversation shares beyond its own timeline.
+struct RoomContext {
+    /// The room's live timeline; a view around an older message stands in for it for a while.
+    let live: RoomTimeline
+    /// The room's pinned messages, while it has any.
+    let pins: RoomTimeline?
+    /// Which pinned message the banner shows; kept by the room, so it carries on across views.
+    let pinIndex: Binding<Int>
+    let showPinned: () -> Void
+    /// Shows a message that isn't loaded, in a view of its own around it.
+    let focus: (String) -> Void
+    /// Back to the room as it is now.
+    let returnToLive: () -> Void
 }
