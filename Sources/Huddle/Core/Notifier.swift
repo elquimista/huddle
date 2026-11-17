@@ -134,6 +134,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             let stale = delivered
                 .filter { $0.request.content.threadIdentifier.hasPrefix(prefix) }
                 .map(\.request.identifier)
+            if AppEnvironment.isDev {
+                print("DEV_NOTIFY_CLEAR \(prefix) removed=\(stale.count) delivered=\(delivered.count)")
+                fflush(stdout)
+            }
             if !stale.isEmpty { center.removeDeliveredNotifications(withIdentifiers: stale) }
         }
     }

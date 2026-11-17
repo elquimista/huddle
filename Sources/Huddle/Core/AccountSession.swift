@@ -11,6 +11,8 @@ struct RoomSummary: Identifiable, Equatable {
     var notifications = 0
     var mentions = 0
     var hasUnread = false
+    /// False when the room's details could not be read, so the counts above mean nothing.
+    var hasCounts = false
     var lastMessage: String?
     var timestamp: Date?
 
@@ -57,6 +59,7 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var roomUpdatesTask: Task<Void, Never>?
     @ObservationIgnored private var restartTask: Task<Void, Never>?
     @ObservationIgnored private var restartAttempts = 0
+    @ObservationIgnored private var pendingClears: Set<String> = []
     @ObservationIgnored private var roomHandles: [String: Room] = [:]
     @ObservationIgnored private var timelines: [String: RoomTimeline] = [:]
     @ObservationIgnored private var timelineOrder: [String] = []
@@ -199,16 +202,38 @@ final class AccountSession: Identifiable {
                 return summary
             })
         }
-        // A room that stops needing attention (read here or elsewhere) drops its notifications.
-        let stillHighlighted = Set(rooms.lazy.filter(\.isHighlighted).map(\.id))
-        for room in self.rooms where room.isHighlighted && !stillHighlighted.contains(room.id) {
-            Notifier.shared.clear(accountID: id, roomID: room.id)
-        }
+        let previous = self.rooms
         self.rooms = rooms
+        // A room that stops needing attention (read here or elsewhere) drops its notifications.
+        // Only on a definite answer: the room is still listed and its counts were read. A room
+        // missing from the list (a search, a list rebuild) says nothing about being read.
+        let current = Dictionary(rooms.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for room in previous where room.isHighlighted {
+            if let now = current[room.id], now.hasCounts, !now.isHighlighted {
+                clearNotificationsIfStillRead(roomID: room.id)
+            }
+        }
         // A search narrows `rooms`, so only count while the list is unfiltered.
         if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
             badgeCount = rooms.reduce(0) { $0 + ($1.isHighlighted ? 1 : 0) }
             urgentCount = rooms.reduce(0) { $0 + ($1.isUrgent ? 1 : 0) }
+        }
+    }
+
+    /// Unread counts can dip to zero for a moment while the SDK rebuilds a room's history after
+    /// a gap in sync, so wait and look again before treating the room as read.
+    private func clearNotificationsIfStillRead(roomID: String) {
+        guard !pendingClears.contains(roomID) else { return }
+        pendingClears.insert(roomID)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self else { return }
+            self.pendingClears.remove(roomID)
+            guard let room = self.roomHandles[roomID], self.syncService != nil else { return }
+            let summary = await RoomSummary.make(from: room)
+            if summary.hasCounts, !summary.isHighlighted {
+                Notifier.shared.clear(accountID: self.id, roomID: roomID)
+            }
         }
     }
 
@@ -293,6 +318,7 @@ extension RoomSummary {
             summary.avatarURL = info.avatarUrl
             summary.isDirect = info.isDirect
             summary.isInvite = info.membership == .invited
+            summary.hasCounts = true
             summary.notifications = Int(info.numUnreadNotifications)
             summary.mentions = Int(info.numUnreadMentions)
             summary.hasUnread = info.numUnreadMessages > 0 || info.isMarkedUnread
