@@ -1,0 +1,10 @@
+.build/
+build/
+.DS_Store
+*.xcodeproj
+.swiftpm/
+
+# Matrix Rust SDK build output (86 MB static library plus generated bindings).
+# Recreate with Scripts/build-sdk.sh.
+Vendor/MatrixRustSDK/MatrixSDKFFI.xcframework/
+Vendor/MatrixRustSDK/Sources/

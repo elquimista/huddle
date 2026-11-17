@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Fills the local Synapse with rooms and messages for testing Huddle Dev.
+
+Run after setup.sh. Does nothing if alice already has rooms.
+"""
+import json, os, struct, sys, urllib.request, uuid, zlib
+
+def load_env():
+    env = {}
+    for line in open(os.path.join(os.path.dirname(__file__), "dev.env")):
+        if "=" in line and not line.startswith("#"):
+            key, value = line.strip().split("=", 1)
+            env[key] = value.strip('"')
+    return env
+
+ENV = load_env()
+BASE = ENV["HUDDLE_DEV_SERVER"]
+
+def call(method, path, token=None, body=None, raw=None, content_type="application/json"):
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+    request = urllib.request.Request(BASE + path, data=data, method=method)
+    request.add_header("Content-Type", content_type)
+    if token:
+        request.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+def login(user):
+    return call("POST", "/_matrix/client/v3/login", body={
+        "type": "m.login.password",
+        "identifier": {"type": "m.id.user", "user": user},
+        "password": ENV["HUDDLE_DEV_PASSWORD"],
+        "initial_device_display_name": "seed script",
+    })["access_token"]
+
+def send(token, room, body, msgtype="m.text", **extra):
+    content = {"msgtype": msgtype, "body": body, **extra}
+    path = f"/_matrix/client/v3/rooms/{room}/send/m.room.message/{uuid.uuid4().hex}"
+    return call("PUT", path, token, content)["event_id"]
+
+def create(token, name, invite=(), **extra):
+    body = {"preset": "private_chat", "invite": [f"@{u}:localhost" for u in invite], **extra}
+    if name:
+        body["name"] = name
+    return call("POST", "/_matrix/client/v3/createRoom", token, body)["room_id"]
+
+def join(token, room):
+    call("POST", f"/_matrix/client/v3/join/{room}", token, {})
+
+def png(width, height, rgb):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    rows = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+def main():
+    if len(sys.argv) > 1:  # seed.py say <user> <room name> <text>: one live message
+        _, _, user, room_name, text = sys.argv
+        token = login(user)
+        for room in call("GET", "/_matrix/client/v3/joined_rooms", token)["joined_rooms"]:
+            state = call("GET", f"/_matrix/client/v3/rooms/{room}/state/m.room.name", token)
+            if state.get("name") == room_name:
+                print(send(token, room, text))
+                return
+        sys.exit(f"{user} is not in a room named {room_name}")
+
+    alice, bob, carol = login("alice"), login("bob"), login("carol")
+    if call("GET", "/_matrix/client/v3/joined_rooms", alice)["joined_rooms"]:
+        print("Already seeded.")
+        return
+
+    call("PUT", "/_matrix/client/v3/profile/@alice:localhost/displayname", alice, {"displayname": "Alice"})
+    call("PUT", "/_matrix/client/v3/profile/@bob:localhost/displayname", bob, {"displayname": "Bob"})
+    call("PUT", "/_matrix/client/v3/profile/@carol:localhost/displayname", carol, {"displayname": "Carol"})
+
+    # A long room, for scrolling back through history.
+    general = create(alice, "General", invite=["bob", "carol"], topic="Everything and nothing")
+    join(bob, general); join(carol, general)
+    speakers = [("alice", alice), ("bob", bob), ("carol", carol)]
+    for i in range(1, 181):
+        _, token = speakers[(i // 3) % 3]
+        send(token, general, f"History message {i}")
+    send(bob, general, "Docs are at https://matrix.org/docs/ if anyone needs them")
+    target = send(carol, general, "Shipping the new build on Friday")
+    for token in (alice, bob):
+        call("PUT", f"/_matrix/client/v3/rooms/{general}/send/m.reaction/{uuid.uuid4().hex}", token,
+             {"m.relates_to": {"rel_type": "m.annotation", "event_id": target, "key": "🎉"}})
+
+    # Images, an emote and a file.
+    design = create(bob, "Design", invite=["alice"])
+    join(alice, design)
+    send(bob, design, "Two options for the accent colour:")
+    for name, rgb, size in (("teal.png", (20, 150, 140), (640, 360)), ("coral.png", (240, 110, 90), (300, 500))):
+        request = urllib.request.Request(f"{BASE}/_matrix/media/v3/upload?filename={name}",
+                                         data=png(*size, rgb), method="POST")
+        request.add_header("Content-Type", "image/png")
+        request.add_header("Authorization", "Bearer " + bob)
+        uri = json.load(urllib.request.urlopen(request))["content_uri"]
+        send(bob, design, name, "m.image", url=uri, info={"w": size[0], "h": size[1], "mimetype": "image/png"})
+    send(alice, design, "prefers the teal one", "m.emote")
+    send(bob, design, "brand-guide.pdf", "m.file", url="mxc://localhost/missing", info={"mimetype": "application/pdf"})
+    send(bob, design, "Multi-line message:\nline two\nline three")
+
+    # A direct chat.
+    dm = create(bob, None, invite=["alice"], is_direct=True)
+    join(alice, dm)
+    call("PUT", f"/_matrix/client/v3/user/@alice:localhost/account_data/m.direct", alice, {"@bob:localhost": [dm]})
+    send(bob, dm, "Hey Alice, got a minute?")
+
+    # An encrypted room: only real clients can talk here.
+    create(alice, "Encrypted", invite=["bob"],
+           initial_state=[{"type": "m.room.encryption", "state_key": "",
+                           "content": {"algorithm": "m.megolm.v1.aes-sha2"}}])
+    # Bob joins from the app, so his device is there to receive keys.
+
+    # A pending invitation.
+    create(carol, "Secret Project", invite=["alice"])
+    print("Seeded: General, Design, a DM with Bob, Encrypted, and an invite to Secret Project.")
+
+if __name__ == "__main__":
+    main()

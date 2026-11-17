@@ -1,0 +1,208 @@
+import MatrixRustSDK
+import SwiftUI
+
+struct RoomListView: View {
+    @Bindable var account: AccountSession
+    @State private var showsRecovery = false
+
+    var body: some View {
+        List(selection: $account.selectedRoomID) {
+            ForEach(account.rooms) { room in
+                RoomRow(room: room, media: account.media)
+                    .tag(room.id)
+                    .onAppear {
+                        if room.id == account.rooms.last?.id { account.loadMoreRooms() }
+                    }
+            }
+        }
+        .listStyle(.sidebar)
+        .searchable(text: $account.searchText, placement: .sidebar, prompt: "Search rooms")
+        .overlay {
+            if account.rooms.isEmpty {
+                if !account.searchText.isEmpty {
+                    ContentUnavailableView.search(text: account.searchText)
+                } else if account.hasLoadedRooms {
+                    ContentUnavailableView("No Rooms Yet",
+                                           systemImage: "tray",
+                                           description: Text("Invitations and rooms you join will appear here."))
+                } else if account.syncState == .running || account.syncState == .idle {
+                    ProgressView()
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if account.verification == .unverified {
+                    Banner(icon: "lock.trianglebadge.exclamationmark",
+                           text: "Verify this session to read encrypted history",
+                           action: "Verify") { showsRecovery = true }
+                }
+                if let status {
+                    Banner(icon: "exclamationmark.triangle", text: status, action: nil) {}
+                }
+            }
+        }
+        .navigationTitle(account.displayName ?? account.userID)
+        .sheet(isPresented: $showsRecovery) {
+            RecoverySheet(account: account)
+        }
+    }
+
+    private var status: String? {
+        if account.needsReauth { return "Session expired. Sign out and back in." }
+        if let error = account.startError { return error }
+        switch account.syncState {
+        case .offline: return "Offline"
+        case .error, .terminated: return "Sync stopped"
+        default: return nil
+        }
+    }
+}
+
+private struct RoomRow: View {
+    let room: RoomSummary
+    let media: MediaLoader
+
+    var body: some View {
+        HStack(spacing: 10) {
+            AvatarView(media: media, url: room.avatarURL, name: room.name, seed: room.id, size: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(room.name)
+                        .fontWeight(room.hasUnread || room.isHighlighted ? .semibold : .regular)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if let timestamp = room.timestamp {
+                        Text(timestamp.roomListLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HStack(alignment: .center) {
+                    Text(room.isInvite ? (room.lastMessage ?? "Invitation") : (room.lastMessage ?? " "))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    badge
+                }
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    @ViewBuilder private var badge: some View {
+        if room.isInvite {
+            Text("Invite")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.accentColor, in: Capsule())
+        } else if room.notifications > 0 || room.mentions > 0 {
+            Text(room.mentions > 0 ? "@" : "\(min(room.notifications, 99))")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .frame(minWidth: 18, minHeight: 18)
+                .background(room.mentions > 0 ? Color.red : Color.accentColor, in: Capsule())
+        } else if room.hasUnread {
+            Circle()
+                .fill(.secondary)
+                .frame(width: 8, height: 8)
+        }
+    }
+}
+
+private struct Banner: View {
+    let icon: String
+    let text: String
+    let action: String?
+    let perform: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+            Text(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if let action {
+                Button(action, action: perform)
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// Verifies the session by entering the account's recovery key.
+private struct RecoverySheet: View {
+    let account: AccountSession
+    @Environment(\.dismiss) private var dismiss
+    @State private var key = ""
+    @State private var isBusy = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Verify This Session")
+                .font(.headline)
+            Text("Enter your recovery key to unlock encrypted message history and mark this device as trusted.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            SecureField("Recovery key", text: $key)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(submit)
+            if let error {
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Verify", action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(key.isEmpty || isBusy)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+    }
+
+    private func submit() {
+        guard !key.isEmpty, !isBusy else { return }
+        isBusy = true
+        Task {
+            defer { isBusy = false }
+            do {
+                try await account.recover(with: key.trimmingCharacters(in: .whitespacesAndNewlines))
+                dismiss()
+            } catch {
+                self.error = error.userMessage
+            }
+        }
+    }
+}
+
+extension Date {
+    var roomListLabel: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(self) {
+            return formatted(date: .omitted, time: .shortened)
+        }
+        if calendar.isDateInYesterday(self) {
+            return "Yesterday"
+        }
+        if let days = calendar.dateComponents([.day], from: self, to: .now).day, days < 7 {
+            return formatted(.dateTime.weekday(.abbreviated))
+        }
+        return formatted(date: .numeric, time: .omitted)
+    }
+}

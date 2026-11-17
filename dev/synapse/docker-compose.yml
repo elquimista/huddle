@@ -1,0 +1,12 @@
+# Local Synapse for testing "Huddle Dev". Start it with ./setup.sh.
+services:
+  synapse:
+    image: ghcr.io/element-hq/synapse:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8008:8008"
+    volumes:
+      - ./data:/data
+    environment:
+      SYNAPSE_SERVER_NAME: localhost
+      SYNAPSE_REPORT_STATS: "no"
