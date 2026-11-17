@@ -21,6 +21,7 @@ final class AccountStore {
 
     func restore() async {
         DevHooks.applyAppearance()
+        Notifier.shared.store = self
         if !DevHooks.startsFresh { await restoreStoredAccounts() }
         isRestoring = false
         await DevHooks.run(store: self)
@@ -91,6 +92,7 @@ final class AccountStore {
 
     func signOut(_ account: AccountSession) async {
         await account.stop()
+        Notifier.shared.clear(accountID: account.id)
         try? await account.client.logout()
         SessionVault.shared.remove(id: account.id)
         accounts.removeAll { $0.id == account.id }

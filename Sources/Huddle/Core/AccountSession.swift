@@ -106,6 +106,14 @@ final class AccountSession: Identifiable {
             }))
             verification = client.encryption().verificationState()
 
+            Notifier.shared.activate()
+            await client.registerNotificationHandler(listener: NotificationListener { [weak self] item, roomID in
+                Task { @MainActor in
+                    guard let self, self.syncService != nil else { return }
+                    Notifier.shared.handle(item, roomID: roomID, account: self)
+                }
+            })
+
             await syncService.start()
             startError = nil
         } catch {
@@ -190,6 +198,11 @@ final class AccountSession: Identifiable {
                 roomHandles[summary.id] = room
                 return summary
             })
+        }
+        // A room that stops needing attention (read here or elsewhere) drops its notifications.
+        let stillHighlighted = Set(rooms.lazy.filter(\.isHighlighted).map(\.id))
+        for room in self.rooms where room.isHighlighted && !stillHighlighted.contains(room.id) {
+            Notifier.shared.clear(accountID: id, roomID: room.id)
         }
         self.rooms = rooms
         // A search narrows `rooms`, so only count while the list is unfiltered.

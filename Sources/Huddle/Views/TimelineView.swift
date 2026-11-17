@@ -20,9 +20,13 @@ struct TimelineView: View {
     @State private var historyEdgeVisible = false
     private static let bottomID = "timeline-bottom"
 
+    /// Messages arriving while the app is in the background stay unread until it is back in front.
+    @State private var appIsActive = NSApp.isActive
+
     private struct ReadTrigger: Equatable {
         let lastRow: String?
         let isAtBottom: Bool
+        let appIsActive: Bool
     }
 
     private struct HistoryTrigger: Equatable {
@@ -137,8 +141,14 @@ struct TimelineView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) { composer(proxy) }
         }
         // Runs when a new message arrives and when the newest one scrolls into view.
-        .task(id: ReadTrigger(lastRow: timeline.rows.last?.id, isAtBottom: isAtBottom)) {
-            if isAtBottom, !timeline.rows.isEmpty { await timeline.markAsRead() }
+        .task(id: ReadTrigger(lastRow: timeline.rows.last?.id, isAtBottom: isAtBottom, appIsActive: appIsActive)) {
+            if isAtBottom, appIsActive, !timeline.rows.isEmpty { await timeline.markAsRead() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            appIsActive = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            appIsActive = false
         }
         .onAppear { composerFocused = true }
     }

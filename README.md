@@ -9,9 +9,10 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions and a markdown composer.
 - **Threads:** Slack-style. Replies stay out of the room; the root message shows a reply count that opens the thread in a side panel with its own composer. A toolbar button lists all of a room's threads.
 - **Read receipts:** in direct chats, ticks on your messages (one grey tick while sending, two grey once sent, two coloured once read); in group rooms, small avatars beside the last message each person has read, with the full list on click.
+- **Notifications:** macOS alerts for new messages, mentions and invitations, following your account's notification rules (muted rooms stay silent; direct messages and mentions play a sound). Clicking one opens that account, room and thread, and reading a room clears its alerts.
 - **Encryption:** end-to-end encrypted rooms work, and a new session is verified with your recovery key.
 
-Not built yet: system notifications, sending attachments, inline replies, edits, spaces, and emoji verification.
+Not built yet: sending attachments, inline replies, edits, spaces, and emoji verification.
 
 ## Requirements
 
