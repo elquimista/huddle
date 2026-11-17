@@ -181,7 +181,8 @@ private struct Banner: View {
 }
 
 /// Verifies the session by entering the account's recovery key.
-private struct RecoverySheet: View {
+/// Asks for the recovery key that verifies this session. Also shown from Settings ▸ Accounts.
+struct RecoverySheet: View {
     let account: AccountSession
     @Environment(\.dismiss) private var dismiss
     @State private var key = ""

@@ -43,6 +43,7 @@ struct HuddleApp: App {
 
         Settings {
             SettingsView()
+                .environment(store)
         }
     }
 }

@@ -75,15 +75,88 @@ extension EnvironmentValues {
     @Entry var accountSession: AccountSession? = nil
 }
 
+/// The Settings window: a tab for each kind of setting, as Mac apps have them. Each tab is as
+/// tall as what it holds, and the window takes the height of the tab showing.
 struct SettingsView: View {
-    @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
-    @AppStorage(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault
-    @AppStorage(NotificationSettings.soundKey) private var notificationSound = true
-    @AppStorage(OwnPresence.sharingKey) private var sharesPresence = true
-    @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
+    enum Tab: String {
+        case notifications, appearance, privacy, accounts
+    }
+
+    @AppStorage("settingsTab") private var tab = Tab.notifications
 
     var body: some View {
-        Form {
+        TabView(selection: $tab) {
+            NotificationSettingsTab()
+                .tabItem { Label("Notifications", systemImage: "bell.badge") }
+                .tag(Tab.notifications)
+            AppearanceSettingsTab()
+                .tabItem { Label("Appearance", systemImage: "paintbrush") }
+                .tag(Tab.appearance)
+            PrivacySettingsTab()
+                .tabItem { Label("Privacy", systemImage: "hand.raised") }
+                .tag(Tab.privacy)
+            AccountsSettingsTab()
+                .tabItem { Label("Accounts", systemImage: "at") }
+                .tag(Tab.accounts)
+        }
+    }
+}
+
+/// One tab's form: grouped, as wide as every other tab, and as tall as what it holds.
+private struct SettingsForm<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        Form { content }
+            .formStyle(.grouped)
+            .frame(width: 500)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A note under a section, sized and coloured like the rows' own descriptions and lined up with
+/// their text.
+private struct SectionNote: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 10)
+    }
+}
+
+/// A row with its name and a line about it on the left and its control on the right, like a
+/// toggle's row. Laid out by hand for controls the form would otherwise put under their label.
+private struct SettingRow<Control: View>: View {
+    let title: String
+    let detail: String
+    @ViewBuilder let control: Control
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            control
+        }
+    }
+}
+
+// MARK: - Notifications
+
+private struct NotificationSettingsTab: View {
+    @AppStorage(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault
+    @AppStorage(NotificationSettings.soundKey) private var notificationSound = true
+
+    var body: some View {
+        SettingsForm {
             Section {
                 Toggle(isOn: $notificationsEnabled) {
                     Text("Show notifications")
@@ -97,47 +170,33 @@ struct SettingsView: View {
                         .foregroundStyle(notificationsEnabled ? .secondary : .tertiary)
                 }
                 .disabled(!notificationsEnabled)
-            } header: {
-                Text("Notifications")
             } footer: {
-                // Sized and coloured like the rows' own descriptions, and lined up with their text.
-                Text("Your Matrix account's notification rules decide which rooms notify.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 10)
+                SectionNote(text: "Your Matrix account's notification rules decide which rooms notify.")
             }
+        }
+    }
+}
 
+// MARK: - Appearance
+
+private struct AppearanceSettingsTab: View {
+    @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
+    @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
+
+    var body: some View {
+        SettingsForm {
             Section {
-                Toggle(isOn: $sharesPresence) {
-                    Text("Show when I'm online")
-                    Text("People in your direct chats see when you're online or away.")
-                }
-            } header: {
-                Text("Privacy")
-            } footer: {
-                Text("Some servers don't share anyone's online status.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 10)
-            }
-
-            Section("Message Layout") {
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(MessageLayout.allCases) { option in
-                        LayoutOption(layout: option, isSelected: layout == option) { layout = option }
+                SettingRow(title: "Layout", detail: layout.summary) {
+                    Picker("Layout", selection: $layout) {
+                        ForEach(MessageLayout.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
                 }
-                .padding(.vertical, 6)
-            }
-
-            Section {
-                // Laid out by hand: a segmented picker is otherwise put under its label, unlike
-                // every other control here, which sits on the right.
-                HStack(alignment: .center, spacing: 12) {
-                    Text("Emoji-only messages")
-                    Spacer(minLength: 8)
+                SettingRow(title: "Emoji-only messages", detail: "Just a few emoji, drawn bigger.") {
                     Picker("Emoji-only messages", selection: $emojiSize) {
                         ForEach(EmojiSize.allCases) { size in
                             Text(size.title).tag(size)
@@ -147,161 +206,261 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                 }
-                EmojiPreview(size: emojiSize)
             } header: {
-                Text("Emoji")
+                Text("Messages")
+            }
+            Section {
+                ConversationPreview(layout: layout, emojiSize: emojiSize)
+            } header: {
+                Text("Preview")
+            }
+        }
+    }
+}
+
+/// A few messages as a room would show them with the choices above: the layout, and an
+/// emoji-only message at its size. Always as tall as the tallest choice needs, the messages
+/// sitting at its foot as in a room, so the window keeps its height as the choices change.
+private struct ConversationPreview: View {
+    let layout: MessageLayout
+    let emojiSize: EmojiSize
+
+    private struct Line: Identifiable {
+        let id: Int
+        let sender: String
+        let color: Color
+        let time: String
+        let text: String
+        var isEmoji = false
+        /// The first of a run of messages from one person, which carries their name.
+        var startsGroup = true
+    }
+
+    private let lines = [
+        Line(id: 0, sender: "Bob", color: .orange, time: "9:41 AM", text: "Shall we ship the build today?"),
+        Line(id: 1, sender: "Alice", color: .indigo, time: "9:42 AM", text: "Yes, right after lunch"),
+        Line(id: 2, sender: "Alice", color: .indigo, time: "9:42 AM", text: "🎉🙌", isEmoji: true, startsGroup: false),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines) { line in
+                switch layout {
+                case .modern: modernRow(line)
+                case .irc: ircRow(line)
+                }
+            }
+        }
+        // The section's own box frames it: a card of its own inside would be a box in a box.
+        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, minHeight: 160, alignment: .bottomLeading)
+        .animation(.snappy(duration: 0.25), value: layout)
+        .animation(.snappy(duration: 0.25), value: emojiSize)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Preview of messages in the \(layout.title) layout, with emoji \(emojiSize.title.lowercased())")
+    }
+
+    private func text(_ line: Line) -> some View {
+        Text(line.text)
+            .font(line.isEmoji ? emojiSize.pointSize.map { .system(size: $0) } ?? .body : .body)
+    }
+
+    private func modernRow(_ line: Line) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            if line.startsGroup {
+                Circle()
+                    .fill(line.color)
+                    .frame(width: 28, height: 28)
+                    .overlay {
+                        Text(String(line.sender.prefix(1)))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+            } else {
+                Color.clear.frame(width: 28, height: 1)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                if line.startsGroup {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(line.sender)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(line.color)
+                        Text(line.time)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                text(line)
+            }
+        }
+        .padding(.top, line.startsGroup ? 9 : 3)
+    }
+
+    private func ircRow(_ line: Line) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(line.time)
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
+                .frame(width: 54, alignment: .trailing)
+            Text(line.sender)
+                .fontWeight(.semibold)
+                .foregroundStyle(line.color)
+                .frame(width: 44, alignment: .trailing)
+            text(line)
+        }
+        .padding(.top, 3)
+    }
+}
+
+// MARK: - Privacy
+
+private struct PrivacySettingsTab: View {
+    @AppStorage(OwnPresence.sharingKey) private var sharesPresence = true
+
+    var body: some View {
+        SettingsForm {
+            Section {
+                Toggle(isOn: $sharesPresence) {
+                    Text("Show when I'm online")
+                    Text("People in your direct chats see when you're online or away.")
+                }
             } footer: {
-                Text("A message of nothing but a few emoji is drawn at this size.")
+                SectionNote(text: "Some servers don't share anyone's online status.")
+            }
+        }
+    }
+}
+
+// MARK: - Accounts
+
+private struct AccountsSettingsTab: View {
+    @Environment(AccountStore.self) private var store
+    @State private var accountToSignOut: AccountSession?
+    @State private var accountToVerify: AccountSession?
+
+    var body: some View {
+        SettingsForm {
+            Section {
+                ForEach(store.accounts) { account in
+                    AccountSettingsRow(account: account,
+                                       verify: { accountToVerify = account },
+                                       signOut: { accountToSignOut = account })
+                }
+            } footer: {
+                HStack {
+                    Spacer()
+                    Button("Add Account…", action: addAccount)
+                }
+            }
+        }
+        .sheet(item: $accountToVerify) { account in
+            RecoverySheet(account: account)
+        }
+        .confirmationDialog("Sign out of \(accountToSignOut?.userID ?? "")?",
+                            isPresented: Binding(get: { accountToSignOut != nil },
+                                                 set: { if !$0 { accountToSignOut = nil } })) {
+            Button("Sign Out", role: .destructive) {
+                if let account = accountToSignOut {
+                    Task { await store.signOut(account) }
+                }
+            }
+        } message: {
+            Text("Local message history and encryption keys for this account will be removed from this Mac.")
+        }
+    }
+}
+
+extension AccountsSettingsTab {
+    /// Signing in happens in the main window, as for the first account: a sheet that tall would
+    /// hang off the foot of this window, which is only as tall as its list of accounts.
+    private func addAccount() {
+        let settings = NSApp.keyWindow
+        store.isAddingAccount = true
+        NSApp.windows.first { $0 !== settings && $0.isVisible && $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
+        settings?.close()
+    }
+}
+
+/// An account: who it is, whether this Mac is a trusted session of it, and signing out.
+private struct AccountSettingsRow: View {
+    let account: AccountSession
+    let verify: () -> Void
+    let signOut: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            AvatarView(media: account.media,
+                       url: account.avatarURL,
+                       name: account.displayName ?? account.userID,
+                       seed: account.userID,
+                       size: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(account.displayName ?? account.userID.matrixLocalpart)
+                    .fontWeight(.medium)
+                Text(account.userID)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 10)
+                    .textSelection(.enabled)
+                verificationLine
             }
+            Spacer(minLength: 8)
+            // Signing out is rare and can't be undone: in a menu, not a button on every row.
+            Menu {
+                Button("Copy User ID") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(account.userID, forType: .string)
+                }
+                if account.verification == .unverified {
+                    Button("Verify This Mac…", action: verify)
+                }
+                Divider()
+                Button("Sign Out…", action: signOut)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More for this account")
+            .accessibilityLabel("More for \(account.displayName ?? account.userID)")
         }
-        .formStyle(.grouped)
-        .frame(width: 480)
-        // The window takes its height from the form, so nothing scrolls or clips.
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder private var verificationLine: some View {
+        switch account.verification {
+        case .verified:
+            Label("This Mac is verified", systemImage: "checkmark.seal.fill")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .labelStyle(TintedIconLabel(tint: .green))
+        case .unverified:
+            HStack(spacing: 6) {
+                Label("This Mac isn't verified", systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .labelStyle(TintedIconLabel(tint: .orange))
+                Button("Verify…", action: verify)
+                    .buttonStyle(.link)
+                    .font(.subheadline)
+            }
+        default:
+            EmptyView()
+        }
     }
 }
 
-/// A message of two emoji as the timeline would draw it at the chosen size. Always as tall as
-/// the largest size needs, so the window doesn't change height as the choice changes.
-private struct EmojiPreview: View {
-    let size: EmojiSize
+/// A label whose icon has its own colour, its text the surrounding one.
+private struct TintedIconLabel: LabelStyle {
+    let tint: Color
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(Color.indigo)
-                .frame(width: 28, height: 28)
-                .overlay {
-                    Text("A")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("Alice")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Color.indigo)
-                    Text("9:41 AM")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text("🎉🙌")
-                    .font(size.pointSize.map { .system(size: $0) } ?? .body)
-                    .contentTransition(.interpolate)
-            }
-            Spacer(minLength: 0)
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon.foregroundStyle(tint)
+            configuration.title
         }
-        .padding(.vertical, 4)
-        .frame(height: 78, alignment: .top)
-        .animation(.snappy(duration: 0.25), value: size)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Preview: a message of two emoji, \(size.title.lowercased()) size")
-    }
-}
-
-/// One choice of message layout: a small drawing of it, its name and a line about it.
-private struct LayoutOption: View {
-    let layout: MessageLayout
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                LayoutThumbnail(layout: layout)
-                    .frame(height: 92)
-                    .frame(maxWidth: .infinity)
-                    .background(Color(nsColor: .textBackgroundColor),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.separator),
-                                          lineWidth: isSelected ? 2.5 : 1)
-                    }
-                VStack(spacing: 2) {
-                    Text(layout.title)
-                        .fontWeight(isSelected ? .semibold : .regular)
-                    Text(layout.summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(layout.title) layout. \(layout.summary)")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-}
-
-/// A schematic of a few messages in the given layout: bars for text, dots for avatars.
-private struct LayoutThumbnail: View {
-    let layout: MessageLayout
-
-    private static let text = Color.primary.opacity(0.26)
-    private static let time = Color.primary.opacity(0.13)
-    private static let senders: [Color] = [.orange, .teal, .purple]
-
-    var body: some View {
-        Group {
-            switch layout {
-            case .modern: modern
-            case .irc: irc
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .accessibilityHidden(true)
-    }
-
-    private var modern: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            group(sender: 0, name: 34, lines: [96, 62])
-            group(sender: 1, name: 26, lines: [78])
-        }
-    }
-
-    private func group(sender: Int, name: CGFloat, lines: [CGFloat]) -> some View {
-        HStack(alignment: .top, spacing: 7) {
-            Circle()
-                .fill(Self.senders[sender])
-                .frame(width: 16, height: 16)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 5) {
-                    bar(name, Self.senders[sender])
-                    bar(14, Self.time)
-                }
-                ForEach(lines, id: \.self) { bar($0, Self.text) }
-            }
-            .padding(.top, 2)
-        }
-    }
-
-    private var irc: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            line(sender: 0, name: 30, text: 92)
-            line(sender: 0, name: 30, text: 58)
-            line(sender: 1, name: 22, text: 76)
-            line(sender: 2, name: 26, text: 84)
-            line(sender: 1, name: 22, text: 44)
-        }
-    }
-
-    private func line(sender: Int, name: CGFloat, text: CGFloat) -> some View {
-        HStack(spacing: 6) {
-            bar(14, Self.time)
-            bar(name, Self.senders[sender])
-                .frame(width: 30, alignment: .trailing)
-            bar(text, Self.text)
-        }
-    }
-
-    private func bar(_ width: CGFloat, _ color: Color) -> some View {
-        Capsule().fill(color).frame(width: width, height: 5)
     }
 }
