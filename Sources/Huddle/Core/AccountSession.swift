@@ -64,10 +64,16 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var pendingClears: Set<String> = []
     @ObservationIgnored private var roomHandles: [String: Room] = [:]
     @ObservationIgnored private var timelines: [String: RoomTimeline] = [:]
+    @ObservationIgnored private var probes: [String: RoomPreviewProbe] = [:]
+    @ObservationIgnored private var visibleRooms: Set<String> = []
+    @ObservationIgnored private var subscribedRooms: Set<String> = []
+    @ObservationIgnored private var subscriptionTask: Task<Void, Never>?
     @ObservationIgnored private var timelineOrder: [String] = []
 
     private static let pageSize: UInt32 = 200
     private static let maxCachedTimelines = 6
+    /// Rooms on screen kept subscribed at once: a full window's worth, with room to spare.
+    private static let maxSubscribedRooms = 30
 
     init(id: String, userID: String, client: Client) {
         self.id = id
@@ -166,6 +172,9 @@ final class AccountSession: Identifiable {
         handles.removeAll()
         timelines.values.forEach { $0.stop() }
         timelines.removeAll()
+        subscriptionTask?.cancel()
+        probes.values.forEach { $0.stop() }
+        probes.removeAll()
         let syncService = syncService
         self.syncService = nil
         await syncService?.stop()
@@ -274,10 +283,10 @@ final class AccountSession: Identifiable {
         let timeline = RoomTimeline(room: room)
         timeline.onLatestReaction = { [weak self] preview in self?.reactionPreviews[roomID] = preview }
         timelines[roomID] = timeline
+        // The open room reports its own reactions now; its probe has nothing to add.
+        probes.removeValue(forKey: roomID)?.stop()
         touch(roomID)
-        if let roomListService {
-            Task.detached { try? await roomListService.setRoomSubscriptions(roomIds: [roomID]) }
-        }
+        updateSubscriptions(now: true)
         return timeline
     }
 
@@ -293,12 +302,69 @@ final class AccountSession: Identifiable {
         room(id: roomID).map { RoomThreadList(room: $0) }
     }
 
+    // MARK: Rooms on screen
+
+    /// A room row scrolled into view in the list.
+    func roomBecameVisible(_ roomID: String) {
+        guard visibleRooms.insert(roomID).inserted else { return }
+        updateSubscriptions()
+    }
+
+    func roomBecameHidden(_ roomID: String) {
+        guard visibleRooms.remove(roomID) != nil else { return }
+        updateSubscriptions()
+    }
+
+    /// Keeps the rooms on screen, and the rooms whose timelines are open, subscribed. A
+    /// subscribed room's newest events (about 20) come in with every sync, so its preview is up
+    /// to date and opening it shows the latest messages at once. Rooms further down the list
+    /// aren't subscribed: they get the one newest event the room list asks for.
+    ///
+    /// Changes are gathered for a moment, since each one interrupts the sync in progress.
+    private func updateSubscriptions(now: Bool = false) {
+        subscriptionTask?.cancel()
+        subscriptionTask = Task { [weak self] in
+            if !now { try? await Task.sleep(for: .milliseconds(350)) }
+            guard let self, !Task.isCancelled, let roomListService = self.roomListService else { return }
+            // Most recent first, up to the limit; open rooms always.
+            let order = Dictionary(uniqueKeysWithValues: self.rooms.enumerated().map { ($1.id, $0) })
+            let onScreen = self.visibleRooms.sorted { (order[$0] ?? .max) < (order[$1] ?? .max) }
+                .prefix(Self.maxSubscribedRooms)
+            let wanted = Array(Set(onScreen).union(self.timelineOrder))
+            self.updateProbes(for: Set(onScreen))
+            guard Set(wanted) != self.subscribedRooms else { return }
+            self.subscribedRooms = Set(wanted)
+            if AppEnvironment.isDev {
+                print("DEV_SUBSCRIPTIONS \(self.userID) rooms=\(wanted.count) probes=\(self.probes.count)")
+                fflush(stdout)
+            }
+            Task.detached { try? await roomListService.setRoomSubscriptions(roomIds: wanted) }
+        }
+    }
+
+    /// A probe for every room on screen that isn't open, to catch reactions the room list misses.
+    private func updateProbes(for onScreen: Set<String>) {
+        for (roomID, probe) in probes where !onScreen.contains(roomID) {
+            probe.stop()
+            probes[roomID] = nil
+        }
+        for roomID in onScreen where probes[roomID] == nil && timelines[roomID] == nil {
+            guard let room = room(id: roomID) else { continue }
+            probes[roomID] = RoomPreviewProbe(room: room) { [weak self] preview in
+                guard let self, self.timelines[roomID] == nil else { return }
+                self.reactionPreviews[roomID] = preview
+            }
+        }
+    }
+
     private func touch(_ roomID: String) {
         timelineOrder.removeAll { $0 == roomID }
         timelineOrder.append(roomID)
         while timelineOrder.count > Self.maxCachedTimelines {
             let evicted = timelineOrder.removeFirst()
             timelines.removeValue(forKey: evicted)?.stop()
+            // Still on screen, it needs a probe again; and its subscription may lapse.
+            updateSubscriptions()
         }
     }
 

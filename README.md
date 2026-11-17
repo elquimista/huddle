@@ -3,7 +3,7 @@
 A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [Matrix Rust SDK](https://github.com/matrix-org/matrix-rust-sdk), the same engine as Element X, so it uses native sliding sync and end-to-end encryption. Several accounts can be signed in at once, all syncing side by side.
 
 - **Native:** SwiftUI, no Electron or web view. The app is about 50 MB and idles around 65 MB of memory.
-- **Sliding sync:** the room list loads instantly whatever the account's size. Homeservers without native sliding sync (MSC4186) are not supported.
+- **Sliding sync:** the room list loads instantly whatever the account's size. The rooms on screen in the list are kept subscribed, so their previews (reactions included) stay current and opening one shows its latest messages at once; rooms further down get only their newest event until they scroll into view. Homeservers without native sliding sync (MSC4186) are not supported.
 - **Multiple accounts:** an avatar rail switches accounts (⌘1–9); each has its own unread badge and its own encrypted local store.
 - **Sign-in:** username and password in the app wherever the homeserver accepts them, with OAuth in your browser as the alternative (needed for single sign-on, passkeys and two-step verification) or where it is the only way.
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions with a searchable emoji picker, formatted messages with mention pills, and a markdown composer that suggests people as you type "@". Settings (⌘,) switches between the modern message layout and a compact IRC-style one.

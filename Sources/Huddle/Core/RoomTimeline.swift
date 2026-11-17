@@ -150,6 +150,36 @@ struct MediaRef: Equatable {
 struct ReactionPreview: Equatable {
     var text: String
     var date: Date
+
+    /// The newest reaction among these messages, if it came after the newest of them.
+    @MainActor
+    static func newest(in rows: [TimelineRow], ownUserID: String, name: @escaping (String) -> String?) -> ReactionPreview? {
+        var newest: ReactionPreview?
+        var lastMessageDate = Date.distantPast
+        for row in rows {
+            guard case .message(let message) = row.kind else { continue }
+            lastMessageDate = max(lastMessageDate, message.date)
+            for reaction in message.reactions {
+                guard let sender = reaction.latestSender, let date = reaction.latestDate,
+                      date > (newest?.date ?? .distantPast) else { continue }
+                let target: String
+                switch message.body {
+                case .text(let text), .emote(let text):
+                    let plain = MessageFormatter.plainText(
+                        text: text, formatted: message.html.map { FormattedBody(format: .html, body: $0) }, name: name)
+                    target = "“\(plain.prefix(60))”"
+                case .image(let image): target = image.isSticker ? "a sticker" : (image.filename.isEmpty ? "an image" : image.filename)
+                case .audio(let audio): target = audio.isVoice ? "a voice message" : audio.filename
+                case .attachment(_, let name): target = name
+                default: target = "a message"
+                }
+                let who = sender == ownUserID ? "You" : (name(sender) ?? sender.matrixLocalpart)
+                newest = ReactionPreview(text: "\(who) reacted \(reaction.key) to \(target)", date: date)
+            }
+        }
+        if let found = newest, found.date <= lastMessageDate { return nil }
+        return newest
+    }
 }
 
 extension String {
@@ -364,31 +394,7 @@ final class RoomTimeline {
     /// The newest reaction, if it came after the newest message: the room list shows it as the
     /// room's latest activity.
     private func updateLatestReaction() {
-        var newest: ReactionPreview?
-        var lastMessageDate = Date.distantPast
-        for row in rows {
-            guard case .message(let message) = row.kind else { continue }
-            lastMessageDate = max(lastMessageDate, message.date)
-            for reaction in message.reactions {
-                guard let sender = reaction.latestSender, let date = reaction.latestDate,
-                      date > (newest?.date ?? .distantPast) else { continue }
-                let target: String
-                switch message.body {
-                case .text(let text), .emote(let text):
-                    let plain = MessageFormatter.plainText(
-                        text: text, formatted: message.html.map { FormattedBody(format: .html, body: $0) },
-                        name: { [profiles] in profiles[$0]?.name })
-                    target = "“\(plain.prefix(60))”"
-                case .image(let image): target = image.isSticker ? "a sticker" : (image.filename.isEmpty ? "an image" : image.filename)
-                case .audio(let audio): target = audio.isVoice ? "a voice message" : audio.filename
-                case .attachment(_, let name): target = name
-                default: target = "a message"
-                }
-                let who = sender == ownUserID ? "You" : (profiles[sender]?.name ?? sender.matrixLocalpart)
-                newest = ReactionPreview(text: "\(who) reacted \(reaction.key) to \(target)", date: date)
-            }
-        }
-        if let found = newest, found.date <= lastMessageDate { newest = nil }
+        let newest = ReactionPreview.newest(in: rows, ownUserID: ownUserID, name: { [profiles] in profiles[$0]?.name })
         if newest != latestReaction {
             latestReaction = newest
             onLatestReaction?(newest)

@@ -11,8 +11,10 @@ struct RoomListView: View {
                 RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id])
                     .tag(room.id)
                     .onAppear {
+                        account.roomBecameVisible(room.id)
                         if room.id == account.rooms.last?.id { account.loadMoreRooms() }
                     }
+                    .onDisappear { account.roomBecameHidden(room.id) }
             }
         }
         .listStyle(.sidebar)
