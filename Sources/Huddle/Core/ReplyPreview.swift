@@ -56,9 +56,12 @@ struct ReplyPreview: Equatable {
         case .emote(let body):
             text = "* \(message.senderName) " + MessageFormatter.plainText(text: body, formatted: formatted)
         case .image(let image):
-            (text, icon) = (image.caption ?? (image.isSticker ? "Sticker" : "Image"), image.isSticker ? "face.smiling" : "photo")
+            (text, icon) = image.isSticker
+                ? ("Sticker", "face.smiling")
+                : (AttachmentText.line(name: image.filename, caption: image.caption, kind: "Image"), "photo")
         case .audio(let audio):
-            (text, icon) = (audio.isVoice ? "Voice message" : audio.filename, "waveform")
+            (text, icon) = (audio.isVoice ? "Voice message"
+                            : AttachmentText.line(name: audio.filename, caption: audio.caption, kind: "Audio"), "waveform")
         case .attachment(let symbol, let name):
             (text, icon) = (name, symbol)
         case .undecryptable:
@@ -83,10 +86,15 @@ struct ReplyPreview: Equatable {
                 return (MessageFormatter.plainText(text: notice.body, formatted: notice.formatted), nil)
             case .emote(let emote):
                 return ("* \(senderName) " + MessageFormatter.plainText(text: emote.body, formatted: emote.formatted), nil)
-            case .image(let image): return (image.caption ?? "Image", "photo")
-            case .video(let video): return (video.caption ?? "Video", "film")
-            case .audio(let audio): return (audio.voice != nil ? "Voice message" : audio.filename, "waveform")
-            case .file(let file): return (file.caption ?? file.filename, "doc")
+            case .image(let image):
+                return (AttachmentText.line(name: image.filename, caption: image.caption, kind: "Image"), "photo")
+            case .video(let video):
+                return (AttachmentText.line(name: video.filename, caption: video.caption, kind: "Video"), "film")
+            case .audio(let audio):
+                return (audio.voice != nil ? "Voice message"
+                        : AttachmentText.line(name: audio.filename, caption: audio.caption, kind: "Audio"), "waveform")
+            case .file(let file):
+                return (AttachmentText.line(name: file.filename, caption: file.caption, kind: "File"), "doc")
             case .gallery: return ("Images", "photo.on.rectangle")
             case .location: return ("Location", "mappin.and.ellipse")
             case .other(_, let body): return (body.replacingOccurrences(of: "\n", with: " "), nil)

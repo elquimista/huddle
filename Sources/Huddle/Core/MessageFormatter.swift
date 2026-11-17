@@ -120,6 +120,19 @@ enum MessageFormatter {
     }
 }
 
+/// How an attached file reads in one line of text: the room list, an alert, a reply's quote.
+enum AttachmentText {
+    /// The file's name, then its caption if it has one: "sunset.jpg · Look at this".
+    ///
+    /// - Parameter kind: what to call it if it has no name, such as "Image".
+    static func line(name: String, caption: String?, kind: String) -> String {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shown = name.isEmpty ? kind : name
+        let caption = caption?.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return caption.isEmpty || caption == name ? shown : "\(shown) · \(caption)"
+    }
+}
+
 /// Marks a run as a mention pill, so later passes leave it alone.
 enum MentionAttribute: AttributedStringKey {
     typealias Value = Bool

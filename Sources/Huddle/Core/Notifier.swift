@@ -133,11 +133,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             case .text(let content): return plain(content.body, content.formatted)
             case .notice(let content): return plain(content.body, content.formatted)
             case .emote(let content): return "* " + plain(content.body, content.formatted)
-            case .image(let content): return content.caption ?? "Sent an image"
-            case .video(let content): return content.caption ?? "Sent a video"
+            // Files are named, as they are in the room list.
+            case .image(let content): return AttachmentText.line(name: content.filename, caption: content.caption, kind: "Image")
+            case .video(let content): return AttachmentText.line(name: content.filename, caption: content.caption, kind: "Video")
             case .audio(let content):
-                return content.caption ?? (content.voice != nil ? "Sent a voice message" : "Sent an audio file: \(content.filename)")
-            case .file(let content): return content.caption ?? "Sent a file: \(content.filename)"
+                return content.voice != nil ? "Voice message"
+                    : AttachmentText.line(name: content.filename, caption: content.caption, kind: "Audio")
+            case .file(let content): return AttachmentText.line(name: content.filename, caption: content.caption, kind: "File")
             case .gallery: return "Sent images"
             case .location: return "Shared a location"
             case .other(_, let body): return body

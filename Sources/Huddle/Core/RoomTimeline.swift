@@ -377,7 +377,7 @@ final class RoomTimeline {
                         text: text, formatted: message.html.map { FormattedBody(format: .html, body: $0) },
                         name: { [profiles] in profiles[$0]?.name })
                     target = "“\(plain.prefix(60))”"
-                case .image: target = "an image"
+                case .image(let image): target = image.isSticker ? "a sticker" : (image.filename.isEmpty ? "an image" : image.filename)
                 case .audio(let audio): target = audio.isVoice ? "a voice message" : audio.filename
                 case .attachment(_, let name): target = name
                 default: target = "a message"
@@ -808,10 +808,13 @@ extension TimelineItemContent {
             switch content.kind {
             case .message(let message):
                 switch message.msgType {
-                case .image: text = "Image"
-                case .video: text = "Video"
-                case .audio(let content): text = content.voice != nil ? "Voice message" : content.filename
-                case .file(let file): text = file.filename
+                // A file is known by its name, not by what kind of file it is.
+                case .image(let image): text = AttachmentText.line(name: image.filename, caption: image.caption, kind: "Image")
+                case .video(let video): text = AttachmentText.line(name: video.filename, caption: video.caption, kind: "Video")
+                case .audio(let audio):
+                    text = audio.voice != nil ? "Voice message"
+                        : AttachmentText.line(name: audio.filename, caption: audio.caption, kind: "Audio")
+                case .file(let file): text = AttachmentText.line(name: file.filename, caption: file.caption, kind: "File")
                 case .emote(let emote):
                     return "* \(who) \(MessageFormatter.plainText(text: emote.body, formatted: emote.formatted))"
                 case .text(let content): text = MessageFormatter.plainText(text: content.body, formatted: content.formatted)

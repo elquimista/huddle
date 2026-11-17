@@ -1,5 +1,4 @@
 import MatrixRustSDK
-import QuickLook
 import SwiftUI
 
 /// A scrolling list of messages with a composer: a room's timeline, or one thread's.
@@ -22,10 +21,6 @@ struct TimelineView: View {
     @State private var imageNotice: String?
     @State private var isDropTarget = false
     @State private var pasteInterceptor = PasteInterceptor()
-    /// The image open in the full-size viewer, as the file Quick Look is showing.
-    @State private var previewURL: URL?
-    /// The image being fetched to open, by its address.
-    @State private var openingImage: String?
     private static let mostImagesAtOnce = 10
     /// Mentions picked from the suggestions for the message being written.
     @State private var composedMentions: [ComposedMention] = []
@@ -78,10 +73,11 @@ struct TimelineView: View {
                                         actions: MessageActions(openThread: onOpenThread,
                                                                 reply: { startReply(to: $0) },
                                                                 showOriginal: { showOriginal($0, proxy) },
-                                                                openImage: { openImage($0) }),
+                                                                openImage: { image, shown in
+                                                                    ImageViewerState.shared.open(image, media: media, placeholder: shown)
+                                                                }),
                                         isHighlighted: row.id == highlightedRow,
-                                        searchingFor: searchingFor,
-                                        openingImage: openingImage)
+                                        searchingFor: searchingFor)
                             .id(row.id)
                         if row.id == threadRootRowID {
                             RepliesDivider(count: replyCount)
@@ -204,15 +200,9 @@ struct TimelineView: View {
             if isDropTarget { DropTargetOverlay() }
         }
         .animation(.easeOut(duration: 0.12), value: isDropTarget)
-        // The full-size viewer is Quick Look, as in Finder and Messages.
-        .quickLookPreview($previewURL)
-        .onChange(of: previewURL) { old, new in
-            if let old, old != new { ImagePreviewFiles.remove(old) }
-        }
         .onDisappear {
             input.stop()
             pasteInterceptor.stop()
-            if let previewURL { ImagePreviewFiles.remove(previewURL) }
             AudioPlayback.shared.stop(owner: timeline)
             let timeline = timeline
             Task { await timeline.leave() }
@@ -402,22 +392,6 @@ struct TimelineView: View {
         }
     }
 
-    /// Opens an image at full size in Quick Look.
-    private func openImage(_ image: ImageAttachment) {
-        guard openingImage == nil else { return }
-        openingImage = image.media.source.url()
-        Task {
-            defer { openingImage = nil }
-            do {
-                let data = try await media.imageFile(source: image.media.source)
-                previewURL = try ImagePreviewFiles.write(data, named: image.suggestedFilename)
-                imageNotice = nil
-            } catch {
-                imageNotice = "That image couldn't be loaded. Check your connection and try again."
-            }
-        }
-    }
-
     // MARK: Replies
 
     private func startReply(to message: MessageRow) {
@@ -524,13 +498,12 @@ private struct TimelineRowView: View {
     let actions: MessageActions
     let isHighlighted: Bool
     let searchingFor: String?
-    let openingImage: String?
 
     var body: some View {
         switch row.kind {
         case .message(let message):
             MessageView(message: message, timeline: timeline, media: media, actions: actions,
-                        isHighlighted: isHighlighted, searchingFor: searchingFor, openingImage: openingImage)
+                        isHighlighted: isHighlighted, searchingFor: searchingFor)
         case .notice(let text):
             Text(text)
                 .font(.callout)
@@ -564,7 +537,6 @@ private struct MessageView: View {
     /// Lit up briefly after being jumped to from a reply.
     let isHighlighted: Bool
     let searchingFor: String?
-    let openingImage: String?
 
     /// Opens this message's thread, when it can have one from here.
     private var openThread: (() -> Void)? {
@@ -589,7 +561,11 @@ private struct MessageView: View {
     private static let quickReactions = ["👍", "❤️", "😂"]
 
     /// The action bar stays up while its emoji picker is open, even with the pointer elsewhere.
-    private var showsActions: Bool { (isHovering || showsPicker || isDevHovered) && message.sendState == nil }
+    private var showsActions: Bool {
+        // Not under the image viewer: the pointer that opened it is still over this message,
+        // and no "left" arrives once the viewer is in the way.
+        (isHovering || showsPicker || isDevHovered) && message.sendState == nil && ImageViewerState.shared.item == nil
+    }
 
     private var isDevHovered: Bool {
         guard let wanted = DevHooks.hoverText, case .text(let text) = message.body else { return false }
@@ -654,7 +630,7 @@ private struct MessageView: View {
                 Button("Save Audio As…") { AttachmentSaver.save(audio, media: media) }
             }
             if case .image(let image) = message.body, message.sendState == nil {
-                Button("Open") { actions.openImage(image) }
+                Button("Open") { actions.openImage(image, nil) }
                 Button("Copy Image") {
                     Task {
                         if let data = try? await media.imageFile(source: image.media.source) { ImagePasteboard.copy(data) }
@@ -826,8 +802,7 @@ private struct MessageView: View {
                 ImageMessageView(image: image, media: media, sendState: message.sendState,
                                  uploadProgress: message.uploadProgress,
                                  localPreview: message.localPreview,
-                                 isOpening: openingImage == image.media.source.url(),
-                                 open: { actions.openImage(image) },
+                                 open: { actions.openImage(image, $0) },
                                  cancelUpload: message.sendState == nil ? nil : {
                                      Task { await timeline.discard(message.itemID) }
                                  })

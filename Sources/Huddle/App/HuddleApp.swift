@@ -51,6 +51,13 @@ struct RootView: View {
                 LoginView(isFirstAccount: true)
             }
         }
+        // The full-size image viewer covers the whole window, title bar included, which an
+        // overlay here can't reach. `ImageViewerPresenter` puts it above everything, where it
+        // takes every click. (Don't switch hit-testing off on this content instead: that makes
+        // the sidebar lose its place under the toolbar and jump upward.)
+        .onChange(of: ImageViewerState.shared.item?.id) {
+            ImageViewerPresenter.shared.show(ImageViewerState.shared.item)
+        }
         .sheet(isPresented: Binding(
             get: { store.isAddingAccount && !store.accounts.isEmpty },
             set: { store.isAddingAccount = $0 })) {

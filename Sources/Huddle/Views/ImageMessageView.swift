@@ -12,9 +12,8 @@ struct ImageMessageView: View {
     var uploadProgress: Double?
     /// The picture itself, for an image that hasn't been handed over for upload yet.
     var localPreview: NSImage?
-    /// True while the full-size image is being fetched to open it.
-    var isOpening = false
-    let open: () -> Void
+    /// Opens the image at full size. Given what is on screen now, to show until the rest loads.
+    let open: (NSImage?) -> Void
     /// Stops the upload and removes the message. Nil once it has been sent.
     var cancelUpload: (() -> Void)?
 
@@ -39,7 +38,7 @@ struct ImageMessageView: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
 
         ZStack {
-            Button(action: hasFailed ? retry : open) {
+            Button(action: hasFailed ? retry : { open(still) }) {
                 ZStack {
                     placeholder
                     if let animation, sendState == nil {
@@ -66,8 +65,6 @@ struct ImageMessageView: View {
                 failureNote
             } else if sendState != nil {
                 uploadOverlay
-            } else if isOpening {
-                badge { ProgressView().controlSize(.small).colorScheme(.dark) }
             } else if image.isAnimated, animation == nil, still != nil {
                 // Too large to play unasked: say what it is; opening it plays it.
                 badge { Text("GIF").font(.caption2.weight(.bold)).foregroundStyle(.white) }
@@ -210,7 +207,7 @@ struct ImageMessageView: View {
 }
 
 /// Plays an animated image (a GIF). SwiftUI's own `Image` shows only the first frame.
-private struct AnimatedImage: NSViewRepresentable {
+struct AnimatedImage: NSViewRepresentable {
     let image: NSImage
     let isPlaying: Bool
 
@@ -242,37 +239,5 @@ private enum BlurCache {
         guard let image = BlurHash.image(from: hash) else { return nil }
         cache.setObject(image, forKey: hash as NSString)
         return image
-    }
-}
-
-/// Files for the full-size viewer. Quick Look shows files, so an image being viewed is written
-/// to a folder only this user can read, and removed when the viewer closes.
-enum ImagePreviewFiles {
-    private static var folder: URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".preview", isDirectory: true)
-    }
-
-    static func write(_ data: Data, named name: String) throws -> URL {
-        let manager = FileManager.default
-        // Each in a folder of its own, so two images with one name don't collide.
-        let directory = folder.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
-        let safeName = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-        let url = directory.appendingPathComponent(safeName.isEmpty ? "Image" : safeName)
-        guard manager.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        return url
-    }
-
-    static func remove(_ url: URL) {
-        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-    }
-
-    /// Clears anything left behind, at launch and at quit.
-    static func removeAll() {
-        try? FileManager.default.removeItem(at: folder)
     }
 }

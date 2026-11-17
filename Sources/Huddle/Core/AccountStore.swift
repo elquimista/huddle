@@ -23,11 +23,10 @@ final class AccountStore {
     func restore() async {
         DevHooks.applyAppearance()
         Notifier.shared.store = self
-        // Images opened in the viewer are written to a private folder; leave none behind.
-        ImagePreviewFiles.removeAll()
-        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
-            ImagePreviewFiles.removeAll()
-        }
+        // An earlier build wrote images being viewed to a temporary folder. Nothing does now;
+        // this clears anything that build left behind.
+        try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory
+            .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".preview", isDirectory: true))
         if !DevHooks.startsFresh { await restoreStoredAccounts() }
         isRestoring = false
         await DevHooks.run(store: self)
