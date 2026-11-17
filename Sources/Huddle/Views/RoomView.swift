@@ -50,6 +50,13 @@ struct RoomView: View {
             }
         }
         .navigationTitle(title)
+        // In a direct chat, whether the other person is around.
+        .navigationSubtitle(presenceLine)
+    }
+
+    private var presenceLine: String {
+        guard let user = summary?.directUserID else { return "" }
+        return account.presence.people[user]?.description ?? ""
     }
 
     private var title: String {

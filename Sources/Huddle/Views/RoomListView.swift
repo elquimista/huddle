@@ -8,7 +8,8 @@ struct RoomListView: View {
     var body: some View {
         List(selection: $account.selectedRoomID) {
             ForEach(account.rooms) { room in
-                RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id])
+                RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id],
+                        presence: room.directUserID.flatMap { account.presence.people[$0] })
                     .tag(room.id)
                     .onAppear {
                         account.roomBecameVisible(room.id)
@@ -65,6 +66,8 @@ private struct RoomRow: View {
     let room: RoomSummary
     let media: MediaLoader
     var reaction: ReactionPreview?
+    /// The other person's, in a direct chat.
+    var presence: PresenceInfo?
 
     /// The reaction, when it is more recent than the room's newest message.
     private var latestReaction: ReactionPreview? {
@@ -80,6 +83,9 @@ private struct RoomRow: View {
     var body: some View {
         HStack(spacing: 10) {
             AvatarView(media: media, url: room.avatarURL, name: room.name, seed: room.id, size: 36)
+                .presenceDot(presence, avatarSize: 36)
+                .help(presence?.description ?? "")
+                .accessibilityValue(presence?.description ?? "")
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(room.name)

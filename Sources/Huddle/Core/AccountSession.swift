@@ -7,6 +7,8 @@ struct RoomSummary: Identifiable, Equatable {
     var name: String
     var avatarURL: String?
     var isDirect = false
+    /// In a direct chat with one other person: who that is.
+    var directUserID: String?
     var isInvite = false
     var notifications = 0
     var mentions = 0
@@ -38,7 +40,12 @@ final class AccountSession: Identifiable {
     private(set) var verification: VerificationState = .unknown
     private(set) var needsReauth = false
     private(set) var startError: String?
-    var selectedRoomID: String?
+    var selectedRoomID: String? {
+        didSet { if selectedRoomID != oldValue { updatePresenceWatch() } }
+    }
+    /// Who is around, for the direct chats on screen.
+    let presence: PresenceTracker
+    @ObservationIgnored private let ownPresence: OwnPresence
     /// For rooms opened this session: a reaction that came after the room's newest message.
     private(set) var reactionPreviews: [String: ReactionPreview] = [:]
     /// What the panel beside each room's timeline shows, so it is still there on coming back.
@@ -80,6 +87,8 @@ final class AccountSession: Identifiable {
         self.userID = userID
         self.client = client
         self.media = MediaLoader(client: client)
+        self.presence = PresenceTracker(client: client)
+        self.ownPresence = OwnPresence(client: client)
     }
 
     // MARK: Lifecycle
@@ -129,6 +138,8 @@ final class AccountSession: Identifiable {
 
             await syncService.start()
             startError = nil
+            ownPresence.start()
+            presence.start()
         } catch {
             startError = error.userMessage
         }
@@ -173,6 +184,8 @@ final class AccountSession: Identifiable {
         timelines.values.forEach { $0.stop() }
         timelines.removeAll()
         subscriptionTask?.cancel()
+        presence.stop()
+        ownPresence.stop()
         probes.values.forEach { $0.stop() }
         probes.removeAll()
         let syncService = syncService
@@ -221,6 +234,8 @@ final class AccountSession: Identifiable {
         }
         let previous = self.rooms
         self.rooms = rooms
+        // A direct chat's other person may only now be known.
+        if rooms.contains(where: { $0.directUserID != nil && visibleRooms.contains($0.id) }) { updatePresenceWatch() }
         // A room that stops needing attention (read here or elsewhere) drops its notifications.
         // Only on a definite answer: the room is still listed and its counts were read. A room
         // missing from the list (a search, a list rebuild) says nothing about being read.
@@ -332,6 +347,7 @@ final class AccountSession: Identifiable {
                 .prefix(Self.maxSubscribedRooms)
             let wanted = Array(Set(onScreen).union(self.timelineOrder))
             self.updateProbes(for: Set(onScreen))
+            self.updatePresenceWatch()
             guard Set(wanted) != self.subscribedRooms else { return }
             self.subscribedRooms = Set(wanted)
             if AppEnvironment.isDev {
@@ -340,6 +356,13 @@ final class AccountSession: Identifiable {
             }
             Task.detached { try? await roomListService.setRoomSubscriptions(roomIds: wanted) }
         }
+    }
+
+    /// Presence for the other person in each direct chat on screen, and in the open one.
+    private func updatePresenceWatch() {
+        let partners = rooms.lazy.filter { self.visibleRooms.contains($0.id) }.compactMap(\.directUserID)
+        let open = selectedRoomID.flatMap { id in rooms.first { $0.id == id }?.directUserID }
+        presence.watch(Set(partners), focus: open)
     }
 
     /// A probe for every room on screen that isn't open, to catch reactions the room list misses.
@@ -397,8 +420,9 @@ extension RoomSummary {
             summary.notifications = Int(info.numUnreadNotifications)
             summary.mentions = Int(info.numUnreadMentions)
             summary.hasUnread = info.numUnreadMessages > 0 || info.isMarkedUnread
-            if summary.avatarURL == nil, info.isDirect, info.heroes.count == 1 {
-                summary.avatarURL = info.heroes[0].avatarUrl
+            if info.isDirect, info.heroes.count == 1 {
+                summary.directUserID = info.heroes[0].userId
+                if summary.avatarURL == nil { summary.avatarURL = info.heroes[0].avatarUrl }
             }
         }
         switch await room.latestEvent() {

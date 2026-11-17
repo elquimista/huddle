@@ -21,6 +21,8 @@ import Foundation
 ///   HUDDLE_DEV_STAGE         comma-separated image paths to put in the composer at launch, as if dropped there
 ///   HUDDLE_DEV_FREE_SCROLL   treat scrolling done through accessibility as the user's, so tests can scroll up
 ///   HUDDLE_DEV_CROP_THUMBNAILS  send images with a square thumbnail cropped from the middle, as some phone apps do
+///   HUDDLE_DEV_SLOW_ANIMATIONS  slow the timeline's animations down by this factor, to inspect them
+///   HUDDLE_DEV_PRESENCE_INTERVAL  seconds between presence checks, instead of 30 and 90
 ///   HUDDLE_DEV_NO_BROWSER  print the OAuth sign-in URL (DEV_OAUTH_URL ...) instead of opening it
 @MainActor
 enum DevHooks {
@@ -66,6 +68,9 @@ enum DevHooks {
 
     static let audioStartDelay: TimeInterval = AppEnvironment.isDev
         ? ProcessInfo.processInfo.environment["HUDDLE_DEV_AUDIO_DELAY"].flatMap(TimeInterval.init) ?? 0 : 0
+
+    nonisolated static let presenceInterval: TimeInterval? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_PRESENCE_INTERVAL"].flatMap(TimeInterval.init) : nil
 
     nonisolated static let cropsThumbnails = AppEnvironment.isDev
         && ProcessInfo.processInfo.environment["HUDDLE_DEV_CROP_THUMBNAILS"] != nil

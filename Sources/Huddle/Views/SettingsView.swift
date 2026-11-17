@@ -30,6 +30,7 @@ struct SettingsView: View {
     @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
     @AppStorage(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault
     @AppStorage(NotificationSettings.soundKey) private var notificationSound = true
+    @AppStorage(OwnPresence.sharingKey) private var sharesPresence = true
 
     var body: some View {
         Form {
@@ -51,6 +52,21 @@ struct SettingsView: View {
             } footer: {
                 // Sized and coloured like the rows' own descriptions, and lined up with their text.
                 Text("Your Matrix account's notification rules decide which rooms notify.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 10)
+            }
+
+            Section {
+                Toggle(isOn: $sharesPresence) {
+                    Text("Show when I'm online")
+                    Text("People in your direct chats see when you're online or away.")
+                }
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("Some servers don't share anyone's online status.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

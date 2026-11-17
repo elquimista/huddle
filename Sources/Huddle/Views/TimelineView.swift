@@ -21,6 +21,10 @@ struct TimelineView: View {
     @State private var imageNotice: String?
     @State private var isDropTarget = false
     @State private var pasteInterceptor = PasteInterceptor()
+    @State private var typeToCompose = TypeToCompose()
+    /// Lets a reader's avatar move from one message to another instead of vanishing and
+    /// reappearing.
+    @Namespace private var receipts
     private static let mostImagesAtOnce = 10
     /// Mentions picked from the suggestions for the message being written.
     @State private var composedMentions: [ComposedMention] = []
@@ -77,7 +81,8 @@ struct TimelineView: View {
                                                                     ImageViewerState.shared.open(image, media: media, placeholder: shown)
                                                                 }),
                                         isHighlighted: row.id == highlightedRow,
-                                        searchingFor: searchingFor)
+                                        searchingFor: searchingFor,
+                                        receipts: receipts)
                             .id(row.id)
                         if row.id == threadRootRowID {
                             RepliesDivider(count: replyCount)
@@ -180,7 +185,18 @@ struct TimelineView: View {
             appIsActive = DevHooks.assumesActive
         }
         .onAppear {
-            composerFocused = true
+            // Ready to type in. Not when the room was reached with the arrow keys, though: the
+            // keyboard stays in the room list so the arrows keep moving through it (typing
+            // still lands here, by way of `typeToCompose`).
+            if NSApp.currentEvent?.type != .keyDown {
+                composerFocused = true
+                // Clicking a row in the list leaves the keyboard with the list for a moment.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { composerFocused = true }
+            }
+            if timeline.threadRoot == nil {
+                typeToCompose.focus = { composerFocused = true }
+                typeToCompose.start()
+            }
             input.start()
             pasteInterceptor.onImages = { stage($0) }
             pasteInterceptor.start()
@@ -191,6 +207,7 @@ struct TimelineView: View {
             }
         }
         .onChange(of: composerFocused, initial: true) { pasteInterceptor.isActive = composerFocused }
+        .background { WindowReader { typeToCompose.window = $0 } }
         // Images dragged anywhere over the conversation land in the composer.
         .onDrop(of: ImageDrop.types, isTargeted: $isDropTarget) { providers in
             Task { stage(await ImageDrop.sources(from: providers)) }
@@ -203,6 +220,7 @@ struct TimelineView: View {
         .onDisappear {
             input.stop()
             pasteInterceptor.stop()
+            typeToCompose.stop()
             AudioPlayback.shared.stop(owner: timeline)
             let timeline = timeline
             Task { await timeline.leave() }
@@ -498,12 +516,13 @@ private struct TimelineRowView: View {
     let actions: MessageActions
     let isHighlighted: Bool
     let searchingFor: String?
+    let receipts: Namespace.ID
 
     var body: some View {
         switch row.kind {
         case .message(let message):
             MessageView(message: message, timeline: timeline, media: media, actions: actions,
-                        isHighlighted: isHighlighted, searchingFor: searchingFor)
+                        isHighlighted: isHighlighted, searchingFor: searchingFor, receipts: receipts)
         case .notice(let text):
             Text(text)
                 .font(.callout)
@@ -537,6 +556,7 @@ private struct MessageView: View {
     /// Lit up briefly after being jumped to from a reply.
     let isHighlighted: Bool
     let searchingFor: String?
+    let receipts: Namespace.ID
 
     /// Opens this message's thread, when it can have one from here.
     private var openThread: (() -> Void)? {
@@ -603,7 +623,7 @@ private struct MessageView: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            ReceiptView(message: message, media: media)
+            ReceiptView(message: message, media: media, space: receipts)
                 .padding(.bottom, 3)
         }
         .overlay(alignment: .topTrailing) {
@@ -970,9 +990,19 @@ private struct ReceiptView: View {
 
     let message: MessageRow
     let media: MediaLoader
+    let space: Namespace.ID
     @State private var showsReaders = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        content
+            // When someone reads further, their avatar glides down from the message they had
+            // read to the new one; a newcomer pops in, and the ticks fill in.
+            .animation(reduceMotion ? .easeOut(duration: 0.2) : Motion.receipt, value: message.readers.map(\.id))
+            .animation(.easeOut(duration: 0.3 * Motion.slowdown), value: message.delivery)
+    }
+
+    @ViewBuilder private var content: some View {
         if !message.readers.isEmpty {
             Button {
                 showsReaders = true
@@ -983,11 +1013,15 @@ private struct ReceiptView: View {
                             .font(.system(size: 10, weight: .medium))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
+                            .contentTransition(.numericText())
+                            .transition(.opacity)
                     }
                     HStack(spacing: -4) {
                         ForEach(message.readers.prefix(Self.maxAvatars).reversed()) { reader in
                             AvatarView(media: media, url: reader.avatarURL, name: reader.name, seed: reader.id, size: 16)
                                 .overlay { Circle().strokeBorder(.background, lineWidth: 1.5) }
+                                .matchedGeometryEffect(id: reader.id, in: space, isSource: true)
+                                .transition(reduceMotion ? .opacity : .scale(scale: 0.3).combined(with: .opacity))
                         }
                     }
                 }
@@ -1041,7 +1075,9 @@ private struct DeliveryMark: View {
         ZStack(alignment: .leading) {
             Image(systemName: "checkmark")
             if delivery != .sending {
-                Image(systemName: "checkmark").offset(x: 5)
+                Image(systemName: "checkmark")
+                    .offset(x: 5)
+                    .transition(.scale(scale: 0.4, anchor: .leading).combined(with: .opacity))
             }
         }
         // Same width in every state, so the first tick doesn't shift when the second appears.
@@ -1140,7 +1176,7 @@ private struct ThreadChip: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else if let date = thread.latestDate {
-                    Text("Last reply \(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))")
+                    Text("Last reply \(date.formatted(.relative(presentation: .named, unitsStyle: .wide)))")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1199,4 +1235,14 @@ private extension Date {
         if calendar.isDateInYesterday(self) { return "Yesterday" }
         return formatted(date: .complete, time: .omitted)
     }
+}
+
+/// Timings shared by the timeline's small animations.
+enum Motion {
+    /// The Dev build can slow every animation down, to look at one frame by frame.
+    static let slowdown: Double = AppEnvironment.isDev
+        ? max(1, ProcessInfo.processInfo.environment["HUDDLE_DEV_SLOW_ANIMATIONS"].flatMap(Double.init) ?? 1) : 1
+
+    /// A reader's avatar moving on: unhurried, settling without a bounce.
+    static let receipt = Animation.spring(duration: 0.45, bounce: 0.12).speed(1 / slowdown)
 }
