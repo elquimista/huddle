@@ -108,6 +108,24 @@ extension TimelineDiff {
     }
 }
 
+extension ThreadListUpdate {
+    var diff: VectorDiff<ThreadListItem> {
+        switch self {
+        case .append(let values): .append(values)
+        case .clear: .clear
+        case .pushFront(let value): .pushFront(value)
+        case .pushBack(let value): .pushBack(value)
+        case .popFront: .popFront
+        case .popBack: .popBack
+        case .insert(let index, let value): .insert(Int(index), value)
+        case .set(let index, let value): .set(Int(index), value)
+        case .remove(let index): .remove(Int(index))
+        case .truncate(let length): .truncate(Int(length))
+        case .reset(let values): .reset(values)
+        }
+    }
+}
+
 // MARK: - Closure-backed SDK listeners
 
 final class RoomEntriesListener: RoomListEntriesListener, @unchecked Sendable {
@@ -145,4 +163,10 @@ final class AuthErrorDelegate: ClientDelegate, @unchecked Sendable {
     init(_ handler: @escaping () -> Void) { self.handler = handler }
     func didReceiveAuthError(isSoftLogout: Bool) { handler() }
     func onBackgroundTaskErrorReport(taskName: String, error: BackgroundTaskFailureReason) {}
+}
+
+final class ThreadEntriesListener: ThreadListEntriesListener, @unchecked Sendable {
+    private let handler: ([ThreadListUpdate]) -> Void
+    init(_ handler: @escaping ([ThreadListUpdate]) -> Void) { self.handler = handler }
+    func onUpdate(diff: [ThreadListUpdate]) { handler(diff) }
 }

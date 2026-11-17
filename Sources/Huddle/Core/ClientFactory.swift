@@ -34,6 +34,10 @@ enum ClientFactory {
             .autoEnableCrossSigning(autoEnableCrossSigning: true)
             .autoEnableBackups(autoEnableBackups: true)
             .backupDownloadStrategy(backupDownloadStrategy: .afterDecryptionFailure)
+            // The SDK's own thread mode stays off: with it on, thread replies never count toward
+            // a room's unread badge. Huddle instead hides replies from the room timeline and
+            // opens thread-focused timelines itself (see RoomTimeline).
+            .threadsEnabled(enabled: false, threadSubscriptions: false)
 
         switch server {
         case .discover(let input):

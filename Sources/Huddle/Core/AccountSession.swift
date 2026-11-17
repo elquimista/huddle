@@ -37,6 +37,8 @@ final class AccountSession: Identifiable {
     private(set) var needsReauth = false
     private(set) var startError: String?
     var selectedRoomID: String?
+    /// What the panel beside each room's timeline shows, so it is still there on coming back.
+    var sidePanels: [String: ThreadPanel.Content] = [:]
     var searchText = "" {
         didSet { if searchText != oldValue { applyFilter() } }
     }
@@ -198,6 +200,18 @@ final class AccountSession: Identifiable {
             Task.detached { try? await roomListService.setRoomSubscriptions(roomIds: [roomID]) }
         }
         return timeline
+    }
+
+    /// A fresh timeline for one thread. The caller owns it and stops it when done.
+    func threadTimeline(roomID: String, root: String) -> RoomTimeline? {
+        guard let room = room(id: roomID) else { return nil }
+        let thread = RoomTimeline(room: room, threadRoot: root)
+        thread.onRead = { [weak self] in self?.timelines[roomID]?.markThreadSeen(root) }
+        return thread
+    }
+
+    func threadList(roomID: String) -> RoomThreadList? {
+        room(id: roomID).map { RoomThreadList(room: $0) }
     }
 
     private func touch(_ roomID: String) {

@@ -7,9 +7,10 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Multiple accounts:** an avatar rail switches accounts (⌘1–9); each has its own unread badge and its own encrypted local store.
 - **Sign-in:** username and password in the app wherever the homeserver accepts them, with OAuth in your browser as the alternative (needed for single sign-on, passkeys and two-step verification) or where it is the only way.
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions and a markdown composer.
+- **Threads:** Slack-style. Replies stay out of the room; the root message shows a reply count that opens the thread in a side panel with its own composer. A toolbar button lists all of a room's threads.
 - **Encryption:** end-to-end encrypted rooms work, and a new session is verified with your recovery key.
 
-Not built yet: notifications, sending attachments, replies, edits, threads, spaces, and emoji verification.
+Not built yet: system notifications, sending attachments, inline replies, edits, spaces, and emoji verification.
 
 ## Requirements
 
@@ -65,6 +66,8 @@ Two Docker setups give Huddle Dev something to talk to. Their credentials are in
 dev/synapse/setup.sh          # start Synapse, create alice, bob, carol, dave, erin
 dev/synapse/seed.py           # rooms, history, images, a DM, an encrypted room, an invite
 dev/synapse/seed.py say bob General "hello"   # send one live message
+dev/synapse/seed.py threads   # three threads in General, one with 40 replies
+dev/synapse/seed.py reply bob General "team lunch" "hi"   # reply in the thread containing that text
 ```
 
 **OAuth sign-in** (Synapse on `http://localhost:8009` with Matrix Authentication Service on `http://localhost:8081`):
@@ -83,7 +86,7 @@ To wipe either one, run `docker compose down && rm -rf data` in its folder.
 Scripts/run-dev.sh alice/General
 ```
 
-The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_SIGN_OUT`, and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
+The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_THREAD`, `HUDDLE_DEV_SIGN_OUT`, and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
 
 ## Releases
 

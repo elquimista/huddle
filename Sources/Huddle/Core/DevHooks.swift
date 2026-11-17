@@ -8,6 +8,7 @@ import Foundation
 ///   HUDDLE_DEV_ACCOUNTS  comma-separated usernames to sign in if missing
 ///   HUDDLE_DEV_PASSWORD  their shared test password
 ///   HUDDLE_DEV_SELECT    "username" or "username/Room Name" to open at launch
+///   HUDDLE_DEV_THREAD    with HUDDLE_DEV_SELECT: "list", or text of a message whose thread to open
 ///   HUDDLE_DEV_SIGN_OUT  username to sign out at launch (same code path as the Sign Out menu)
 ///   HUDDLE_DEV_FRESH     start with no accounts loaded (stored ones are left alone), to see first run
 ///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance
@@ -20,6 +21,26 @@ enum DevHooks {
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         default: break
+        }
+    }
+
+    private static func openThread(_ request: String?, in roomID: String, of account: AccountSession) async {
+        guard let request, !request.isEmpty else { return }
+        if request == "list" {
+            account.sidePanels[roomID] = .threadList
+            return
+        }
+        // The timeline fills in asynchronously after the room opens.
+        for _ in 0..<50 {
+            let rows = account.timeline(for: roomID)?.rows ?? []
+            for row in rows.reversed() {
+                if case .message(let message) = row.kind, case .text(let text) = message.body,
+                   text.contains(request), let eventID = message.eventID {
+                    account.sidePanels[roomID] = .thread(eventID)
+                    return
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(200))
         }
     }
 
@@ -65,6 +86,7 @@ enum DevHooks {
             for _ in 0..<100 {
                 if let room = account.rooms.first(where: { $0.name == parts[1] }) {
                     account.selectedRoomID = room.id
+                    await openThread(env["HUDDLE_DEV_THREAD"], in: room.id, of: account)
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(200))

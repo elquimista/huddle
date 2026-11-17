@@ -17,6 +17,11 @@ struct TimelineRow: Identifiable, Equatable {
         if case .message = kind { return true }
         return false
     }
+
+    var messageDate: Date? {
+        if case .message(let message) = kind { return message.date }
+        return nil
+    }
 }
 
 struct MessageRow: Equatable {
@@ -40,6 +45,11 @@ struct MessageRow: Equatable {
     }
 
     var itemID: EventOrTransactionId
+    /// The server's event ID, once the message has been sent. Threads hang off this.
+    var eventID: String? {
+        if case .eventId(let id) = itemID { return id }
+        return nil
+    }
     var sender: String
     var senderName: String
     var senderAvatarURL: String?
@@ -49,8 +59,32 @@ struct MessageRow: Equatable {
     var isEdited = false
     var reactions: [ReactionChip] = []
     var sendState: SendState?
+    /// Present on a message that has thread replies.
+    var thread: ThreadInfo?
     /// False when this message continues a run from the same sender.
     var showsHeader = true
+}
+
+/// Summary of the thread hanging off a message, shown under it in the room.
+struct ThreadInfo: Equatable {
+    var replyCount: Int
+    /// Someone else has replied since you last looked at this thread or read the room.
+    var hasNewReplies = false
+    var latestSender: String?
+    var latestSenderName: String?
+    var latestSenderAvatarURL: String?
+    var latestDate: Date?
+
+    init?(_ summary: ThreadSummary?) {
+        guard let summary, summary.numReplies() > 0 else { return nil }
+        replyCount = Int(summary.numReplies())
+        if case .ready(_, let sender, let profile, let timestamp, _) = summary.latestEvent() {
+            latestSender = sender
+            latestSenderName = profile.name(fallback: sender)
+            latestSenderAvatarURL = profile.avatarURL
+            latestDate = Date(matrixTimestamp: timestamp)
+        }
+    }
 }
 
 /// Equatable wrapper around the SDK's reference-typed media source.
@@ -59,10 +93,12 @@ struct MediaRef: Equatable {
     static func == (lhs: MediaRef, rhs: MediaRef) -> Bool { lhs.source.url() == rhs.source.url() }
 }
 
-/// Live, paginated view of one room's events.
+/// Live, paginated view of one room's events, or of a single thread within it.
 @MainActor @Observable
 final class RoomTimeline {
     let room: Room
+    /// Set for a thread's timeline: the root message's event ID.
+    let threadRoot: String?
     private(set) var rows: [TimelineRow] = []
     private(set) var isLoading = true
     private(set) var hasMoreHistory = true
@@ -79,9 +115,18 @@ final class RoomTimeline {
     @ObservationIgnored private var listenerHandle: TaskHandle?
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private var ownUserID: String
+    /// Room timeline only. Replies newer than this are new: when you had last marked the room
+    /// read, as of opening it.
+    @ObservationIgnored private var unreadHorizon: Date?
+    /// Room timeline only. When each thread was last read here, by root event ID.
+    @ObservationIgnored private var threadSeen: [String: Date] = [:]
+    /// Thread timeline only. Tells the room's timeline that this thread has been read.
+    @ObservationIgnored var onRead: (() -> Void)?
+    @ObservationIgnored private var lastRoomReceipt: String?
 
-    init(room: Room) {
+    init(room: Room, threadRoot: String? = nil) {
         self.room = room
+        self.threadRoot = threadRoot
         ownUserID = room.ownUserId()
         updatesTask = Task { [weak self] in await self?.run() }
     }
@@ -93,10 +138,21 @@ final class RoomTimeline {
 
     private func run() async {
         do {
-            let timeline = try await room.timeline()
+            // The room's own timeline leaves thread replies out; a thread's timeline is its root
+            // message followed by its replies, and sends into that thread.
+            let focus: TimelineFocus = threadRoot.map { .thread(rootEventId: $0) }
+                ?? .live(hideThreadedEvents: true)
+            let timeline = try await room.timelineWithConfiguration(configuration: TimelineConfiguration(
+                focus: focus,
+                filter: .all,
+                internalIdPrefix: nil,
+                dateDividerMode: .daily,
+                trackReadReceipts: .messageLikeEvents,
+                reportUtds: false))
             self.timeline = timeline
             let (stream, continuation) = AsyncStream.makeStream(of: [TimelineDiff].self)
             listenerHandle = await timeline.addListener(listener: TimelineDiffListener { continuation.yield($0) })
+            if threadRoot == nil { unreadHorizon = await lastReadTime() }
             isLoading = false
             for await diffs in stream {
                 for diff in diffs { items.apply(diff.diff) }
@@ -106,6 +162,17 @@ final class RoomTimeline {
             self.error = error.userMessage
             isLoading = false
         }
+    }
+
+    /// When this user last marked the room read, from their read receipts. Thread replies sent
+    /// after this are new. Falls back to now, so a room never read doesn't flag every thread.
+    private func lastReadTime() async -> Date {
+        var latest: Timestamp = 0
+        for thread in [ReceiptThread.unthreaded, .main] {
+            let receipt = try? await room.loadUserReceipt(receiptType: .read, thread: thread, userId: ownUserID)
+            latest = max(latest, receipt?.receipt.timestamp ?? 0)
+        }
+        return latest > 0 ? Date(matrixTimestamp: latest) : .now
     }
 
     private func rebuildRows() {
@@ -141,8 +208,24 @@ final class RoomTimeline {
                 }
             }
         }
+        // A thread's history ends at its root message.
+        if let threadRoot, let first = rows.first(where: \.isMessage),
+           case .message(let message) = first.kind, message.eventID == threadRoot {
+            hasMoreHistory = false
+        }
         // A read marker under the newest message is noise.
         if case .readMarker = rows.last?.kind { rows.removeLast() }
+
+        if threadRoot == nil {
+            for index in rows.indices {
+                guard case .message(var message) = rows[index].kind, var thread = message.thread,
+                      let root = message.eventID, let latest = thread.latestDate else { continue }
+                let seen = max(unreadHorizon ?? .distantPast, threadSeen[root] ?? .distantPast)
+                thread.hasNewReplies = latest > seen && thread.latestSender != ownUserID
+                message.thread = thread
+                rows[index].kind = .message(message)
+            }
+        }
 
         // Detect history landing above what was the oldest message, so the view can hold its place.
         let oldFirst = self.rows.first(where: \.isMessage)?.id
@@ -191,7 +274,22 @@ final class RoomTimeline {
     }
 
     func markAsRead() async {
-        try? await timeline?.markAsRead(receiptType: .read)
+        guard let timeline else { return }
+        try? await timeline.markAsRead(receiptType: .read)
+        guard threadRoot != nil else { return }
+        // A thread's own receipt doesn't lower the room's unread count, which is measured from
+        // the room-wide receipt. Move that one up to the newest reply read here.
+        if let latest = await timeline.latestEventId(), latest != lastRoomReceipt {
+            lastRoomReceipt = latest
+            try? await room.sendSingleReceipt(receiptType: .read, thread: .unthreaded, eventId: latest)
+        }
+        onRead?()
+    }
+
+    /// Room timeline: the thread with this root has just been read in its panel.
+    func markThreadSeen(_ root: String) {
+        threadSeen[root] = .now
+        rebuildRows()
     }
 }
 
@@ -247,7 +345,8 @@ extension TimelineRow.Kind {
                       count: reaction.senders.count,
                       isOwn: reaction.senders.contains { $0.senderId == ownUserID })
             },
-            sendState: sendState))
+            sendState: sendState,
+            thread: ThreadInfo(content.threadSummary)))
     }
 }
 

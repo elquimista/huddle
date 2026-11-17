@@ -203,7 +203,7 @@ final class LoopbackServer: @unchecked Sendable {
     func start() async throws -> UInt16 {
         listener.newConnectionHandler = { [weak self] connection in self?.handle(connection) }
         return try await withCheckedThrowingContinuation { ready in
-            var resumed = false
+            nonisolated(unsafe) var resumed = false  // only touched on the listener queue
             listener.stateUpdateHandler = { [weak self] state in
                 guard let self, !resumed else { return }
                 switch state {

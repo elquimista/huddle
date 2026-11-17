@@ -2,8 +2,13 @@
 """Fills the local Synapse with rooms and messages for testing Huddle Dev.
 
 Run after setup.sh. Does nothing if alice already has rooms.
+
+  seed.py                                   rooms, history, images, a DM, an encrypted room, an invite
+  seed.py threads                           three threads in General, one long
+  seed.py say <user> <room> <text>          one live message
+  seed.py reply <user> <room> <fragment> <text>   one reply in the thread whose text contains <fragment>
 """
-import json, os, struct, sys, urllib.request, uuid, zlib
+import json, os, struct, sys, urllib.error, urllib.request, uuid, zlib
 
 def load_env():
     env = {}
@@ -54,16 +59,63 @@ def png(width, height, rgb):
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
+def find_room(token, room_name):
+    for room in call("GET", "/_matrix/client/v3/joined_rooms", token)["joined_rooms"]:
+        try:
+            state = call("GET", f"/_matrix/client/v3/rooms/{room}/state/m.room.name", token)
+        except urllib.error.HTTPError:
+            continue  # unnamed room, such as a direct chat
+        if state.get("name") == room_name:
+            return room
+    sys.exit(f"That user is not in a room named {room_name}")
+
+def reply_in_thread(token, room, root, text):
+    return send(token, room, text, **{"m.relates_to": {
+        "rel_type": "m.thread", "event_id": root,
+        "is_falling_back": True, "m.in_reply_to": {"event_id": root}}})
+
+def find_message(token, room, fragment):
+    """Event ID of the newest message in the room whose text contains `fragment`."""
+    chunk = call("GET", f"/_matrix/client/v3/rooms/{room}/messages?dir=b&limit=100", token)["chunk"]
+    for event in chunk:
+        if event["type"] == "m.room.message" and fragment in event["content"].get("body", ""):
+            relation = event["content"].get("m.relates_to", {})
+            return relation["event_id"] if relation.get("rel_type") == "m.thread" else event["event_id"]
+    sys.exit(f"No recent message containing {fragment!r}")
+
+def seed_threads():
+    alice, bob, carol = login("alice"), login("bob"), login("carol")
+    general = find_room(alice, "General")
+    root = send(carol, general, "Where should we go for the team lunch on Thursday?")
+    for token, text in ((bob, "The ramen place on 5th is great"), (alice, "Ramen works for me"),
+                        (carol, "Booking a table for 12:30 then"), (bob, "Can we make it 12:45? I have a call"),
+                        (carol, "Sure, 12:45 it is")):
+        reply_in_thread(token, general, root, text)
+    root = send(bob, general, "Release checklist for 0.2 is in the wiki")
+    reply_in_thread(alice, general, root, "Thanks, reviewing it now")
+    send(carol, general, "Back to normal chat after the threads")
+    root = send(alice, general, "Long thread: count to forty")
+    speakers = (bob, carol, alice)
+    for i in range(1, 41):
+        reply_in_thread(speakers[i % 3], general, root, f"Thread reply {i}")
+    print("Seeded three threads in General.")
+
 def main():
-    if len(sys.argv) > 1:  # seed.py say <user> <room name> <text>: one live message
+    command = sys.argv[1] if len(sys.argv) > 1 else None
+    if command == "say":      # seed.py say <user> <room> <text>: one live message
         _, _, user, room_name, text = sys.argv
         token = login(user)
-        for room in call("GET", "/_matrix/client/v3/joined_rooms", token)["joined_rooms"]:
-            state = call("GET", f"/_matrix/client/v3/rooms/{room}/state/m.room.name", token)
-            if state.get("name") == room_name:
-                print(send(token, room, text))
-                return
-        sys.exit(f"{user} is not in a room named {room_name}")
+        print(send(token, find_room(token, room_name), text))
+        return
+    if command == "reply":    # seed.py reply <user> <room> <text in the thread> <reply>: one thread reply
+        _, _, user, room_name, fragment, text = sys.argv
+        token = login(user)
+        room = find_room(token, room_name)
+        print(reply_in_thread(token, room, find_message(token, room, fragment), text))
+        return
+    if command == "threads":  # seed.py threads: three threads in General
+        seed_threads()
+        return
 
     alice, bob, carol = login("alice"), login("bob"), login("carol")
     if call("GET", "/_matrix/client/v3/joined_rooms", alice)["joined_rooms"]:

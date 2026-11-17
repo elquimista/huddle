@@ -141,7 +141,7 @@ private struct Banner: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
     }
 }
 
