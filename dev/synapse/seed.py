@@ -9,6 +9,7 @@ Run after setup.sh. Does nothing if alice already has rooms.
   seed.py say <user> <room> <text>          one live message
   seed.py read <user> <room> [fragment]     send a read receipt, for the newest message or a named one
   seed.py reply <user> <room> <fragment> <text>   one reply in the thread whose text contains <fragment>
+  seed.py respond <user> <room> <fragment> <text> an inline reply to the message containing <fragment>
 """
 import json, os, struct, sys, urllib.error, urllib.parse, urllib.request, uuid, zlib
 
@@ -147,6 +148,13 @@ def seed_audio():
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else None
+    if command == "respond":  # seed.py respond <user> <room> <fragment> <text>: an inline reply
+        _, _, user, room_name, fragment, text = sys.argv
+        token = login(user)
+        room = find_room(token, room_name)
+        target = find_plain_message(token, room, fragment)
+        print(send(token, room, text, **{"m.relates_to": {"m.in_reply_to": {"event_id": target}}}))
+        return
     if command == "audio":    # seed.py audio: voice messages and audio files in General
         seed_audio()
         return

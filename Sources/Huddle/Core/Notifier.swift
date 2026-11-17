@@ -123,11 +123,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private static func describe(_ content: TimelineEventContent) -> String? {
         guard case .messageLike(let content) = content else { return nil }
         switch content {
-        case .roomMessage(let type, _):
+        case .roomMessage(let type, let inReplyTo):
+            // A reply's plain text may begin with the quoted message; the alert shows the answer.
+            func plain(_ body: String, _ formatted: FormattedBody?) -> String {
+                MessageFormatter.plainText(text: inReplyTo == nil ? body : MessageFormatter.strippingReplyFallback(body),
+                                           formatted: formatted)
+            }
             switch type {
-            case .text(let content): return MessageFormatter.plainText(text: content.body, formatted: content.formatted)
-            case .notice(let content): return MessageFormatter.plainText(text: content.body, formatted: content.formatted)
-            case .emote(let content): return "* " + MessageFormatter.plainText(text: content.body, formatted: content.formatted)
+            case .text(let content): return plain(content.body, content.formatted)
+            case .notice(let content): return plain(content.body, content.formatted)
+            case .emote(let content): return "* " + plain(content.body, content.formatted)
             case .image(let content): return content.caption ?? "Sent an image"
             case .video(let content): return content.caption ?? "Sent a video"
             case .audio(let content):

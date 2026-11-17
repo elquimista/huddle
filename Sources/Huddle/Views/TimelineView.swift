@@ -9,6 +9,12 @@ struct TimelineView: View {
     /// Opens a message's thread. Nil inside a thread, where there is nothing further to open.
     var onOpenThread: ((String) -> Void)?
     @State private var draft = ""
+    /// The message being replied to, while writing a reply.
+    @State private var replyTarget: ReplyPreview?
+    /// The row just jumped to from a reply's quote, lit up for a moment.
+    @State private var highlightedRow: String?
+    /// The message being looked for after clicking a quote, while older history loads.
+    @State private var searchingFor: String?
     /// Mentions picked from the suggestions for the message being written.
     @State private var composedMentions: [ComposedMention] = []
     @State private var suggestionIndex = 0
@@ -56,7 +62,12 @@ struct TimelineView: View {
                             .onGeometryChange(for: Bool.self, of: Self.isOnScreen) { historyEdgeVisible = $0 }
                     }
                     ForEach(timeline.rows) { row in
-                        TimelineRowView(row: row, timeline: timeline, media: media, onOpenThread: onOpenThread)
+                        TimelineRowView(row: row, timeline: timeline, media: media,
+                                        actions: MessageActions(openThread: onOpenThread,
+                                                                reply: { startReply(to: $0) },
+                                                                showOriginal: { showOriginal($0, proxy) }),
+                                        isHighlighted: row.id == highlightedRow,
+                                        searchingFor: searchingFor)
                             .id(row.id)
                         if row.id == threadRootRowID {
                             RepliesDivider(count: replyCount)
@@ -199,6 +210,14 @@ struct TimelineView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            if let replyTarget {
+                ReplyComposerBar(reply: replyTarget) { self.replyTarget = nil }
+                    // Lined up with the text field below: its text on the left, its edge on the right.
+                    .padding(.leading, 10)
+                    .padding(.trailing, 42)
+                    .padding(.bottom, 2)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField(placeholder, text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -212,8 +231,13 @@ struct TimelineView: View {
                     .onKeyPress(.return) { pickSelectedSuggestion() }
                     .onKeyPress(.tab) { pickSelectedSuggestion() }
                     .onKeyPress(.escape) {
-                        guard !suggestions.isEmpty else { return .ignored }
-                        dismissedQuery = mentionQuery
+                        // Escape closes the mention list if it is open; otherwise it cancels a reply.
+                        if !suggestions.isEmpty {
+                            dismissedQuery = mentionQuery
+                            return .handled
+                        }
+                        guard replyTarget != nil else { return .ignored }
+                        replyTarget = nil
                         return .handled
                     }
                     .onChange(of: draft) {
@@ -237,6 +261,7 @@ struct TimelineView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .animation(.snappy(duration: 0.2), value: replyTarget?.eventID)
         .background(.bar)
         // Not Divider: inside the room's HStack it would draw itself vertically.
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
@@ -261,10 +286,46 @@ struct TimelineView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let mentions = composedMentions
+        let replyTo = replyTarget?.eventID
         draft = ""
         composedMentions = []
+        replyTarget = nil
         scrollToBottom(proxy)
-        Task { await timeline.send(text, mentions: mentions) }
+        Task { await timeline.send(text, mentions: mentions, replyTo: replyTo) }
+    }
+
+    // MARK: Replies
+
+    private func startReply(to message: MessageRow) {
+        guard let target = ReplyPreview(replyingTo: message) else { return }
+        replyTarget = target
+        composerFocused = true
+    }
+
+    /// Goes to the message a reply answers and lights it up, loading older history if it isn't
+    /// on screen yet.
+    private func showOriginal(_ reply: ReplyPreview, _ proxy: ScrollViewProxy) {
+        guard searchingFor == nil else { return }
+        searchingFor = reply.eventID
+        Task {
+            let rowID = await timeline.rowID(forEvent: reply.eventID)
+            searchingFor = nil
+            guard let rowID else {
+                // Too far back, or not something the server will give us.
+                if !DevHooks.mutesAudio { NSSound.beep() }
+                return
+            }
+            // Leaving the newest message on purpose: don't follow it back.
+            followsNewest = false
+            withAnimation(.snappy(duration: 0.3)) {
+                proxy.scrollTo(rowID, anchor: .center)
+                highlightedRow = rowID
+            }
+            try? await Task.sleep(for: .seconds(1.8))
+            if highlightedRow == rowID {
+                withAnimation(.easeOut(duration: 0.6)) { highlightedRow = nil }
+            }
+        }
     }
 
     // MARK: Mentions
@@ -336,12 +397,15 @@ private struct TimelineRowView: View {
     let row: TimelineRow
     let timeline: RoomTimeline
     let media: MediaLoader
-    let onOpenThread: ((String) -> Void)?
+    let actions: MessageActions
+    let isHighlighted: Bool
+    let searchingFor: String?
 
     var body: some View {
         switch row.kind {
         case .message(let message):
-            MessageView(message: message, timeline: timeline, media: media, onOpenThread: onOpenThread)
+            MessageView(message: message, timeline: timeline, media: media, actions: actions,
+                        isHighlighted: isHighlighted, searchingFor: searchingFor)
         case .notice(let text):
             Text(text)
                 .font(.callout)
@@ -371,12 +435,21 @@ private struct MessageView: View {
     let message: MessageRow
     let timeline: RoomTimeline
     let media: MediaLoader
-    let onOpenThread: ((String) -> Void)?
+    let actions: MessageActions
+    /// Lit up briefly after being jumped to from a reply.
+    let isHighlighted: Bool
+    let searchingFor: String?
 
     /// Opens this message's thread, when it can have one from here.
     private var openThread: (() -> Void)? {
-        guard let onOpenThread, let eventID = message.eventID else { return nil }
+        guard let onOpenThread = actions.openThread, let eventID = message.eventID else { return nil }
         return { onOpenThread(eventID) }
+    }
+
+    /// Starts a reply to this message. Nil for one that hasn't been sent yet or was deleted.
+    private var reply: (() -> Void)? {
+        guard message.eventID != nil, message.body != .redacted else { return nil }
+        return { actions.reply(message) }
     }
     @State private var isHovering = false
     @State private var showsPicker = false
@@ -405,6 +478,13 @@ private struct MessageView: View {
         .padding(.bottom, 3)
         .opacity(message.sendState == .sending ? 0.55 : 1)
         .background {
+            if isHighlighted {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.2))
+                    .padding(.horizontal, -8)
+                    .padding(.top, layout == .modern && message.showsHeader ? 4 : 0)
+                    .transition(.opacity)
+            }
             // Ties the floating actions to the message they act on.
             if showsActions {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -433,6 +513,9 @@ private struct MessageView: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .contextMenu {
+            if let reply {
+                Button("Reply", action: reply)
+            }
             if let openThread {
                 Button(message.thread == nil ? "Reply in Thread" : "Open Thread", action: openThread)
             }
@@ -498,6 +581,11 @@ private struct MessageView: View {
 
     /// The message itself with what hangs under it; shared by both layouts.
     @ViewBuilder private var content: some View {
+        if let reply = message.replyTo {
+            ReplyQuoteView(reply: reply, isSearching: searchingFor == reply.eventID) {
+                actions.showOriginal(reply)
+            }
+        }
         bodyView
         if !message.reactions.isEmpty {
             HStack(spacing: 4) {
@@ -549,8 +637,15 @@ private struct MessageView: View {
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }
             }
-            if let openThread {
+            if reply != nil || openThread != nil {
                 Divider().frame(height: 16).padding(.horizontal, 3)
+            }
+            if let reply {
+                ActionButton(help: "Reply", action: reply) {
+                    Image(systemName: "arrowshape.turn.up.left")
+                }
+            }
+            if let openThread {
                 ActionButton(help: "Reply in thread", action: openThread) {
                     Image(systemName: "bubble.left.and.text.bubble.right")
                 }

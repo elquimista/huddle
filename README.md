@@ -7,13 +7,14 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Multiple accounts:** an avatar rail switches accounts (⌘1–9); each has its own unread badge and its own encrypted local store.
 - **Sign-in:** username and password in the app wherever the homeserver accepts them, with OAuth in your browser as the alternative (needed for single sign-on, passkeys and two-step verification) or where it is the only way.
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions with a searchable emoji picker, formatted messages with mention pills, and a markdown composer that suggests people as you type "@". Settings (⌘,) switches between the modern message layout and a compact IRC-style one.
+- **Replies:** reply to any message from its hover actions or context menu. A reply shows the message it answers above it, and clicking that jumps to the original, loading older history if needed. Works inside threads too.
 - **Audio:** voice messages and audio files play in the timeline, with a waveform or track to scrub through, 1×/1.5×/2× speed, and Save As. Ogg Opus, which macOS can't play by itself, is decoded in the app.
 - **Threads:** Slack-style. Replies stay out of the room; the root message shows a reply count that opens the thread in a side panel with its own composer. A toolbar button lists all of a room's threads.
 - **Read receipts:** in direct chats, ticks on your messages (one grey tick while sending, two grey once sent, two coloured once read); in group rooms, small avatars beside the last message each person has read, with the full list on click.
 - **Notifications:** macOS alerts for new messages, mentions and invitations, following your account's notification rules (muted rooms stay silent; direct messages and mentions play a sound). Clicking one opens that account, room and thread, and reading a room clears its alerts. Settings (⌘,) turns alerts or their sound off; they start off in the Dev build.
 - **Encryption:** end-to-end encrypted rooms work, and a new session is verified with your recovery key.
 
-Not built yet: sending attachments, inline replies, edits, spaces, and emoji verification.
+Not built yet: sending attachments, edits, spaces, and emoji verification.
 
 ## Requirements
 
@@ -73,6 +74,7 @@ dev/synapse/seed.py read bob General           # Bob reads General up to its new
 dev/synapse/seed.py threads   # three threads in General, one with 40 replies
 dev/synapse/seed.py audio     # voice messages and audio files in General
 dev/synapse/seed.py reply bob General "team lunch" "hi"   # reply in the thread containing that text
+dev/synapse/seed.py respond bob General "hello" "hi back"  # inline reply to the message containing that text
 ```
 
 **OAuth sign-in** (Synapse on `http://localhost:8009` with Matrix Authentication Service on `http://localhost:8081`):

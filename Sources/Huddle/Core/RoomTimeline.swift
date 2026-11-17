@@ -13,6 +13,12 @@ struct TimelineRow: Identifiable, Equatable {
     let id: String
     var kind: Kind
 
+    /// The server's ID for the message in this row, if it is one that has been sent.
+    var eventID: String? {
+        if case .message(let message) = kind { return message.eventID }
+        return nil
+    }
+
     var isMessage: Bool {
         if case .message = kind { return true }
         return false
@@ -84,6 +90,8 @@ struct MessageRow: Equatable {
     /// The sender's HTML formatting for a text message, if their client sent any.
     var html: String?
     var mentionsRoom = false
+    /// The message this one answers, if it is a reply.
+    var replyTo: ReplyPreview?
     /// Group rooms: other people whose latest read message is this one, most recent first.
     var readers: [Reader] = []
     /// Your own messages: how far this one has got. Nil when no indicator should show.
@@ -169,6 +177,7 @@ final class RoomTimeline {
     /// Everyone else in the room, for mention suggestions. Empty until `loadMembers()`.
     private(set) var members: [MentionCandidate] = []
     @ObservationIgnored private var membersRequested = false
+    @ObservationIgnored private var requestedReplyDetails: Set<String> = []
     @ObservationIgnored var onRead: (() -> Void)?
     @ObservationIgnored var onLatestReaction: ((ReactionPreview?) -> Void)?
     @ObservationIgnored private var latestReaction: ReactionPreview?
@@ -301,6 +310,32 @@ final class RoomTimeline {
             prependAnchorID = oldFirst
             prependCount += 1
         }
+        fetchMissingReplyDetails()
+    }
+
+    /// A reply names the message it answers; if that message isn't among the loaded ones, the
+    /// SDK has to be asked for it. Once per reply: the answer arrives as a timeline update.
+    private func fetchMissingReplyDetails() {
+        guard let timeline else { return }
+        for row in rows {
+            guard case .message(let message) = row.kind, message.replyTo?.needsFetch == true,
+                  let eventID = message.eventID, requestedReplyDetails.insert(eventID).inserted else { continue }
+            Task { try? await timeline.fetchDetailsForEvent(eventId: eventID) }
+        }
+    }
+
+    /// The row showing a message, loading older history until it turns up. Nil if it isn't
+    /// within a few hundred messages of what is loaded.
+    func rowID(forEvent eventID: String) async -> String? {
+        let limit = rows.count + 600
+        for _ in 0..<60 {
+            if let row = rows.first(where: { $0.eventID == eventID }) { return row.id }
+            guard hasMoreHistory, rows.count < limit else { return nil }
+            await loadOlder()
+            // The loaded messages reach `rows` through the update stream, a moment later.
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+        return rows.first(where: { $0.eventID == eventID })?.id
     }
 
     /// A person's display name, if this timeline has come across it.
@@ -442,10 +477,18 @@ final class RoomTimeline {
         members = found.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    func send(_ text: String, mentions: [ComposedMention] = []) async {
+    /// - Parameter replyTo: the event this message answers, to send it as a reply.
+    func send(_ text: String, mentions: [ComposedMention] = [], replyTo: String? = nil) async {
         guard let timeline else { return }
         do {
-            _ = try await timeline.send(msg: MentionComposer.content(for: text, mentions: mentions))
+            let content = MentionComposer.content(for: text, mentions: mentions)
+            if let replyTo {
+                // The SDK adds the relation, mentions the person replied to, and keeps a reply
+                // made inside a thread in that thread.
+                _ = try await timeline.sendReply(msg: content, eventId: replyTo)
+            } else {
+                _ = try await timeline.send(msg: content)
+            }
             error = nil
             // Having answered, the user is caught up: nothing above is "new" any more.
             if threadRoot == nil { try? await timeline.markAsRead(receiptType: .fullyRead) }
@@ -565,7 +608,8 @@ extension TimelineRow.Kind {
                 }
                 .sorted { $0.userID < $1.userID },
             html: formatted.flatMap { $0.format == .html ? $0.body : nil },
-            mentionsRoom: mentionsRoom))
+            mentionsRoom: mentionsRoom,
+            replyTo: content.inReplyTo.map(ReplyPreview.init)))
     }
 }
 

@@ -36,6 +36,16 @@ enum MessageFormatter {
             .replacingOccurrences(of: "\n", with: " ")
     }
 
+    /// Older clients begin a reply's plain text with the quoted message, each line prefixed
+    /// with ">", then a blank line. Removes that, leaving what the sender wrote.
+    static func strippingReplyFallback(_ body: String) -> String {
+        var lines = body.split(separator: "\n", omittingEmptySubsequences: false)[...]
+        guard lines.first?.hasPrefix("> ") == true else { return body }
+        while lines.first?.hasPrefix(">") == true { lines = lines.dropFirst() }
+        if lines.first?.isEmpty == true { lines = lines.dropFirst() }
+        return lines.isEmpty ? body : lines.joined(separator: "\n")
+    }
+
     // MARK: Pills
 
     static func pill(_ label: String, isOwn: Bool) -> AttributedString {
