@@ -12,6 +12,7 @@ import Foundation
 ///   HUDDLE_DEV_SIGN_OUT  username to sign out at launch (same code path as the Sign Out menu)
 ///   HUDDLE_DEV_FRESH     start with no accounts loaded (stored ones are left alone), to see first run
 ///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance
+///   HUDDLE_DEV_ASSUME_ACTIVE  mark rooms as read even while the app is in the background
 ///   HUDDLE_DEV_NO_BROWSER  print the OAuth sign-in URL (DEV_OAUTH_URL ...) instead of opening it
 @MainActor
 enum DevHooks {
@@ -43,6 +44,9 @@ enum DevHooks {
             try? await Task.sleep(for: .milliseconds(200))
         }
     }
+
+    static let assumesActive = AppEnvironment.isDev
+        && ProcessInfo.processInfo.environment["HUDDLE_DEV_ASSUME_ACTIVE"] != nil
 
     /// First-run preview: nothing is restored and no hooks run.
     static var startsFresh: Bool {

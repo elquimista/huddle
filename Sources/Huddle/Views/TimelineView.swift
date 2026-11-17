@@ -21,7 +21,7 @@ struct TimelineView: View {
     private static let bottomID = "timeline-bottom"
 
     /// Messages arriving while the app is in the background stay unread until it is back in front.
-    @State private var appIsActive = NSApp.isActive
+    @State private var appIsActive = NSApp.isActive || DevHooks.assumesActive
 
     private struct ReadTrigger: Equatable {
         let lastRow: String?
@@ -148,9 +148,13 @@ struct TimelineView: View {
             appIsActive = true
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-            appIsActive = false
+            appIsActive = DevHooks.assumesActive
         }
         .onAppear { composerFocused = true }
+        .onDisappear {
+            let timeline = timeline
+            Task { await timeline.leave() }
+        }
     }
 
     /// Whether a view inside the scroll view is within, or just outside, the visible area.

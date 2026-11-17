@@ -160,6 +160,8 @@ final class RoomTimeline {
         updatesTask = Task { [weak self] in await self?.run() }
     }
 
+    private var hasReadToEnd = false
+
     func stop() {
         updatesTask?.cancel()
         listenerHandle?.cancel()
@@ -244,8 +246,12 @@ final class RoomTimeline {
            case .message(let message) = first.kind, message.eventID == threadRoot {
             hasMoreHistory = false
         }
-        // A read marker under the newest message is noise.
-        if case .readMarker = rows.last?.kind { rows.removeLast() }
+        // A read marker with no message under it is noise. What followed it may be hidden here
+        // (thread replies, reactions), leaving only date dividers or nothing at all.
+        if let marker = rows.lastIndex(where: { if case .readMarker = $0.kind { true } else { false } }),
+           !rows[(marker + 1)...].contains(where: { if case .dateDivider = $0.kind { false } else { true } }) {
+            rows.remove(at: marker)
+        }
 
         if threadRoot == nil {
             for index in rows.indices {
@@ -355,6 +361,8 @@ final class RoomTimeline {
         do {
             _ = try await timeline.send(msg: messageEventContentFromMarkdown(md: text))
             error = nil
+            // Having answered, the user is caught up: nothing above is "new" any more.
+            if threadRoot == nil { try? await timeline.markAsRead(receiptType: .fullyRead) }
         } catch {
             self.error = error.userMessage
         }
@@ -368,9 +376,19 @@ final class RoomTimeline {
         _ = try? await timeline?.retrySend(itemId: itemID, target: .event)
     }
 
+    /// Called when the user moves away from the room. The "New" line marks where they had read
+    /// up to on arriving, and stays put while they are here; if they reached the newest message,
+    /// move it there so it is gone when they come back.
+    func leave() async {
+        guard threadRoot == nil, hasReadToEnd, let timeline else { return }
+        hasReadToEnd = false
+        try? await timeline.markAsRead(receiptType: .fullyRead)
+    }
+
     func markAsRead() async {
         guard let timeline else { return }
         try? await timeline.markAsRead(receiptType: .read)
+        hasReadToEnd = true
         guard threadRoot != nil else { return }
         // A thread's own receipt doesn't lower the room's unread count, which is measured from
         // the room-wide receipt. Move that one up to the newest reply read here.
