@@ -98,25 +98,19 @@ private struct AccountButton: View {
         let offset: CGSize
     }
 
-    /// Red and numbered for direct messages, mentions and invitations; a quiet dot for other unread rooms.
+    /// Red for direct messages, mentions and invitations; otherwise blue for other rooms with
+    /// notifications. Both count rooms. Red wins when an account has both.
     private var badge: Badge? {
-        if account.urgentCount > 0 {
-            let label = Text("\(min(account.urgentCount, 99))")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.white)
-                .padding(.horizontal, 4)
-                .frame(minWidth: 16, minHeight: 16)
-                .background(.red, in: Capsule())
-            return Badge(shape: AnyView(label), offset: CGSize(width: 2, height: -2))
-        }
-        if account.badgeCount > 0 {
-            let dot = Circle()
-                .fill(Color.accentColor)
-                .frame(width: 10, height: 10)
-            return Badge(shape: AnyView(dot), offset: CGSize(width: -1, height: 1))
-        }
-        return nil
+        let count = account.urgentCount > 0 ? account.urgentCount : account.badgeCount
+        guard count > 0 else { return nil }
+        let label = Text("\(min(count, 99))")
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .frame(minWidth: 16, minHeight: 16)
+            .background(account.urgentCount > 0 ? Color.red : Color.accentColor, in: Capsule())
+        return Badge(shape: AnyView(label), offset: CGSize(width: 2, height: -2))
     }
 
     private var helpText: String {
