@@ -52,8 +52,8 @@ struct RoomListView: View {
         if account.needsReauth { return "Session expired. Sign out and back in." }
         if let error = account.startError { return error }
         switch account.syncState {
-        case .offline: return "Offline"
-        case .error, .terminated: return "Sync stopped"
+        case .offline: return "Offline. Reconnecting…"
+        case .error, .terminated: return "Connection lost. Reconnecting…"
         default: return nil
         }
     }

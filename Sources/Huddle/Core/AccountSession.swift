@@ -55,6 +55,8 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var controller: RoomListDynamicEntriesController?
     @ObservationIgnored private var handles: [TaskHandle] = []
     @ObservationIgnored private var roomUpdatesTask: Task<Void, Never>?
+    @ObservationIgnored private var restartTask: Task<Void, Never>?
+    @ObservationIgnored private var restartAttempts = 0
     @ObservationIgnored private var roomHandles: [String: Room] = [:]
     @ObservationIgnored private var timelines: [String: RoomTimeline] = [:]
     @ObservationIgnored private var timelineOrder: [String] = []
@@ -80,10 +82,12 @@ final class AccountSession: Identifiable {
                 handles.append(delegateHandle)
             }
 
-            let syncService = try await client.syncService().finish()
+            // Offline mode: when the network drops (or the Mac sleeps) the service waits for the
+            // server to be reachable and resumes by itself instead of ending in an error.
+            let syncService = try await client.syncService().withOfflineMode().finish()
             self.syncService = syncService
             handles.append(syncService.state(listener: SyncStateListener { [weak self] state in
-                Task { @MainActor in self?.syncState = state }
+                Task { @MainActor in self?.syncStateChanged(to: state) }
             }))
 
             let roomListService = syncService.roomListService()
@@ -110,14 +114,42 @@ final class AccountSession: Identifiable {
         await loadProfile()
     }
 
+    /// The SDK never restarts a sync that ended in an error (a server error, a timeout, a
+    /// rejected request), so do it here, backing off while it keeps failing.
+    private func syncStateChanged(to state: SyncServiceState) {
+        syncState = state
+        switch state {
+        case .running:
+            restartAttempts = 0
+            restartTask?.cancel()
+            restartTask = nil
+        case .error, .terminated:
+            guard restartTask == nil, syncService != nil, !needsReauth else { return }
+            let delay = min(60.0, 2.0 * pow(2.0, Double(restartAttempts)))
+            restartAttempts += 1
+            restartTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, let self else { return }
+                self.restartTask = nil
+                guard let syncService = self.syncService, !self.needsReauth else { return }
+                await syncService.start()
+            }
+        case .idle, .offline:
+            break
+        }
+    }
+
     func stop() async {
+        restartTask?.cancel()
+        restartTask = nil
         roomUpdatesTask?.cancel()
         handles.forEach { $0.cancel() }
         handles.removeAll()
         timelines.values.forEach { $0.stop() }
         timelines.removeAll()
+        let syncService = syncService
+        self.syncService = nil
         await syncService?.stop()
-        syncService = nil
     }
 
     private func loadProfile() async {
