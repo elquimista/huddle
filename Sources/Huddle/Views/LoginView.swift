@@ -44,12 +44,20 @@ struct LoginView: View {
                         .keyboardShortcut(.defaultAction)
                         .disabled(flow.username.isEmpty || flow.password.isEmpty || flow.isBusy)
                 }
+                if flow.supportsBrowser {
+                    Button("Sign in with browser instead") {
+                        Task { await flow.continueInBrowser(store: store) }
+                    }
+                    .buttonStyle(.link)
+                    .disabled(flow.isBusy)
+                    .help("For accounts that use single sign-on, passkeys or two-step verification")
+                }
 
             case .waitingForBrowser:
                 Text("Finish signing in to \(flow.homeserverURL) in your browser.")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Button("Back") { flow.cancel() }
+                Button(flow.supportsPassword ? "Use password instead" : "Back") { flow.leaveBrowser() }
             }
 
             if flow.isBusy {

@@ -5,7 +5,7 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Native:** SwiftUI, no Electron or web view. The app is about 50 MB and idles around 65 MB of memory.
 - **Sliding sync:** the room list loads instantly whatever the account's size. Homeservers without native sliding sync (MSC4186) are not supported.
 - **Multiple accounts:** an avatar rail switches accounts (⌘1–9); each has its own unread badge and its own encrypted local store.
-- **Sign-in:** OAuth through your browser (what matrix.org uses) or a password, whichever the homeserver offers.
+- **Sign-in:** username and password in the app wherever the homeserver accepts them, with OAuth in your browser as the alternative (needed for single sign-on, passkeys and two-step verification) or where it is the only way.
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions and a markdown composer.
 - **Encryption:** end-to-end encrypted rooms work, and a new session is verified with your recovery key.
 
@@ -72,6 +72,8 @@ dev/synapse/seed.py say bob General "hello"   # send one live message
 ```bash
 dev/synapse-oauth/setup.sh    # start Synapse, MAS and Postgres, create olivia
 ```
+
+`http://localhost:8009` offers OAuth only. `http://localhost:8010` is the same server behind a proxy that also accepts passwords, for testing the "password, or browser instead" sign-in.
 
 To wipe either one, run `docker compose down && rm -rf data` in its folder.
 

@@ -4,7 +4,8 @@ import MatrixRustSDK
 import Network
 import Observation
 
-/// Drives adding an account: server discovery, then OAuth or password login.
+/// Drives adding an account: server discovery, then password login in the app where the
+/// homeserver accepts it, with OAuth in the browser as the alternative (or the only way).
 @MainActor @Observable
 final class LoginFlow {
     enum Step: Equatable {
@@ -20,6 +21,10 @@ final class LoginFlow {
     private(set) var isBusy = false
     private(set) var error: String?
     private(set) var homeserverURL = ""
+    /// The homeserver accepts a username and password directly.
+    private(set) var supportsPassword = false
+    /// The homeserver offers OAuth sign-in in the browser.
+    private(set) var supportsBrowser = false
 
     @ObservationIgnored private var client: Client?
     @ObservationIgnored private var storeID = UUID().uuidString
@@ -42,10 +47,13 @@ final class LoginFlow {
             self.homeserverURL = details.url()
             guard details.slidingSyncVersion() == .native else { throw LoginError.slidingSyncUnsupported }
 
-            if details.supportsOauthLogin() {
-                try await self.startOAuth(client: client, store: store)
-            } else if details.supportsPasswordLogin() {
+            self.supportsPassword = details.supportsPasswordLogin()
+            self.supportsBrowser = details.supportsOauthLogin()
+
+            if self.supportsPassword {
                 self.step = .password
+            } else if self.supportsBrowser {
+                try await self.startOAuth(client: client, store: store)
             } else {
                 throw LoginError.noSupportedLoginMethod
             }
@@ -61,6 +69,26 @@ final class LoginFlow {
                                    deviceId: nil)
             try self.finish(client: client, store: store)
         }
+    }
+
+    /// Switches from the password form to OAuth in the browser.
+    func continueInBrowser(store: AccountStore) async {
+        guard let client, supportsBrowser else { return }
+        await perform {
+            try await self.startOAuth(client: client, store: store)
+        }
+    }
+
+    /// Leaves the browser step: back to the password form if there is one, else to the server step.
+    func leaveBrowser() {
+        guard supportsPassword, client != nil else {
+            cancel()
+            return
+        }
+        // Ending the loopback listener also aborts the pending authorization.
+        loopback?.stop()
+        step = .password
+        error = nil
     }
 
     private func startOAuth(client: Client, store: AccountStore) async throws {
@@ -99,7 +127,7 @@ final class LoginFlow {
                 do {
                     try await client.loginWithOauthCallback(callbackUrl: callback)
                 } catch {
-                    self.step = .server
+                    self.step = self.supportsPassword ? .password : .server
                     throw error
                 }
                 try self.finish(client: client, store: store)

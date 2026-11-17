@@ -1,6 +1,7 @@
 # Second local homeserver that signs in through OAuth (Matrix Authentication Service),
 # like matrix.org does. Start it with ./setup.sh.
-#   Synapse: http://localhost:8009     MAS: http://localhost:8081
+#   Synapse: http://localhost:8009 (OAuth only)     MAS: http://localhost:8081
+#   http://localhost:8010 is the same server, also accepting passwords (see Caddyfile)
 services:
   postgres:
     image: postgres:16-alpine
@@ -41,4 +42,15 @@ services:
       SYNAPSE_SERVER_NAME: oauth.localhost
       SYNAPSE_REPORT_STATS: "no"
     depends_on:
+      - mas
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8010:8010"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - synapse
       - mas

@@ -1,0 +1,11 @@
+# The same homeserver as :8009, but with the legacy password endpoints routed to MAS, the way a
+# production server that still accepts passwords is set up. Lets Huddle test "password or browser".
+:8010 {
+	# Synapse's own answer points at :8009; keep clients on this port.
+	header /.well-known/matrix/client Content-Type application/json
+	respond /.well-known/matrix/client `{"m.homeserver":{"base_url":"http://localhost:8010/"}}`
+
+	@compat path_regexp ^/_matrix/client/[^/]+/(login|logout|refresh)$
+	reverse_proxy @compat mas:8080
+	reverse_proxy synapse:8008
+}
