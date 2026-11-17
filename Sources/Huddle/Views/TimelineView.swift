@@ -11,9 +11,13 @@ struct TimelineView: View {
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
 
-    /// Whether the newest message is on screen; new messages only auto-scroll when it is.
+    /// Whether the newest message is on screen.
     @State private var isAtBottom = true
-    @State private var pinnedBeforeResize = true
+    /// The intent to stay on the newest message. Unlike `isAtBottom` it survives the moment a
+    /// batch of messages or a resize pushes the newest one out of view, so the view can follow.
+    @State private var followsNewest = true
+    /// Whether the top of the loaded history is on screen, which is when to fetch more.
+    @State private var historyEdgeVisible = false
     private static let bottomID = "timeline-bottom"
 
     private struct ReadTrigger: Equatable {
@@ -21,17 +25,24 @@ struct TimelineView: View {
         let isAtBottom: Bool
     }
 
+    private struct HistoryTrigger: Equatable {
+        let edgeVisible: Bool
+        let finishedRequests: Int
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                // Not lazy on purpose. A lazy stack only estimates the height of rows it hasn't
+                // drawn, so scrolling to the newest message lands in the wrong place, gets
+                // corrected a frame later (flicker), and sometimes leaves the view blank.
+                VStack(alignment: .leading, spacing: 0) {
                     if timeline.hasMoreHistory, !timeline.isLoading {
                         ProgressView()
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .padding(12)
-                            // Asks again after each request for as long as the spinner stays visible.
-                            .task(id: timeline.historyRequests) { await timeline.loadOlder() }
+                            .onGeometryChange(for: Bool.self, of: Self.isOnScreen) { historyEdgeVisible = $0 }
                     }
                     ForEach(timeline.rows) { row in
                         TimelineRowView(row: row, timeline: timeline, media: media, onOpenThread: onOpenThread)
@@ -40,52 +51,72 @@ struct TimelineView: View {
                             RepliesDivider(count: replyCount)
                         }
                     }
+                    // The very last thing in the scroll view, with nothing below it: scrolling to it
+                    // is scrolling to the end. The gap under the newest message sits above it.
+                    Color.clear
+                        .frame(height: 8)
                     Color.clear
                         .frame(height: 1)
                         .id(Self.bottomID)
-                        .onAppear {
-                            isAtBottom = true
-                            pinnedBeforeResize = true
-                        }
-                        .onDisappear {
-                            isAtBottom = false
-                            // Cleared a beat later, so a resize that pushes the newest message out
-                            // of view still knows it was there.
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                                if !isAtBottom { pinnedBeforeResize = false }
+                        .onGeometryChange(for: Bool.self, of: Self.isOnScreen) { visible in
+                            isAtBottom = visible
+                            if visible {
+                                followsNewest = true
+                            } else {
+                                // Cleared a beat later, so content that pushes the newest message
+                                // out of view can still be followed.
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                    if !isAtBottom { followsNewest = false }
+                                }
                             }
                         }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.top, 8)
+                // Rows keep changing height after they first appear: messages decrypt, reactions
+                // and thread summaries arrive, more batches load. Whenever the content's height
+                // changes while following the newest message, go back to the end.
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height.rounded() }) { _ in
+                    if followsNewest { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                }
             }
             // A room opens at its newest message. A thread starts at its root message, so a short
             // one sits under the header; a long one is then scrolled to its newest reply.
             .defaultScrollAnchor(timeline.threadRoot == nil ? .bottom : .top)
             .onChange(of: timeline.rows.last?.id) { previousLast, _ in
-                if previousLast == nil {
-                    // First content: lazy row heights settle over a few layout passes.
-                    settleAtBottom(proxy)
-                } else if isAtBottom {
-                    scrollToBottom(proxy)
-                }
+                // The first content, or a new message while following the newest.
+                if previousLast == nil || followsNewest { scrollToBottom(proxy) }
             }
             .onAppear {
-                if !timeline.rows.isEmpty { settleAtBottom(proxy) }
+                if !timeline.rows.isEmpty { scrollToBottom(proxy) }
             }
             // Opening or closing the side panel changes the width and re-wraps every message;
-            // if the newest message was in view, keep it there.
+            // if the newest message was in view, keep it there once the change has finished.
             .onGeometryChange(for: CGFloat.self, of: \.size.width) { _ in
-                if pinnedBeforeResize { settleAtBottom(proxy) }
+                guard followsNewest else { return }
+                scrollToBottom(proxy)
+                for delay in [0.05, 0.3] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        if followsNewest { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                    }
+                }
             }
             .onChange(of: timeline.prependCount) {
-                // Older messages were added above: stay on the message the user was reading.
-                if let anchor = timeline.prependAnchorID, !isAtBottom {
+                // Older messages were added above. On the newest message, stay there; otherwise
+                // stay on the message being read. Someone at the top edge is reading history even
+                // if they left the newest message only a moment ago.
+                if isAtBottom || (followsNewest && !historyEdgeVisible) {
+                    scrollToBottom(proxy)
+                } else if let anchor = timeline.prependAnchorID {
                     proxy.scrollTo(anchor, anchor: .top)
                 }
             }
+            // Fetches history while its top edge is on screen, again after each request finishes.
+            .task(id: HistoryTrigger(edgeVisible: historyEdgeVisible, finishedRequests: timeline.historyRequests)) {
+                if historyEdgeVisible, timeline.hasMoreHistory { await timeline.loadOlder() }
+            }
             .overlay(alignment: .bottomTrailing) {
-                if !isAtBottom, !timeline.rows.isEmpty {
+                if !isAtBottom, !followsNewest, !timeline.rows.isEmpty {
                     Button {
                         scrollToBottom(proxy)
                     } label: {
@@ -112,6 +143,12 @@ struct TimelineView: View {
         .onAppear { composerFocused = true }
     }
 
+    /// Whether a view inside the scroll view is within, or just outside, the visible area.
+    private static func isOnScreen(_ geometry: GeometryProxy) -> Bool {
+        guard let visible = geometry.bounds(of: .scrollView) else { return false }
+        return visible.insetBy(dx: 0, dy: -24).intersects(geometry.frame(in: .local))
+    }
+
     /// In a thread, the root message's row: replies are set off below it.
     private var threadRootRowID: String? {
         guard timeline.threadRoot != nil else { return nil }
@@ -122,21 +159,10 @@ struct TimelineView: View {
         max(timeline.rows.filter(\.isMessage).count - 1, 0)
     }
 
-    private func settleAtBottom(_ proxy: ScrollViewProxy) {
-        isAtBottom = true
-        for delay in [0, 0.05, 0.25] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                proxy.scrollTo(Self.bottomID, anchor: .bottom)
-            }
-        }
-    }
-
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         isAtBottom = true
-        // After layout, so the newest row has its final height.
-        DispatchQueue.main.async {
-            proxy.scrollTo(Self.bottomID, anchor: .bottom)
-        }
+        followsNewest = true
+        proxy.scrollTo(Self.bottomID, anchor: .bottom)
     }
 
     private func composer(_ proxy: ScrollViewProxy) -> some View {
