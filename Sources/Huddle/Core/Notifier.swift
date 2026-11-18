@@ -195,16 +195,24 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func open(accountID: String, roomID: String, thread: String?) {
-        guard let store, let account = store.accounts.first(where: { $0.id == accountID }) else { return }
-        store.selectedID = accountID
-        account.searchText = ""
-        account.selectedRoomID = roomID
-        if let thread, !thread.isEmpty { account.sidePanels[roomID] = .thread(thread) }
+        guard show(accountID: accountID, roomID: roomID, thread: thread) else { return }
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
         }
+    }
+
+    /// Goes to a notification's account and room, with the room list on the room's space, and
+    /// its thread if it's a reply in one. False if the account has gone.
+    @discardableResult
+    func show(accountID: String, roomID: String, thread: String?) -> Bool {
+        guard let store, let account = store.accounts.first(where: { $0.id == accountID }) else { return false }
+        store.selectedID = accountID
+        account.searchText = ""
+        account.showRoom(roomID)
+        if let thread, !thread.isEmpty { account.sidePanels[roomID] = .thread(thread) }
+        return true
     }
 }
 

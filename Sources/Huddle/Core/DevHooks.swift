@@ -14,6 +14,8 @@ import Foundation
 ///   HUDDLE_DEV_SPACE     with HUDDLE_DEV_SELECT: name of a space (one of the account's, or an
 ///                        invitation) to browse at launch; "" for all rooms
 ///   HUDDLE_DEV_SHEET     with HUDDLE_DEV_SPACE: newRoom, newSpace, addRooms or leave, to open that sheet
+///   HUDDLE_DEV_NOTIFICATION  with HUDDLE_DEV_SPACE: name of a room to open as clicking its notification
+///                        does, once the space is showing (without bringing the app forward)
 ///   HUDDLE_DEV_SIGN_OUT  username to sign out at launch (same code path as the Sign Out menu)
 ///   HUDDLE_DEV_FRESH     start with no accounts loaded (stored ones are left alone), to see first run
 ///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance
@@ -59,6 +61,18 @@ enum DevHooks {
                 break
             }
             try? await Task.sleep(for: .milliseconds(200))
+        }
+        if let roomName = ProcessInfo.processInfo.environment["HUDDLE_DEV_NOTIFICATION"] {
+            // Once the rooms and what each space holds are known, as they would be by then.
+            try? await Task.sleep(for: .seconds(2))
+            for _ in 0..<50 {
+                if !account.spaceFilters.isEmpty,
+                   let room = account.allRooms.first(where: { $0.name == roomName && !$0.isSpace }) {
+                    Notifier.shared.show(accountID: account.id, roomID: room.id, thread: nil)
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
         }
         guard let sheet else { return }
         // Editable spaces are known a moment after the spaces themselves.

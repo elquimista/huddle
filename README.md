@@ -25,7 +25,7 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Presence:** direct chats show whether the other person is online (green) or away (amber) on their avatar, and "Online" or "Last seen 5 min ago" under the room's name. Huddle tells your server you're online while it's in front and away a couple of minutes after; Settings can turn sharing off. Servers that don't do presence simply show nothing.
 - **Typing:** start typing anywhere in the window and it goes to the composer; the arrow keys still move through the room list.
 - **Read receipts:** in direct chats, ticks on your messages (one grey tick while sending, two grey once sent, two coloured once read); in group rooms, small avatars beside the last message each person has read, with the full list on click.
-- **Notifications:** macOS alerts for new messages, mentions and invitations, following your account's notification rules (muted rooms stay silent; direct messages and mentions play a sound). Clicking one opens that account, room and thread, and reading a room clears its alerts. Settings (⌘,) turns alerts or their sound off; they start off in the Dev build.
+- **Notifications:** macOS alerts for new messages, mentions and invitations, following your account's notification rules (muted rooms stay silent; direct messages and mentions play a sound). Clicking one opens that account, room and thread, with the room list on the room's space if the space showing doesn't hold it, and reading a room clears its alerts. Settings (⌘,) turns alerts or their sound off; they start off in the Dev build.
 - **Encryption:** end-to-end encrypted rooms work, and a new session is verified with your recovery key.
 
 Not built yet: sending files other than images, and emoji verification.

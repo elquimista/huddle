@@ -452,9 +452,7 @@ final class AccountSession: Identifiable {
         if hit.roomID != selectedRoomID {
             sidePanels[hit.roomID] = .search
             // Into the list too: a room outside the space shown would be open but not in it.
-            if let space = selectedSpaceID, !roomIDs(inSpace: space).contains(hit.roomID) {
-                selectedSpaceID = nil
-            }
+            showInList(hit.roomID)
         }
         let timeline = timeline(for: hit.roomID)
         selectedRoomID = hit.roomID
@@ -717,13 +715,18 @@ final class AccountSession: Identifiable {
         return failures
     }
 
-    /// Shows a room, with the list on every room if the space shown doesn't hold it (as no
-    /// space holds a direct chat).
+    /// Shows a room, with the room list where it can be seen (see `showInList`).
     func showRoom(_ roomID: String) {
-        if let space = selectedSpaceID, !roomIDs(inSpace: space).contains(roomID) {
-            selectedSpaceID = nil
-        }
+        showInList(roomID)
         selectedRoomID = roomID
+    }
+
+    /// Makes the room list show a room, if it doesn't already: on the first space in the rail
+    /// that holds it, or on every room if none does (as none holds a direct chat). A space
+    /// showing that holds it, or every room showing, is left as it is.
+    func showInList(_ roomID: String) {
+        guard let space = selectedSpaceID, !roomIDs(inSpace: space).contains(roomID) else { return }
+        selectedSpaceID = topLevelSpace(containing: roomID)
     }
 
     /// Creates a space. Returns its ID.
