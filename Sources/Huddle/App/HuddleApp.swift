@@ -18,6 +18,11 @@ struct HuddleApp: App {
         }
         .defaultSize(width: 1040, height: 680)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About \(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Huddle")") {
+                    AboutPanel.show()
+                }
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.checkForUpdates() }
                     .disabled(!updater.canCheck)

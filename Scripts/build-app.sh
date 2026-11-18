@@ -29,6 +29,9 @@ fi
 VERSION="${HUDDLE_VERSION:-$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null | sed 's/^v//' || true)}"
 VERSION="${VERSION:-0.1.0}"
 BUILD="${HUDDLE_BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
+# The commit it's built from, shown in About ("+": with changes not yet committed).
+COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)"
+if [ -n "$COMMIT" ] && ! git diff --quiet HEAD -- 2>/dev/null; then COMMIT="$COMMIT+"; fi
 
 # Updates (Sparkle; Sources/Huddle/Core/AppUpdater.swift). The release app reads the appcast the
 # release workflow publishes, and takes only updates signed with the private half of this public
@@ -56,6 +59,7 @@ APP="build/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "Resources/$ICON.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp -R Resources/Licenses "$APP/Contents/Resources/"  # the open-source libraries' licenses (linked from About)
 cp "$BIN" "$APP/Contents/MacOS/Huddle"
 if [ "$CONFIG" = release ]; then strip -x "$APP/Contents/MacOS/Huddle"; fi
 ditto "$(dirname "$BIN")/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
@@ -73,6 +77,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$BUILD</string>
+    <key>HuddleCommit</key><string>$COMMIT</string>
+    <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Felix-Andre Lee</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.social-networking</string>
     <key>NSHighResolutionCapable</key><true/>
