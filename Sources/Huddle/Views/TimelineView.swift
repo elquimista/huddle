@@ -1143,6 +1143,8 @@ private struct MessageView: View {
     /// Which message shows its actions: this one, while the pointer is on it or its action bar.
     @Environment(\.messageHover) private var hover
     @State private var showsPicker = false
+    /// The emoji picker of the add-reaction chip after the reactions.
+    @State private var showsReactionPicker = false
     /// True while the "More" menu is open, which keeps the actions up under it.
     @State private var isMenuOpen = false
     @Environment(\.messageLayout) private var layout
@@ -1160,11 +1162,13 @@ private struct MessageView: View {
 
     private static let quickReactions = ["👍", "❤️", "😂"]
 
-    /// The action bar stays up while its emoji picker is open, even with the pointer elsewhere.
+    /// The action bar stays up while an emoji picker of this message's is open, even with the
+    /// pointer elsewhere.
     private var showsActions: Bool {
         // Not under the image viewer: the pointer that opened it is still over this message,
         // and no "left" arrives once the viewer is in the way.
-        (hover.row(rowID).isActive || showsPicker || isMenuOpen || isDevHovered) && message.sendState == nil
+        (hover.row(rowID).isActive || showsPicker || showsReactionPicker || isMenuOpen || isDevHovered)
+            && message.sendState == nil
             && ImageViewerState.shared.item == nil
     }
 
@@ -1370,6 +1374,17 @@ private struct MessageView: View {
                     ReactionChipView(reaction: reaction, names: reactorNames(reaction)) {
                         Task { await timeline.toggleReaction(reaction.key, on: message.itemID) }
                     }
+                }
+                // Another reaction, from right where the others are, as Slack has it: shown
+                // while the message is hovered, so quiet messages stay uncluttered.
+                if showsActions {
+                    AddReactionChip { showsReactionPicker = true }
+                        .popover(isPresented: $showsReactionPicker, arrowEdge: .bottom) {
+                            EmojiPicker { emoji in
+                                showsReactionPicker = false
+                                Task { await timeline.toggleReaction(emoji, on: message.itemID) }
+                            }
+                        }
                 }
             }
         }
@@ -1615,6 +1630,31 @@ private struct ReactionChipView: View {
         let shown = names.count > 4 ? Array(names.prefix(3)) + ["\(names.count - 3) others"] : names
         let who = shown.isEmpty ? "\(reaction.count) people" : shown.formatted(.list(type: .and))
         return "\(who) reacted with \(reaction.key)"
+    }
+}
+
+/// After a message's reactions, while it is hovered: a chip like theirs that adds another.
+private struct AddReactionChip: View {
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            AddReactionIcon()
+                .foregroundStyle(.secondary)
+                // Centred by eye: the plus stands out past the face's top right.
+                .offset(x: -1, y: 1)
+                .frame(width: 36, height: 24)
+                .background(Color.primary.opacity(isHovering ? 0.11 : 0.06), in: Capsule())
+                .overlay {
+                    Capsule().strokeBorder(Color.primary.opacity(isHovering ? 0.18 : 0.1), lineWidth: 0.5)
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("Add Reaction…")
+        .accessibilityLabel("Add Reaction")
     }
 }
 
