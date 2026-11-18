@@ -51,7 +51,7 @@ struct RoomSection: Identifiable, Equatable {
     /// whether any of those need attention now, whether any has anything unread, and whether
     /// any was marked unread on purpose.
     var attention: (count: Int, urgent: Bool, hasUnread: Bool, markedUnread: Bool) {
-        (rooms.filter(\.isHighlighted).count, rooms.contains(where: \.isUrgent), rooms.contains(where: \.hasUnread),
+        (rooms.filter(\.isHighlighted).count, rooms.contains(where: \.isUrgent), rooms.contains(where: \.showsUnread),
          rooms.contains(where: \.isMarkedUnread))
     }
 }

@@ -9,13 +9,22 @@ struct RoomListView: View {
     @State private var sectionName = ""
     @State private var renaming: RoomSection?
     @State private var deleting: RoomSection?
-    @State private var failure: String?
+    @State private var failure: Failure?
 
     private struct NewSection {
         var roomID: String?
     }
 
+    private struct Failure {
+        let title: String
+        let message: String
+    }
+
     var body: some View {
+        dialogs(on: list)
+    }
+
+    private var list: some View {
         List(selection: $account.selectedRoomID) {
             ForEach(account.sections) { section in
                 RoomListSection(account: account, section: section, actions: actions)
@@ -64,34 +73,40 @@ struct RoomListView: View {
             account.asksForNewSection = false
             actions.newSection(nil)
         }
-        .alert("New Section", isPresented: Binding(get: { newSection != nil }, set: { if !$0 { newSection = nil } })) {
-            TextField("Name", text: $sectionName)
-            Button("Create") { createSection() }
-                .disabled(sectionName.trimmingCharacters(in: .whitespaces).isEmpty)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(newSection?.roomID == nil ? "Name the section. Put rooms in it from their Move To menu, or drag them there."
-                 : "Name the section. The room goes in it.")
-        }
-        .alert("Rename Section", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
-               presenting: renaming) { section in
-            TextField("Name", text: $sectionName)
-            Button("Rename") { run { try await account.renameSection(section.id, to: sectionName) } }
-                .disabled(sectionName.trimmingCharacters(in: .whitespaces).isEmpty)
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog("Delete the “\(deleting?.title ?? "")” section?",
-                            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                            presenting: deleting) { section in
-            Button("Delete Section", role: .destructive) { run { try await account.deleteSection(section.id) } }
-        } message: { _ in
-            Text("Its rooms go back to People and Rooms.")
-        }
-        .alert("Couldn't Change the Sections", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
-            Button("OK") {}
-        } message: {
-            Text(failure ?? "")
-        }
+    }
+
+    /// Naming, renaming and deleting sections, and what went wrong changing anything.
+    private func dialogs(on content: some View) -> some View {
+        content
+            .alert("New Section", isPresented: Binding(get: { newSection != nil }, set: { if !$0 { newSection = nil } })) {
+                TextField("Name", text: $sectionName)
+                Button("Create") { createSection() }
+                    .disabled(sectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(newSection?.roomID == nil ? "Name the section. Put rooms in it from their Move To menu, or drag them there."
+                     : "Name the section. The room goes in it.")
+            }
+            .alert("Rename Section", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
+                   presenting: renaming) { section in
+                TextField("Name", text: $sectionName)
+                Button("Rename") { run { try await account.renameSection(section.id, to: sectionName) } }
+                    .disabled(sectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Cancel", role: .cancel) {}
+            }
+            .confirmationDialog("Delete the “\(deleting?.title ?? "")” section?",
+                                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                presenting: deleting) { section in
+                Button("Delete Section", role: .destructive) { run { try await account.deleteSection(section.id) } }
+            } message: { _ in
+                Text("Its rooms go back to People and Rooms.")
+            }
+            .alert(failure?.title ?? "", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } }),
+                   presenting: failure) { _ in
+                Button("OK") {}
+            } message: { failure in
+                Text(failure.message)
+            }
     }
 
     /// What the sections and their rooms ask the list to do.
@@ -109,7 +124,10 @@ struct RoomListView: View {
                   guard let orderTag = section.orderTag else { return }
                   run { try await account.moveSection(orderTag, by: offset) }
               },
-              delete: { deleting = $0 })
+              delete: { deleting = $0 },
+              setNotifications: { roomID, mode in
+                  run(failing: "Couldn't Change Notifications") { try await account.setNotificationMode(mode, for: roomID) }
+              })
     }
 
     private func createSection() {
@@ -122,9 +140,9 @@ struct RoomListView: View {
         }
     }
 
-    private func run(_ work: @escaping () async throws -> Void) {
+    private func run(failing title: String = "Couldn't Change the Sections", _ work: @escaping () async throws -> Void) {
         Task {
-            do { try await work() } catch { failure = error.actionMessage }
+            do { try await work() } catch { failure = Failure(title: title, message: error.actionMessage) }
         }
     }
 
@@ -150,6 +168,8 @@ private struct RoomListSection: View {
         let rename: (RoomSection) -> Void
         let moveSection: (RoomSection, Int) -> Void
         let delete: (RoomSection) -> Void
+        /// A room's own notification setting, or nil for the default.
+        let setNotifications: (String, RoomNotificationMode?) -> Void
     }
 
     let account: AccountSession
@@ -337,6 +357,9 @@ private struct RoomListRow: View {
             } else {
                 Button("Mark as Unread") { account.setRoom(room.id, unread: true) }
             }
+            NotificationModeMenu(mode: room.notificationMode, defaultMode: account.defaultNotificationMode(for: room)) {
+                actions.setNotifications(room.id, $0)
+            }
             Divider()
             let place = account.place(of: room)
             Button(place == .favourites ? "Remove from Favourites" : "Add to Favourites") {
@@ -382,6 +405,7 @@ private struct RoomListRow: View {
                 Button("Move to \(destination.title)") { actions.move(room.id, destination.place) }
             }
             Button("Move to New Section") { actions.newSection(room.id) }
+            Button(room.isMuted ? "Unmute" : "Mute") { actions.setNotifications(room.id, room.isMuted ? nil : .mute) }
         }
     }
 }
@@ -443,7 +467,7 @@ private struct RoomRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(room.name)
-                        .fontWeight(room.hasUnread || room.isHighlighted ? .semibold : .regular)
+                        .fontWeight(room.showsUnread || room.isHighlighted ? .semibold : .regular)
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     if let timestamp = latestReaction?.date ?? room.timestamp {
@@ -458,6 +482,14 @@ private struct RoomRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
+                    if room.isMuted {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                            .frame(width: Self.badgeWidth)
+                            .help("Muted")
+                            .accessibilityLabel("Muted")
+                    }
                     badge
                 }
             }
@@ -472,7 +504,7 @@ private struct RoomRow: View {
             pill(Text("@"), color: .red)
         } else if room.notifications > 0 {
             pill(Text("\(min(room.notifications, 99))"), color: room.isUrgent ? .red : .accentColor)
-        } else if room.hasUnread {
+        } else if room.showsUnread {
             // Marked unread on purpose is a reminder, in colour; new messages in a quiet room
             // only a grey dot.
             Circle()

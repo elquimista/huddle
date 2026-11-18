@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// A room's details in the panel beside it: its picture, name and topic (changeable where this
-/// account may), whether it's encrypted, who is in it (with inviting people and, for admins
+/// account may), whether it's encrypted, when it notifies you, who is in it (with inviting people and, for admins
 /// and moderators, changing their roles and removing them), and leaving it.
 struct RoomInfoPanelView: View {
     let account: AccountSession
@@ -70,6 +70,8 @@ private struct RoomInfoContent: View {
                     .padding(.bottom, 16)
                 Divider()
                 encryption
+                Divider()
+                notifications
                 Divider()
                 members
                 Divider()
@@ -262,6 +264,23 @@ private struct RoomInfoContent: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    // MARK: Notifications
+
+    private var notifications: some View {
+        let summary = account.allRooms.first { $0.id == details.roomID }
+        return NotificationModeRow(mode: account.notificationModes[details.roomID],
+                                   defaultMode: summary.flatMap(account.defaultNotificationMode(for:)),
+                                   noun: noun) { mode in
+            Task {
+                do {
+                    try await account.setNotificationMode(mode, for: details.roomID)
+                } catch {
+                    actionFailure = ActionFailure(title: "Couldn't Change Notifications", message: error.actionMessage)
+                }
+            }
+        }
     }
 
     // MARK: Members

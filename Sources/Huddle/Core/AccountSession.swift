@@ -24,7 +24,16 @@ struct RoomSummary: Identifiable, Equatable {
     var hasCounts = false
     var lastMessage: String?
     var timestamp: Date?
+    /// The room's own notification setting; nil when it follows the account's default
+    /// (RoomNotifications.swift).
+    var notificationMode: RoomNotificationMode?
+    /// Which default it follows otherwise: the push rules tell these apart.
+    var isEncrypted = false
+    var isOneToOne = false
 
+    var isMuted: Bool { notificationMode == .mute }
+    /// Shown as unread: anything new, except that a muted room is only when marked unread.
+    var showsUnread: Bool { isMuted ? isMarkedUnread : hasUnread }
     var isHighlighted: Bool { isInvite || notifications > 0 || mentions > 0 }
     /// Addressed to you personally: an invitation, a mention, or a direct message.
     var isUrgent: Bool { isInvite || mentions > 0 || (isDirect && notifications > 0) }
@@ -45,6 +54,14 @@ final class AccountSession: Identifiable {
     /// The room list's sections, in order, each with its rooms, most recent first: those of the
     /// space showing that match the search. See RoomSections.swift.
     private(set) var sections: [RoomSection] = []
+    /// Rooms' own notification settings, by room ID, and the account's defaults for each kind of
+    /// room, as the push rules have them (RoomNotifications.swift).
+    var notificationModes: [String: RoomNotificationMode] = [:]
+    var defaultNotificationModes: [NotificationDefaultKind: RoomNotificationMode] = [:]
+    @ObservationIgnored var notificationSettingsTask: Task<MatrixRustSDK.NotificationSettings, Never>?
+    /// Rooms whose setting is being changed, and how many changes have been made so far.
+    @ObservationIgnored var notificationWrites: [String: Int] = [:]
+    @ObservationIgnored var notificationChanges = 0
     /// The account's own sections, by tag, and the order of People, Rooms and them, as Element
     /// keeps them (RoomSections.swift).
     var sectionData: [String: CustomSection] = [:] {
@@ -199,6 +216,7 @@ final class AccountSession: Identifiable {
             observeAllRooms(in: roomList)
             await startSpaces()
             sectionsTask = Task { [weak self] in await self?.followSections() }
+            Task { [weak self] in await self?.loadNotificationModes() }
             let loading = try roomList.loadingState(listener: RoomListLoadingListener { [weak self] state in
                 Task { @MainActor in self?.hasLoadedRooms = state != .notLoaded }
             })
@@ -370,6 +388,16 @@ final class AccountSession: Identifiable {
         rebuildSections()
     }
 
+    /// Puts each room's notification setting on its summary, where the list reads it.
+    func stampNotificationModes() {
+        var changed = false
+        for index in allRooms.indices where allRooms[index].notificationMode != notificationModes[allRooms[index].id] {
+            allRooms[index].notificationMode = notificationModes[allRooms[index].id]
+            changed = true
+        }
+        if changed { rebuildSections() }
+    }
+
     /// Keeps `allRooms` up to date: every room and space, whatever the room list is narrowed to.
     private func observeAllRooms(in roomList: RoomList) {
         let (stream, continuation) = AsyncStream.makeStream(of: [RoomListEntriesUpdate].self)
@@ -399,6 +427,7 @@ final class AccountSession: Identifiable {
                 return summary
             })
         }
+        stampNotificationModes(on: &all)
         let previous = allRooms
         allRooms = all
         updateBadges()
@@ -575,7 +604,7 @@ final class AccountSession: Identifiable {
         for room in allRooms where !room.isSpace && ids.contains(room.id) {
             if room.isHighlighted { count += 1 }
             if room.isUrgent { urgent += 1 }
-            if room.hasUnread { hasUnread = true }
+            if room.showsUnread { hasUnread = true }
         }
         return (count, urgent, hasUnread)
     }
@@ -1096,6 +1125,8 @@ extension RoomSummary {
             summary.isSpace = info.isSpace
             summary.isFavourite = info.isFavourite
             summary.isLowPriority = info.isLowPriority
+            summary.isEncrypted = info.encryptionState == .encrypted
+            summary.isOneToOne = info.activeMembersCount == 2
             if info.isDirect, info.heroes.count == 1 {
                 summary.directUserID = info.heroes[0].userId
                 if summary.avatarURL == nil { summary.avatarURL = info.heroes[0].avatarUrl }
