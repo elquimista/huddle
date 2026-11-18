@@ -18,12 +18,15 @@ struct HuddleApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 let account = store.selected
+                Button("New Message…") { account?.sheet = .newMessage }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(account == nil || account?.sheet != nil)
                 Button("New Room…") {
                     // In the space whose rooms are showing, where that's allowed.
                     let space = account?.browsingSpaceID ?? account?.selectedSpaceID
                     account?.sheet = .newRoom(inSpace: space)
                 }
-                .keyboardShortcut("n", modifiers: .command)
+                .keyboardShortcut("n", modifiers: [.command, .option])
                 .disabled(account == nil || account?.sheet != nil)
                 Button("New Space…") { account?.sheet = .newSpace }
                     .disabled(account == nil || account?.sheet != nil)
@@ -132,6 +135,14 @@ struct MainView: View {
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     AccountBar(sidebar: sidebar)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        account.sheet = .newMessage
+                    } label: {
+                        Label("New Message", systemImage: "square.and.pencil")
+                    }
+                    .help("New message (⌘N)")
                 }
             }
         } detail: {

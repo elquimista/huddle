@@ -625,6 +625,44 @@ final class AccountSession: Identifiable {
         try await spaceService?.addChildToSpace(childId: roomID, spaceId: spaceID)
     }
 
+    // MARK: Direct chats
+
+    /// People whose names or Matrix IDs match, from the server's directory: usually those
+    /// who share a room with this account or are in a public one.
+    func searchPeople(_ term: String) async throws -> [UserProfile] {
+        try await client.searchUsers(searchTerm: term, limit: 30).results
+            .filter { $0.userId != userID }
+    }
+
+    /// Someone's name and picture, or an error if there's nobody by that ID.
+    func profile(of userID: String) async throws -> UserProfile {
+        try await client.getProfile(userId: userID)
+    }
+
+    /// False when the server says nobody has a Matrix ID; nil when it won't say.
+    func userExists(_ userID: String) async -> Bool? {
+        await ServerSearch(client: client).userExists(userID)
+    }
+
+    /// The direct chat with someone, made (encrypted, with them invited) if there isn't one
+    /// yet. Returns its ID.
+    func directChat(with userID: String) async throws -> String {
+        if let room = try? client.getDmRoom(userId: userID) { return room.id() }
+        let parameters = CreateRoomParameters(
+            name: nil, topic: nil, isEncrypted: true, isDirect: true,
+            visibility: .private, preset: .trustedPrivateChat, invite: [userID])
+        return try await client.createRoom(request: parameters)
+    }
+
+    /// Shows a room, with the list on every room if the space shown doesn't hold it (as no
+    /// space holds a direct chat).
+    func showRoom(_ roomID: String) {
+        if let space = selectedSpaceID, !roomIDs(inSpace: space).contains(roomID) {
+            selectedSpaceID = nil
+        }
+        selectedRoomID = roomID
+    }
+
     /// Creates a space. Returns its ID.
     func createSpace(name: String, topic: String?, isPublic: Bool) async throws -> String {
         let parameters = CreateRoomParameters(
@@ -979,6 +1017,7 @@ extension ProfileDetails {
 
 /// A window shown over the main one for something to do with rooms and spaces.
 enum AccountSheet: Identifiable, Equatable {
+    case newMessage
     case newRoom(inSpace: String?)
     case newSpace
     case addRooms(toSpace: String)
@@ -986,6 +1025,7 @@ enum AccountSheet: Identifiable, Equatable {
 
     var id: String {
         switch self {
+        case .newMessage: "newMessage"
         case .newRoom(let space): "newRoom-\(space ?? "")"
         case .newSpace: "newSpace"
         case .addRooms(let space): "addRooms-\(space)"

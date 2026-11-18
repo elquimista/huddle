@@ -9,6 +9,7 @@ struct AccountSheetView: View {
 
     var body: some View {
         switch sheet {
+        case .newMessage: NewMessageSheet(account: account)
         case .newSpace: NewSpaceSheet(account: account)
         case .newRoom(let spaceID): NewRoomSheet(account: account, spaceID: spaceID)
         case .addRooms(let spaceID): AddRoomsSheet(account: account, spaceID: spaceID)

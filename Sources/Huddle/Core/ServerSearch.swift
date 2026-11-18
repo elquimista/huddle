@@ -177,6 +177,27 @@ struct ServerSearch {
         return relation["event_id"] as? String
     }
 
+    /// Whether anyone has a Matrix ID: false only when the server says nobody does (404).
+    /// A refusal (some servers only show profiles of people who share a room) means
+    /// they may well exist, so it's nil, as is any other failure.
+    func userExists(_ userID: String) async -> Bool? {
+        guard let session = try? client.session(),
+              var components = URLComponents(string: session.homeserverUrl),
+              let encoded = userID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#")))
+        else { return nil }
+        components.percentEncodedPath = components.path.trimmingSuffix("/") + "/_matrix/client/v3/profile/" + encoded
+        guard let url = components.url else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let status = (response as? HTTPURLResponse)?.statusCode else { return nil }
+        switch status {
+        case 200: return true
+        case 404: return false
+        default: return nil
+        }
+    }
+
     /// Whether the server offers message search at all, asked with a search that finds
     /// nothing.
     func isSupported() async -> Bool {

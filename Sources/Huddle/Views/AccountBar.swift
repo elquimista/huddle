@@ -10,9 +10,9 @@ struct AccountBar: View {
     @State private var accountToSignOut: AccountSession?
 
     /// Room taken by the window controls and the sidebar button before the first avatar, and
-    /// by the toolbar's own margin after the last. On the generous side: the toolbar hides an
+    /// by the New Message button and the toolbar's own margin after the last. On the generous side: the toolbar hides an
     /// item that is a little too wide outright rather than squeezing it.
-    private static let reserved: CGFloat = 156
+    private static let reserved: CGFloat = 196
     /// One avatar with its ring and the room its badge needs.
     private static let slot: CGFloat = AccountButton.size + 4 + 2 * RailBadge.overhang
 
