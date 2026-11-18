@@ -36,6 +36,8 @@ struct HuddleApp: App {
                 .disabled(account == nil || account?.sheet != nil)
                 Button("New Space…") { account?.sheet = .newSpace }
                     .disabled(account == nil || account?.sheet != nil)
+                Button("New Section…") { account?.asksForNewSection = true }
+                    .disabled(account == nil || account?.sheet != nil)
                 Divider()
                 Button("Add Account…") { store.isAddingAccount = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])

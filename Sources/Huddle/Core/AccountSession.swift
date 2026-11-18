@@ -15,8 +15,11 @@ struct RoomSummary: Identifiable, Equatable {
     var hasUnread = false
     /// Marked unread by the user (here or in another client), as a reminder to come back.
     var isMarkedUnread = false
-    /// A space rather than a room (only in the full index; the room list leaves spaces out).
+    /// A space rather than a room (the room list leaves spaces out).
     var isSpace = false
+    /// Tagged favourite or low priority (m.favourite, m.lowpriority), here or in another app.
+    var isFavourite = false
+    var isLowPriority = false
     /// False when the room's details could not be read, so the counts above mean nothing.
     var hasCounts = false
     var lastMessage: String?
@@ -37,7 +40,29 @@ final class AccountSession: Identifiable {
 
     private(set) var displayName: String?
     private(set) var avatarURL: String?
+    /// The room list as shown: the rooms of every section, in order (see `sections`).
     private(set) var rooms: [RoomSummary] = []
+    /// The room list's sections, in order, each with its rooms, most recent first: those of the
+    /// space showing that match the search. See RoomSections.swift.
+    private(set) var sections: [RoomSection] = []
+    /// The account's own sections, by tag, and the order of People, Rooms and them, as Element
+    /// keeps them (RoomSections.swift).
+    var sectionData: [String: CustomSection] = [:] {
+        didSet { if sectionData != oldValue { rebuildSections() } }
+    }
+    var sectionOrder: [String] = ElementSections.order(from: nil, sections: [:]) {
+        didSet { if sectionOrder != oldValue { rebuildSections() } }
+    }
+    /// The section tag each room carries, if any.
+    var roomSectionTags: [String: String] = [:] {
+        didSet { if roomSectionTags != oldValue { rebuildSections() } }
+    }
+    /// Set by File > New Section…: the room list asks for the new section's name.
+    var asksForNewSection = false
+    /// The sections folded away in the list, by ID.
+    var collapsedSections: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(collapsedSections), forKey: "collapsedSections.\(id)") }
+    }
     /// False until the server has sent the first page of the room list.
     private(set) var hasLoadedRooms = false
     private(set) var syncState: SyncServiceState = .idle
@@ -65,7 +90,7 @@ final class AccountSession: Identifiable {
     /// What the panel beside each room's timeline shows, so it is still there on coming back.
     var sidePanels: [String: ThreadPanel.Content] = [:]
     var searchText = "" {
-        didSet { if searchText != oldValue { applyFilter() } }
+        didSet { if searchText != oldValue { rebuildSections() } }
     }
 
     /// Rooms with notifications, for the account rail and Dock badge.
@@ -92,7 +117,7 @@ final class AccountSession: Identifiable {
         didSet {
             guard selectedSpaceID != oldValue else { return }
             UserDefaults.standard.set(selectedSpaceID, forKey: "selectedSpace.\(id)")
-            applyFilter()
+            rebuildSections()
         }
     }
     /// The space whose rooms are being browsed in the main area, in place of a room.
@@ -116,10 +141,11 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var allController: RoomListDynamicEntriesController?
     @ObservationIgnored private var allRoomsTask: Task<Void, Never>?
 
-    @ObservationIgnored private var entries: RoomListEntriesWithDynamicAdaptersResult?
-    @ObservationIgnored private var controller: RoomListDynamicEntriesController?
     @ObservationIgnored private var handles: [TaskHandle] = []
-    @ObservationIgnored private var roomUpdatesTask: Task<Void, Never>?
+    /// Follows the rooms' sections, here and in other apps.
+    @ObservationIgnored var sectionsTask: Task<Void, Never>?
+    /// Section changes under way here: the server's answers may not have them yet.
+    @ObservationIgnored var sectionWrites = 0
     @ObservationIgnored private var restartTask: Task<Void, Never>?
     @ObservationIgnored private var restartAttempts = 0
     @ObservationIgnored private var pendingClears: Set<String> = []
@@ -131,7 +157,6 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var subscriptionTask: Task<Void, Never>?
     @ObservationIgnored private var timelineOrder: [String] = []
 
-    private static let pageSize: UInt32 = 200
     private static let maxCachedTimelines = 6
     /// Rooms on screen kept subscribed at once: a full window's worth, with room to spare.
     private static let maxSubscribedRooms = 30
@@ -145,6 +170,7 @@ final class AccountSession: Identifiable {
         self.ownPresence = OwnPresence(client: client)
         // The space the room list was narrowed to last time (didSet doesn't run in init).
         selectedSpaceID = UserDefaults.standard.string(forKey: "selectedSpace.\(id)")
+        collapsedSections = Set(UserDefaults.standard.stringArray(forKey: "collapsedSections.\(id)") ?? [])
     }
 
     // MARK: Lifecycle
@@ -170,9 +196,9 @@ final class AccountSession: Identifiable {
             self.roomListService = roomListService
             let roomList = try await roomListService.allRooms()
             self.roomList = roomList
-            observeRooms(in: roomList)
             observeAllRooms(in: roomList)
             await startSpaces()
+            sectionsTask = Task { [weak self] in await self?.followSections() }
             let loading = try roomList.loadingState(listener: RoomListLoadingListener { [weak self] state in
                 Task { @MainActor in self?.hasLoadedRooms = state != .notLoaded }
             })
@@ -240,7 +266,8 @@ final class AccountSession: Identifiable {
     func stop() async {
         restartTask?.cancel()
         restartTask = nil
-        roomUpdatesTask?.cancel()
+        sectionsTask?.cancel()
+        allRoomsTask?.cancel()
         handles.forEach { $0.cancel() }
         handles.removeAll()
         timelines.values.forEach { $0.stop() }
@@ -269,56 +296,6 @@ final class AccountSession: Identifiable {
 
     // MARK: Room list
 
-    private func observeRooms(in roomList: RoomList) {
-        let (stream, continuation) = AsyncStream.makeStream(of: [RoomListEntriesUpdate].self)
-        let entries = roomList.entriesWithDynamicAdapters(pageSize: Self.pageSize,
-                                                          listener: RoomEntriesListener { continuation.yield($0) })
-        self.entries = entries
-        controller = entries.controller()
-        handles.append(entries.entriesStream())
-        applyFilter()
-
-        // Diffs are processed strictly in order; summaries are built off the main actor.
-        roomUpdatesTask = Task.detached { [weak self] in
-            for await updates in stream {
-                var diffs: [VectorDiff<(Room, RoomSummary)>] = []
-                for update in updates {
-                    diffs.append(await update.diff.map { room in (room, await RoomSummary.make(from: room)) })
-                }
-                await self?.apply(diffs)
-            }
-        }
-    }
-
-    private func apply(_ diffs: [VectorDiff<(Room, RoomSummary)>]) {
-        var rooms = rooms
-        for diff in diffs {
-            rooms.apply(diff.mapValues { room, summary in
-                roomHandles[summary.id] = room
-                return summary
-            })
-        }
-        let previous = self.rooms
-        self.rooms = rooms
-        // Marked unread from another device: a room open here stays unread too, rather than
-        // being read again by the next message that arrives.
-        let wasMarked = Set(previous.filter(\.isMarkedUnread).map(\.id))
-        for room in rooms where room.isMarkedUnread && !wasMarked.contains(room.id) {
-            timelines[room.id]?.holdsUnread = true
-        }
-        // A direct chat's other person may only now be known.
-        if rooms.contains(where: { $0.directUserID != nil && visibleRooms.contains($0.id) }) { updatePresenceWatch() }
-        // A room that stops needing attention (read here or elsewhere) drops its notifications.
-        // Only on a definite answer: the room is still listed and its counts were read. A room
-        // missing from the list (a search, a list rebuild) says nothing about being read.
-        let current = Dictionary(rooms.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for room in previous where room.isHighlighted {
-            if let now = current[room.id], now.hasCounts, !now.isHighlighted {
-                clearNotificationsIfStillRead(roomID: room.id)
-            }
-        }
-    }
-
     /// Unread counts can dip to zero for a moment while the SDK rebuilds a room's history after
     /// a gap in sync, so wait and look again before treating the room as read.
     private func clearNotificationsIfStillRead(roomID: String) {
@@ -336,16 +313,61 @@ final class AccountSession: Identifiable {
         }
     }
 
-    private func applyFilter() {
-        var filters: [RoomListEntriesDynamicFilterKind] = [.nonLeft, .nonSpace, .deduplicateVersions]
-        if let space = selectedSpaceID {
-            filters.append(.identifiers(identifiers: Array(roomIDs(inSpace: space))))
-        }
+    /// Sorts the rooms into the list's sections, in Element's order: invitations and favourites
+    /// first, then People, Rooms and the account's own sections in the order set (here or in
+    /// Element), then low priority. Only rooms of the space showing (every room, with none) that
+    /// match the search; spaces left out. A room is in one section: a favourite or a room in an
+    /// own section is there even if tagged otherwise too. Empty sections are left out, except
+    /// the account's own made where the list is showing (the whole list, or that space), so
+    /// rooms can be put in them.
+    func rebuildSections() {
+        let inSpace = selectedSpaceID.map(roomIDs(inSpace:))
         let query = searchText.trimmingCharacters(in: .whitespaces)
-        if !query.isEmpty {
-            filters.append(.normalizedMatchRoomName(pattern: query))
+        var buckets: [String: [RoomSummary]] = [:]
+        for room in allRooms where !room.isSpace {
+            if let inSpace, !inSpace.contains(room.id) { continue }
+            if !query.isEmpty, room.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) == nil {
+                continue
+            }
+            let ownSection = roomSectionTags[room.id].flatMap { sectionData[$0] != nil ? $0 : nil }
+            buckets[RoomSection.id(for: room, ownSection: ownSection), default: []].append(room)
         }
-        _ = controller?.setFilter(kind: .all(filters: filters))
+        var result: [RoomSection] = []
+        func add(_ id: String, _ title: String, _ kind: RoomSection.Kind, keepEmpty: Bool = false) {
+            let rooms = buckets[id] ?? []
+            if !rooms.isEmpty || keepEmpty { result.append(RoomSection(id: id, kind: kind, title: title, rooms: rooms)) }
+        }
+        add(RoomSection.invitesID, "Invitations", .invites)
+        add(RoomSection.favouritesID, "Favourites", .favourites)
+        for tag in sectionOrder {
+            switch tag {
+            case ElementSections.peopleTag: add(RoomSection.peopleID, "People", .people)
+            case ElementSections.chatsTag: add(RoomSection.roomsID, "Rooms", .rooms)
+            default:
+                guard let section = sectionData[tag] else { continue }
+                add(tag, section.name, .custom, keepEmpty: query.isEmpty && isShowingSpace(of: section))
+            }
+        }
+        add(RoomSection.lowPriorityID, "Low Priority", .lowPriority)
+        if result != sections { sections = result }
+        let flattened = result.flatMap(\.rooms)
+        if flattened != rooms { rooms = flattened }
+    }
+
+    /// Whether the list shows where a section was made: its space, or the whole list for one
+    /// made there (or in a space since left).
+    private func isShowingSpace(of section: CustomSection) -> Bool {
+        let madeIn = section.spaceID.flatMap { $0 == ElementSections.homeSpace ? nil : $0 }
+        if let selectedSpaceID { return madeIn == selectedSpaceID }
+        return madeIn == nil || !spaces.contains { $0.roomId == madeIn }
+    }
+
+    /// Shows a tag change at once, before the server's own record of it syncs back.
+    func showTags(of roomID: String, favourite: Bool, lowPriority: Bool) {
+        guard let index = allRooms.firstIndex(where: { $0.id == roomID }) else { return }
+        allRooms[index].isFavourite = favourite
+        allRooms[index].isLowPriority = lowPriority
+        rebuildSections()
     }
 
     /// Keeps `allRooms` up to date: every room and space, whatever the room list is narrowed to.
@@ -357,22 +379,46 @@ final class AccountSession: Identifiable {
         allController = entries.controller()
         _ = allController?.setFilter(kind: .all(filters: [.nonLeft, .deduplicateVersions]))
         handles.append(entries.entriesStream())
+        // Diffs are processed strictly in order; summaries are built off the main actor.
         allRoomsTask = Task.detached { [weak self] in
             for await updates in stream {
-                var diffs: [VectorDiff<RoomSummary>] = []
+                var diffs: [VectorDiff<(Room, RoomSummary)>] = []
                 for update in updates {
-                    diffs.append(await update.diff.map { await RoomSummary.make(from: $0, withPreview: false) })
+                    diffs.append(await update.diff.map { room in (room, await RoomSummary.make(from: room)) })
                 }
                 await self?.applyAll(diffs)
             }
         }
     }
 
-    private func applyAll(_ diffs: [VectorDiff<RoomSummary>]) {
+    private func applyAll(_ diffs: [VectorDiff<(Room, RoomSummary)>]) {
         var all = allRooms
-        for diff in diffs { all.apply(diff) }
+        for diff in diffs {
+            all.apply(diff.mapValues { room, summary in
+                roomHandles[summary.id] = room
+                return summary
+            })
+        }
+        let previous = allRooms
         allRooms = all
         updateBadges()
+        rebuildSections()
+        // Marked unread from another device: a room open here stays unread too, rather than
+        // being read again by the next message that arrives.
+        let wasMarked = Set(previous.filter(\.isMarkedUnread).map(\.id))
+        for room in all where room.isMarkedUnread && !wasMarked.contains(room.id) {
+            timelines[room.id]?.holdsUnread = true
+        }
+        // A direct chat's other person may only now be known.
+        if all.contains(where: { $0.directUserID != nil && visibleRooms.contains($0.id) }) { updatePresenceWatch() }
+        // A room that stops needing attention (read here or elsewhere) drops its notifications.
+        // Only on a definite answer: the room is still listed and its counts were read.
+        let current = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for room in previous where room.isHighlighted {
+            if let now = current[room.id], now.hasCounts, !now.isHighlighted {
+                clearNotificationsIfStillRead(roomID: room.id)
+            }
+        }
     }
 
     /// The account's badges count rooms needing attention, and invitations to spaces.
@@ -398,7 +444,7 @@ final class AccountSession: Identifiable {
         if let selected = selectedSpaceID, !spaces.contains(where: { $0.roomId == selected }) {
             selectedSpaceID = nil
         }
-        if selectedSpaceID != nil { applyFilter() }
+        if selectedSpaceID != nil { rebuildSections() }
     }
 
     private func applySpaceUpdates(_ updates: [SpaceListUpdate]) {
@@ -420,7 +466,7 @@ final class AccountSession: Identifiable {
         var filters = spaceFilters
         for update in updates { filters.apply(update.diff) }
         spaceFilters = filters
-        if selectedSpaceID != nil { applyFilter() }
+        if selectedSpaceID != nil { rebuildSections() }
     }
 
     private func refreshEditableSpaces() async {
@@ -776,10 +822,6 @@ final class AccountSession: Identifiable {
         if selectedSpaceID == spaceID || browsingSpaceID == spaceID { show(space: nil) }
     }
 
-    func loadMoreRooms() {
-        controller?.addOnePage()
-    }
-
     // MARK: Rooms
 
     func room(id: String) -> Room? {
@@ -820,7 +862,7 @@ final class AccountSession: Identifiable {
         return Self.isUnread(room)
     }
 
-    private static func isUnread(_ room: RoomSummary) -> Bool {
+    static func isUnread(_ room: RoomSummary) -> Bool {
         !room.isInvite && !room.isSpace && (room.hasUnread || room.notifications > 0 || room.mentions > 0)
     }
 
@@ -828,18 +870,16 @@ final class AccountSession: Identifiable {
     /// list at once; the server's own record follows as it syncs.
     func setRoom(_ roomID: String, unread: Bool) {
         guard let room = room(id: roomID) else { return }
-        for list in [\AccountSession.rooms, \AccountSession.allRooms] {
-            guard let index = self[keyPath: list].firstIndex(where: { $0.id == roomID }) else { continue }
-            var room = self[keyPath: list][index]
-            room.hasUnread = unread
-            room.isMarkedUnread = unread
+        if let index = allRooms.firstIndex(where: { $0.id == roomID }) {
+            allRooms[index].hasUnread = unread
+            allRooms[index].isMarkedUnread = unread
             if !unread {
-                room.notifications = 0
-                room.mentions = 0
+                allRooms[index].notifications = 0
+                allRooms[index].mentions = 0
             }
-            if list == \AccountSession.rooms { rooms[index] = room } else { allRooms[index] = room }
         }
         updateBadges()
+        rebuildSections()
         // The room on screen stays unread until it is opened again, rather than being read
         // again the moment a message arrives or the room is left.
         timelines[roomID]?.holdsUnread = unread
@@ -1022,8 +1062,7 @@ final class AccountSession: Identifiable {
 }
 
 extension RoomSummary {
-    /// - Parameter withPreview: false for the full index, which needs only names and counts.
-    static func make(from room: Room, withPreview: Bool = true) async -> RoomSummary {
+    static func make(from room: Room) async -> RoomSummary {
         var summary = RoomSummary(id: room.id(), name: room.displayName() ?? room.id())
         if let info = try? await room.roomInfo() {
             summary.name = info.displayName ?? info.canonicalAlias ?? "Empty room"
@@ -1036,6 +1075,8 @@ extension RoomSummary {
             summary.hasUnread = info.numUnreadMessages > 0 || info.isMarkedUnread
             summary.isMarkedUnread = info.isMarkedUnread
             summary.isSpace = info.isSpace
+            summary.isFavourite = info.isFavourite
+            summary.isLowPriority = info.isLowPriority
             if info.isDirect, info.heroes.count == 1 {
                 summary.directUserID = info.heroes[0].userId
                 if summary.avatarURL == nil { summary.avatarURL = info.heroes[0].avatarUrl }

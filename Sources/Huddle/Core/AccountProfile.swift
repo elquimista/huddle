@@ -20,7 +20,7 @@ extension AccountSession {
 
     func profileCapabilities() async -> ProfileCapabilities {
         var result = ProfileCapabilities()
-        guard let (status, json) = try? await accountRequest("GET", "capabilities"), status == 200,
+        guard let (status, json) = try? await clientAPI("GET", "capabilities"), status == 200,
               let capabilities = json["capabilities"] as? [String: Any] else { return result }
         func enabled(_ key: String) -> Bool {
             (capabilities[key] as? [String: Any])?["enabled"] as? Bool ?? true
@@ -66,7 +66,7 @@ extension AccountSession {
             return url
         }
         for path in ["../v1/auth_metadata", "../unstable/org.matrix.msc2965/auth_metadata"] {
-            if let (status, json) = try? await accountRequest("GET", path), status == 200,
+            if let (status, json) = try? await clientAPI("GET", path), status == 200,
                let address = json["account_management_uri"] as? String, let url = URL(string: address) {
                 return url
             }
@@ -98,7 +98,7 @@ extension AccountSession {
         // for that answers 401 with one, and is asked again with it.
         for attempt in 0..<2 {
             body["auth"] = auth
-            let (status, json) = try await accountRequest("POST", "account/password", body: body)
+            let (status, json) = try await clientAPI("POST", "account/password", body: body)
             switch status {
             case 200:
                 return
@@ -116,29 +116,6 @@ extension AccountSession {
             }
         }
         throw PasswordChangeError.needsMoreThanPassword
-    }
-
-    /// A request to the homeserver's client API as this account: its status and JSON reply.
-    private func accountRequest(_ method: String, _ path: String,
-                                body: [String: Any]? = nil) async throws -> (Int, [String: Any]) {
-        let session = try client.session()
-        guard var components = URLComponents(string: session.homeserverUrl) else {
-            throw PasswordChangeError.refused(nil)
-        }
-        // "../v1/…" reaches the API's other versions.
-        let api = path.hasPrefix("../") ? "/_matrix/client/" + path.dropFirst(3) : "/_matrix/client/v3/" + path
-        components.percentEncodedPath = components.path.trimmingSuffix("/") + api
-        guard let url = components.url else { throw PasswordChangeError.refused(nil) }
-        var request = URLRequest(url: url, timeoutInterval: 30)
-        request.httpMethod = method
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-        if let body {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        return ((response as? HTTPURLResponse)?.statusCode ?? 0, json)
     }
 }
 
