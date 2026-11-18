@@ -84,6 +84,8 @@ final class AccountSession: Identifiable {
     private(set) var hasLoadedRooms = false
     private(set) var syncState: SyncServiceState = .idle
     private(set) var verification: VerificationState = .unknown
+    /// Emoji verification: of this Mac, and of devices and people asking to verify with it.
+    let verificationFlow: VerificationFlow
     private(set) var needsReauth = false
     private(set) var startError: String?
     var selectedRoomID: String? {
@@ -190,12 +192,22 @@ final class AccountSession: Identifiable {
         self.media = MediaLoader(client: client)
         self.presence = PresenceTracker(client: client)
         self.ownPresence = OwnPresence(client: client)
+        self.verificationFlow = VerificationFlow(client: client, userID: userID)
         // The space the room list was narrowed to last time (didSet doesn't run in init).
         selectedSpaceID = UserDefaults.standard.string(forKey: "selectedSpace.\(id)")
         collapsedSections = Set(UserDefaults.standard.stringArray(forKey: "collapsedSections.\(id)") ?? [])
         // And the room last open in each space, the one showing then to be opened again.
         lastRoomBySpace = UserDefaults.standard.dictionary(forKey: "lastRooms.\(id)") as? [String: String] ?? [:]
         roomToReopen = lastRoomBySpace[selectedSpaceID ?? ""]
+        verificationFlow.isThisMacVerified = { [weak self] in self?.verification == .verified }
+        verificationFlow.onIncoming = { [weak self] in self?.showVerificationRequest() }
+    }
+
+    /// A request to verify came in: shown at once unless something else is open, when the room
+    /// list has a banner for it instead. Announced if Huddle isn't in front, or this account isn't.
+    private func showVerificationRequest() {
+        if sheet == nil, !verificationFlow.isShown { sheet = .verify }
+        Notifier.shared.announceVerificationRequest(for: self)
     }
 
     /// Opens the room that was open at the last quit, once the room list has it: opened before
@@ -255,6 +267,7 @@ final class AccountSession: Identifiable {
             })
 
             await syncService.start()
+            verificationFlow.connect()
             // Fills the search index with about three months of every room's history, newest
             // weeks first, pausing between pages so it never holds up what's on screen.
             handles.append(client.runSearchBackfill(strategy: .foreground))
@@ -309,6 +322,7 @@ final class AccountSession: Identifiable {
         bannerPinTimelines.values.forEach { $0.stop() }
         bannerPinTimelines.removeAll()
         searchModel?.stop()
+        verificationFlow.disconnect()
         historyIndexer.stop()
         subscriptionTask?.cancel()
         presence.stop()
@@ -1220,6 +1234,8 @@ enum AccountSheet: Identifiable, Equatable {
     case changePassword
     /// The devices signed in to the account.
     case devices
+    /// Verifying this Mac, or answering a request to verify from elsewhere.
+    case verify
 
     var id: String {
         switch self {
@@ -1232,6 +1248,7 @@ enum AccountSheet: Identifiable, Equatable {
         case .profile: "profile"
         case .changePassword: "changePassword"
         case .devices: "devices"
+        case .verify: "verify"
         }
     }
 }

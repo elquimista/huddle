@@ -14,7 +14,7 @@ import Foundation
 ///   HUDDLE_DEV_SPACE     with HUDDLE_DEV_SELECT: name of a space (one of the account's, or an
 ///                        invitation) to browse at launch; "" for all rooms
 ///   HUDDLE_DEV_SHEET     with HUDDLE_DEV_SPACE: newRoom, newSpace, addRooms or leave, to open that sheet;
-///                        profile, password or devices for the account's own; manage for its OAuth account page
+///                        profile, password, devices or verify for the account's own; manage for its OAuth account page
 ///   HUDDLE_DEV_NOTIFICATION  with HUDDLE_DEV_SPACE: name of a room to open as clicking its notification
 ///                        does, once the space is showing (without bringing the app forward)
 ///   HUDDLE_DEV_SIGN_OUT  username to sign out at launch (same code path as the Sign Out menu)
@@ -90,6 +90,7 @@ enum DevHooks {
         case "profile": account.sheet = .profile
         case "password": account.sheet = .changePassword
         case "devices": account.sheet = .devices
+        case "verify": account.sheet = .verify
         case "manage": openAccountPage(of: account)
         default: break
         }

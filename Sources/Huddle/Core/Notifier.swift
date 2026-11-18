@@ -127,6 +127,26 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center?.add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
     }
 
+    /// A request to verify, when Huddle isn't in front or the account isn't the one showing.
+    /// Clicked, it opens the request.
+    func announceVerificationRequest(for account: AccountSession) {
+        if NSApp.isActive, store?.selected?.id == account.id { return }
+        NSApp.requestUserAttention(.informationalRequest)
+        guard let summary = account.verificationFlow.requestSummary else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Verification Request"
+        if (store?.accounts.count ?? 1) > 1 { content.subtitle = "For \(account.displayName ?? account.userID)" }
+        content.body = summary
+        content.userInfo = ["account": account.id, "verify": true]
+        if NotificationSettings.playsSound { content.sound = .default }
+        if AppEnvironment.isDev {
+            print("DEV_NOTIFY \(content.title) | \(content.subtitle) | \(content.body) | shown=\(NotificationSettings.isEnabled)")
+            fflush(stdout)
+        }
+        guard NotificationSettings.isEnabled else { return }
+        center?.add(UNNotificationRequest(identifier: "\(account.id)|verify", content: content, trigger: nil))
+    }
+
     private static func describe(_ content: TimelineEventContent) -> String? {
         guard case .messageLike(let content) = content else { return nil }
         switch content {
@@ -195,14 +215,33 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let accountID = info["account"] as? String
         let roomID = info["room"] as? String
         let thread = info["thread"] as? String
+        let verify = info["verify"] as? Bool ?? false
         Task { @MainActor in
-            if let accountID, let roomID { self.open(accountID: accountID, roomID: roomID, thread: thread) }
+            if let accountID, verify {
+                self.openVerification(accountID: accountID)
+            } else if let accountID, let roomID {
+                self.open(accountID: accountID, roomID: roomID, thread: thread)
+            }
             completionHandler()
         }
     }
 
     func open(accountID: String, roomID: String, thread: String?) {
         guard show(accountID: accountID, roomID: roomID, thread: thread) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    /// Brings up a request to verify, if it's still waiting.
+    private func openVerification(accountID: String) {
+        guard let store, let account = store.accounts.first(where: { $0.id == accountID }) else { return }
+        store.selectedID = accountID
+        if account.verificationFlow.step == .incoming, account.sheet == nil, !account.verificationFlow.isShown {
+            account.sheet = .verify
+        }
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
             if window.isMiniaturized { window.deminiaturize(nil) }

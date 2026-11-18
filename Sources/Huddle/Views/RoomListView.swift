@@ -3,7 +3,6 @@ import SwiftUI
 
 struct RoomListView: View {
     @Bindable var account: AccountSession
-    @State private var showsRecovery = false
     /// Naming a new section, and the room to put in it, if it was made for one.
     @State private var newSection: NewSection?
     @State private var sectionName = ""
@@ -60,10 +59,14 @@ struct RoomListView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if account.verification == .unverified {
+                let verification = account.verificationFlow
+                if verification.step == .incoming, !verification.isShown, let request = verification.requestSummary {
+                    // A request that came in while something else was open.
+                    Banner(icon: "checkmark.shield", text: request, action: "Review") { account.sheet = .verify }
+                } else if account.verification == .unverified {
                     Banner(icon: "lock.trianglebadge.exclamationmark",
-                           text: "Verify this session to read encrypted history",
-                           action: "Verify") { showsRecovery = true }
+                           text: "This Mac isn’t verified",
+                           action: "Verify") { account.sheet = .verify }
                 }
                 if let status {
                     Banner(icon: "exclamationmark.triangle", text: status, action: nil) {}
@@ -71,9 +74,6 @@ struct RoomListView: View {
             }
         }
         .navigationTitle(account.displayName ?? account.userID)
-        .sheet(isPresented: $showsRecovery) {
-            RecoverySheet(account: account)
-        }
         .onChange(of: account.asksForNewSection) { _, asks in
             guard asks else { return }
             account.asksForNewSection = false
@@ -579,59 +579,6 @@ private struct Banner: View {
         .padding(.vertical, 8)
         .background(.bar)
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
-    }
-}
-
-/// Verifies the session by entering the account's recovery key.
-/// Asks for the recovery key that verifies this session. Also shown from Settings ▸ Accounts.
-struct RecoverySheet: View {
-    let account: AccountSession
-    @Environment(\.dismiss) private var dismiss
-    @State private var key = ""
-    @State private var isBusy = false
-    @State private var error: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Verify This Session")
-                .font(.headline)
-            Text("Enter your recovery key to unlock encrypted message history and mark this device as trusted.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            SecureField("Recovery key", text: $key)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(submit)
-            if let error {
-                Text(error)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Verify", action: submit)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(key.isEmpty || isBusy)
-            }
-        }
-        .padding(20)
-        .frame(width: 400)
-    }
-
-    private func submit() {
-        guard !key.isEmpty, !isBusy else { return }
-        isBusy = true
-        Task {
-            defer { isBusy = false }
-            do {
-                try await account.recover(with: key.trimmingCharacters(in: .whitespacesAndNewlines))
-                dismiss()
-            } catch {
-                self.error = error.actionMessage
-            }
-        }
     }
 }
 

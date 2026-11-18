@@ -438,7 +438,7 @@ private struct AccountsSettingsTab: View {
             }
         }
         .sheet(item: $accountToVerify) { account in
-            RecoverySheet(account: account)
+            VerificationSheet(account: account)
         }
         .sheet(item: $accountToEdit) { account in
             ProfileSheet(account: account)
