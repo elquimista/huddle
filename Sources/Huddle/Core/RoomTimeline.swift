@@ -113,6 +113,9 @@ struct MessageRow: Equatable {
     var replyTo: ReplyPreview?
     /// While an attachment is being sent: how much has been uploaded, from 0 to 1, if known.
     var uploadProgress: Double?
+    /// A doubt about who really sent it, in an encrypted room: from a device its owner hasn't
+    /// verified, say. Nil when there's nothing to say.
+    var shield: Shield?
     /// For an image waiting its turn to upload: the picture to show, since there is nothing
     /// to load yet.
     var localPreview: NSImage?
@@ -274,6 +277,13 @@ final class RoomTimeline {
     @ObservationIgnored private var requestedProfiles: Set<String> = []
     @ObservationIgnored private var infoHandle: TaskHandle?
     @ObservationIgnored private var infoTask: Task<Void, Never>?
+    /// Room timeline only: members whose identity changed, as the room's identity stream says.
+    private(set) var identityWarnings: [IdentityWarning] = []
+    @ObservationIgnored private var identityStates: [String: IdentityState] = [:]
+    @ObservationIgnored private var identityHandle: TaskHandle?
+    @ObservationIgnored private var identityTask: Task<Void, Never>?
+    /// Told of each change to a member's identity, so what is known of who is verified follows.
+    @ObservationIgnored var onIdentityChanges: (([IdentityStatusChange]) -> Void)?
 
     init(room: Room, threadRoot: String? = nil, isPinnedList: Bool = false, focusedOn focusedEvent: String? = nil) {
         self.room = room
@@ -284,6 +294,7 @@ final class RoomTimeline {
         ownUserID = room.ownUserId()
         updatesTask = Task { [weak self] in await self?.run() }
         infoTask = Task { [weak self] in await self?.followRoomInfo() }
+        if isLive { identityTask = Task { [weak self] in await self?.followIdentityChanges() } }
     }
 
     private var hasReadToEnd = false
@@ -294,6 +305,35 @@ final class RoomTimeline {
         listenerHandle?.cancel()
         infoTask?.cancel()
         infoHandle?.cancel()
+        identityTask?.cancel()
+        identityHandle?.cancel()
+    }
+
+    /// Follows the members whose identity changed since it was first seen, or since they were
+    /// verified. The first update is how things stand; later ones change single members.
+    private func followIdentityChanges() async {
+        let (stream, continuation) = AsyncStream.makeStream(of: [IdentityStatusChange].self)
+        guard let handle = try? await room.subscribeToIdentityStatusChanges(
+            listener: IdentityChangeObserver { continuation.yield($0) }) else { return }
+        identityHandle = handle
+        for await changes in stream {
+            guard !Task.isCancelled else { break }
+            for change in changes { identityStates[change.userId] = change.changedTo }
+            updateIdentityWarnings()
+            onIdentityChanges?(changes)
+        }
+    }
+
+    private func updateIdentityWarnings() {
+        identityWarnings = identityStates.compactMap { userID, state -> IdentityWarning? in
+            switch state {
+            case .pinViolation: IdentityWarning(userID: userID, name: displayName(for: userID), wasVerified: false)
+            case .verificationViolation: IdentityWarning(userID: userID, name: displayName(for: userID), wasVerified: true)
+            case .pinned, .verified: nil
+            }
+        }
+        // The ones that undo a verification first, then by name.
+        .sorted { ($0.wasVerified ? 0 : 1, $0.name) < ($1.wasVerified ? 0 : 1, $1.name) }
     }
 
     /// Keeps the pinned messages and this account's permissions up to date.
@@ -558,6 +598,7 @@ final class RoomTimeline {
             self.profiles[userID] = (name ?? userID, avatar ?? nil)
             self.nameVersion += 1
             self.rebuildRows()
+            if self.identityStates[userID] != nil { self.updateIdentityWarnings() }
         }
     }
 
@@ -960,6 +1001,12 @@ extension TimelineRow.Kind {
             self = .notice(text)
             return
         }
+        // A request to verify, sent in the chat: a line saying so, not its fallback text for
+        // apps that can't verify ("…is requesting to verify your key, but your client…").
+        if case .message(let message) = content.kind, message.isVerificationRequest {
+            self = .notice(event.isOwn ? "You asked to verify" : "\(senderName) asked to verify with you")
+            return
+        }
 
         let body: MessageRow.Body
         var isEdited = false
@@ -1030,8 +1077,66 @@ extension TimelineRow.Kind {
             html: formatted.flatMap { $0.format == .html ? $0.body : nil },
             mentionsRoom: mentionsRoom,
             replyTo: content.inReplyTo.map(ReplyPreview.init),
-            uploadProgress: uploadProgress))
+            uploadProgress: uploadProgress,
+            // Not strict: people who haven't been verified are the usual case, not a warning.
+            shield: event.isOwn ? nil : MessageRow.Shield(event.lazyProvider.getShields(strict: false))))
     }
+}
+
+extension MessageRow {
+    /// What the SDK says about a message's authenticity, in words: a short label to show under
+    /// it, and what that means, for its tooltip.
+    struct Shield: Equatable {
+        /// Red rather than grey: something is wrong, not merely unknown.
+        let isSerious: Bool
+        let label: String
+        let detail: String
+
+        init?(_ state: ShieldState) {
+            switch state {
+            case .none: return nil
+            case .red(let code): self.init(code, isSerious: true)
+            case .grey(let code): self.init(code, isSerious: false)
+            }
+        }
+
+        private init(_ code: TimelineEventShieldStateCode, isSerious: Bool) {
+            self.isSerious = isSerious
+            switch code {
+            case .authenticityNotGuaranteed:
+                label = "Authenticity not guaranteed"
+                detail = "Whether this encrypted message is genuine can’t be confirmed on this Mac."
+            case .unknownDevice:
+                label = "Unknown device"
+                detail = "Sent from a device that is unknown or has been deleted."
+            case .unsignedDevice:
+                label = "Unverified device"
+                detail = "Sent from a device its owner hasn’t verified."
+            case .unverifiedIdentity:
+                label = "Unverified sender"
+                detail = "You haven’t verified who sent this."
+            case .verificationViolation:
+                label = "Identity changed"
+                detail = "The sender’s identity changed after you verified them."
+            case .mismatchedSender:
+                label = "Sender doesn’t match"
+                detail = "Sent from a device that belongs to someone else, so it may not be from who it says."
+            case .sentInClear:
+                label = "Not encrypted"
+                detail = "Sent unencrypted in an encrypted room."
+            }
+        }
+    }
+}
+
+/// Someone in the room whose encryption identity changed, which needs a word from the person
+/// using Huddle before it is trusted again.
+struct IdentityWarning: Equatable, Identifiable {
+    let userID: String
+    var name: String
+    /// They had been verified: the change undoes that.
+    let wasVerified: Bool
+    var id: String { userID }
 }
 
 extension MessageRow.Body {
@@ -1058,6 +1163,14 @@ extension ImageInfo {
     }
 }
 
+extension MessageContent {
+    /// A request to verify, sent in a chat (as requests to other people are).
+    var isVerificationRequest: Bool {
+        if case .other(let type, _) = msgType { return type == "m.key.verification.request" }
+        return false
+    }
+}
+
 extension TimelineItemContent {
     /// One-line description used for room list previews and state events.
     func preview(sender: String?) -> String? {
@@ -1079,7 +1192,7 @@ extension TimelineItemContent {
                     return "* \(who) \(MessageFormatter.plainText(text: emote.body, formatted: emote.formatted))"
                 case .text(let content): text = MessageFormatter.plainText(text: content.body, formatted: content.formatted)
                 case .notice(let content): text = MessageFormatter.plainText(text: content.body, formatted: content.formatted)
-                default: text = message.body
+                default: text = message.isVerificationRequest ? "Verification request" : message.body
                 }
             case .sticker: text = "Sticker"
             case .poll(let question, _, _, _, _, _, _): text = "Poll: \(question)"

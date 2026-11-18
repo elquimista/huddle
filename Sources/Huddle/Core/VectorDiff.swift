@@ -266,3 +266,9 @@ final class SearchPaginationListener: SearchServicePaginationStateListener, @unc
     init(_ handler: @escaping (SearchServicePaginationState) -> Void) { self.handler = handler }
     func onUpdate(paginationState: SearchServicePaginationState) { handler(paginationState) }
 }
+
+final class IdentityChangeObserver: IdentityStatusChangeListener, @unchecked Sendable {
+    private let handler: ([IdentityStatusChange]) -> Void
+    init(_ handler: @escaping ([IdentityStatusChange]) -> Void) { self.handler = handler }
+    func call(identityStatusChange: [IdentityStatusChange]) { handler(identityStatusChange) }
+}

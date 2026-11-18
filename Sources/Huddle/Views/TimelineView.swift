@@ -444,8 +444,17 @@ struct TimelineView: View {
                 if timeline.isLoading { ProgressView() }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                composer(proxy)
-                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.bottomInset = $0 }
+                VStack(spacing: 0) {
+                    // Someone's identity changed: said over the composer, before anything is sent.
+                    if let warning = timeline.identityWarnings.first {
+                        IdentityWarningBar(warning: warning, account: account)
+                            .id(warning.userID)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    composer(proxy)
+                }
+                .animation(.snappy(duration: 0.2), value: timeline.identityWarnings.first?.userID)
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.bottomInset = $0 }
             }
         }
         // Runs when a new message arrives and when the newest one scrolls into view.
@@ -1456,6 +1465,9 @@ private struct MessageView: View {
             }
         }
         bodyView
+        if let shield = message.shield {
+            ShieldNote(shield: shield)
+        }
         if !message.reactions.isEmpty {
             HStack(spacing: 4) {
                 ForEach(message.reactions) { reaction in

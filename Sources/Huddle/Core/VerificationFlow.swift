@@ -99,6 +99,8 @@ final class VerificationFlow {
     @ObservationIgnored var isThisMacVerified: () -> Bool = { false }
     /// Called when a request comes in from elsewhere.
     @ObservationIgnored var onIncoming: () -> Void = {}
+    /// Called with someone's user ID once they are verified.
+    @ObservationIgnored var onVerifiedPerson: (String) -> Void = { _ in }
 
     @ObservationIgnored private let client: Client
     @ObservationIgnored private let userID: String
@@ -174,6 +176,49 @@ final class VerificationFlow {
             } catch {
                 if step == .requesting { step = .ended(.failed(Self.failureMessage(error))) }
             }
+        }
+    }
+
+    /// Asks someone else to verify with this account. The request goes to them in a direct
+    /// chat (made if there isn't one); once they accept, both see the same emoji.
+    func verifyPerson(_ userID: String, name: String?) {
+        begin(.requesting, subject: .person(id: userID, name: name), request: nil)
+        Task { [client] in
+            do {
+                // This Mac may not have looked them up yet (in a room that has only just been
+                // encrypted, say): the SDK asks only what it knows.
+                let identity = (try? await client.encryption().userIdentity(userId: userID, fallbackToServer: true)) ?? nil
+                guard identity != nil else {
+                    if step == .requesting {
+                        step = .ended(.failed("\(name ?? userID) can’t be verified yet: their app hasn’t set up the keys verifying needs."))
+                    }
+                    return
+                }
+                try await ensureController().requestUserVerification(userId: userID)
+            } catch {
+                guard step == .requesting else { return }
+                let who = name ?? userID
+                if let error = error as? ClientError, case .Generic(let message, _) = error {
+                    if message.contains("Unknown user identity") {
+                        step = .ended(.failed("\(who) can’t be verified yet: their app hasn’t set up the keys verifying needs."))
+                        return
+                    }
+                    if message.contains("already verified") {
+                        step = .verified
+                        return
+                    }
+                }
+                step = .ended(.failed(Self.failureMessage(error)))
+            }
+        }
+    }
+
+    /// Starts again what this Mac asked for and didn't get.
+    func retry() {
+        switch subject {
+        case .thisMac: verifyThisMac()
+        case .person(let id, let name): verifyPerson(id, name: name)
+        case .device: break
         }
     }
 
@@ -307,6 +352,7 @@ final class VerificationFlow {
         case .finished:
             guard step.isActive else { return }
             step = .verified
+            if case .person(let id, _) = subject { onVerifiedPerson(id) }
         }
     }
 

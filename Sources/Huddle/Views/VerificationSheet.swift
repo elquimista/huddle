@@ -40,10 +40,17 @@ struct VerificationSheet: View {
                 choices
             }
         case .requesting:
-            waiting(symbol: "laptopcomputer.and.iphone",
-                    title: "Accept on Your Other Device",
-                    message: "On a phone or computer where you’re signed in as \(account.userID), open Huddle, Element or another Matrix app and accept the request.",
-                    status: "Waiting for your other device…")
+            if case .person(let id, let name) = flow.subject {
+                waiting(symbol: "person.badge.shield.checkmark",
+                        title: "Waiting for \(name ?? id)",
+                        message: "Ask \(name ?? id) to accept your request in Huddle, Element or another Matrix app. Then you’ll each check the same emoji on your screens, in person or on a call you trust.",
+                        status: "Waiting for \(name ?? id) to accept…")
+            } else {
+                waiting(symbol: "laptopcomputer.and.iphone",
+                        title: "Accept on Your Other Device",
+                        message: "On a phone or computer where you’re signed in as \(account.userID), open Huddle, Element or another Matrix app and accept the request.",
+                        status: "Waiting for your other device…")
+            }
         case .incoming:
             incoming
         case .starting:
@@ -205,9 +212,9 @@ struct VerificationSheet: View {
         case .timedOut:
             SheetHeader(symbol: "clock", tint: .secondary,
                         title: "Request Timed Out",
-                        message: flow.request == nil
-                            ? "None of your other devices answered in time. Try again with one of them at hand."
-                            : "The request expired before it was answered.")
+                        message: flow.request != nil ? "The request expired before it was answered."
+                            : flow.subject == .thisMac ? "None of your other devices answered in time. Try again with one of them at hand."
+                            : "\(partner.prefix(1).uppercased() + partner.dropFirst()) didn’t answer in time.")
         case .answeredElsewhere:
             SheetHeader(symbol: "checkmark.circle", tint: .secondary,
                         title: "Answered on Another Device",
@@ -218,10 +225,11 @@ struct VerificationSheet: View {
                         message: message)
         }
         SheetBar {
-            if flow.request == nil, case .thisMac = flow.subject {
+            // What this Mac asked for can be asked for again.
+            if flow.request == nil, flow.subject == .thisMac || isPerson {
                 Button("Close") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Try Again", action: flow.verifyThisMac)
+                Button("Try Again", action: flow.retry)
                     .keyboardShortcut(.defaultAction)
             } else {
                 Button("Close") { dismiss() }
@@ -239,6 +247,10 @@ struct VerificationSheet: View {
         case .device(let name, let id): "“\(name ?? id)”"
         case .person(let id, let name): name ?? id
         }
+    }
+
+    private var isPerson: Bool {
+        if case .person = flow.subject { true } else { false }
     }
 
     private var subjectSymbol: String {

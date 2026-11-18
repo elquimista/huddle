@@ -316,10 +316,18 @@ private struct RoomInfoContent: View {
             } else {
                 let shown = showsAllMembers ? details.members : Array(details.members.prefix(50))
                 ForEach(shown) { member in
+                    let isVerified = account.verifiedPeople.contains(member.userID)
                     MemberRow(account: account, member: member, noun: noun,
+                              isVerified: isVerified,
+                              verify: canVerify(member, isVerified: isVerified)
+                                ? { account.verify(person: member.userID, name: member.name) } : nil,
                               roles: details.roleChoices(for: member),
                               setRole: { choose($0, for: member) },
                               remove: details.canRemove(member) ? { removing = member } : nil)
+                }
+                // Which of them this account has verified, from what this Mac knows.
+                .task(id: shown.map(\.userID)) {
+                    await account.refreshVerifiedPeople(shown.filter { !$0.isInvited }.map(\.userID))
                 }
                 if shown.count < details.members.count {
                     Button("Show All \(details.members.count)") { showsAllMembers = true }
@@ -330,6 +338,11 @@ private struct RoomInfoContent: View {
             }
         }
         .padding(.bottom, 8)
+    }
+
+    /// Someone else who has joined, not verified yet, from a Mac that can verify people.
+    private func canVerify(_ member: RoomDetails.Member, isVerified: Bool) -> Bool {
+        account.canVerifyPeople && !isVerified && !member.isInvited && member.userID != account.userID
     }
 
     private var removalQuestion: String {
@@ -404,6 +417,10 @@ private struct MemberRow: View {
     let member: RoomDetails.Member
     /// "Room" or "Chat".
     let noun: String
+    /// This account has verified them.
+    let isVerified: Bool
+    /// Set when they can be verified from here.
+    let verify: (() -> Void)?
     /// The roles they could be given, when this account may change theirs.
     let roles: [RoomDetails.RoleChoice]?
     let setRole: (RoomDetails.RoleChoice) -> Void
@@ -420,8 +437,17 @@ private struct MemberRow: View {
                 .opacity(member.isInvited ? 0.6 : 1)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
-                Text(member.userID == account.userID ? "\(member.name) (you)" : member.name)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(member.userID == account.userID ? "\(member.name) (you)" : member.name)
+                        .lineLimit(1)
+                    if isVerified {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                            .help("Verified")
+                            .accessibilityLabel("Verified")
+                    }
+                }
                 if member.name != member.userID {
                     Text(member.userID)
                         .font(.caption)
@@ -452,7 +478,10 @@ private struct MemberRow: View {
         .onHover { isHovering = $0 }
         .contextMenu {
             Button("Copy User ID", action: copyUserID)
-            if hasActions { Divider() }
+            if let verify {
+                Button("Verify \(member.name)…", action: verify)
+            }
+            if roles != nil || remove != nil { Divider() }
             if let roles {
                 Menu("Role") {
                     ForEach(roles) { choice in
@@ -467,6 +496,9 @@ private struct MemberRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityActions {
+            if let verify {
+                Button("Verify \(member.name)", action: verify)
+            }
             ForEach(roles?.filter { $0.isAllowed && !$0.isCurrent } ?? []) { choice in
                 Button("Make \(choice.title)") { setRole(choice) }
             }
@@ -476,7 +508,7 @@ private struct MemberRow: View {
         }
     }
 
-    private var hasActions: Bool { roles != nil || remove != nil }
+    private var hasActions: Bool { roles != nil || remove != nil || verify != nil }
     private var showsMenuButton: Bool { isHovering && hasActions }
 
     private var menuButton: some View {
@@ -498,7 +530,10 @@ private struct MemberRow: View {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(ClosureMenuItem(title: "Copy User ID", handler: copyUserID))
-        menu.addItem(.separator())
+        if let verify {
+            menu.addItem(ClosureMenuItem(title: "Verify \(member.name)…", handler: verify))
+        }
+        if roles != nil || remove != nil { menu.addItem(.separator()) }
         if let roles {
             let submenu = NSMenu()
             submenu.autoenablesItems = false
