@@ -78,6 +78,8 @@ struct TimelineView: View {
     @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
     @Environment(\.forcedMessageLayout) private var forcedLayout
     @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
+    /// Which message shows its hover actions.
+    @State private var hoverState = MessageHoverState()
     /// The names' width while it is being dragged; saved for the room when the drag ends.
     @State private var draggedNameWidth: CGFloat?
     @FocusState private var composerFocused: Bool
@@ -245,6 +247,7 @@ struct TimelineView: View {
                 .environment(\.messageLayout, forcedLayout ?? chosenLayout)
                 .environment(\.emojiSize, emojiSize)
                 .environment(\.ircNameWidth, nameWidth)
+                .environment(\.messageHover, hoverState)
                 // Laid out at the width the timeline is heading for, not at each width it passes
                 // through on the way: as the thread panel opens or closes, the messages re-wrap
                 // once, at the start, instead of again and again as the conversation narrows,
@@ -1079,7 +1082,7 @@ private struct TimelineRowView: View {
     var body: some View {
         switch row.kind {
         case .message(let message):
-            MessageView(message: message, timeline: timeline, media: media, actions: actions,
+            MessageView(rowID: row.id, message: message, timeline: timeline, media: media, actions: actions,
                         isHighlighted: isHighlighted, isBeingEdited: editingItem == message.itemID,
                         searchingFor: searchingFor, receipts: receipts)
         case .notice(let text):
@@ -1108,6 +1111,8 @@ private struct TimelineRowView: View {
 }
 
 private struct MessageView: View {
+    /// The timeline row it is, which names it to the conversation's hover state.
+    let rowID: String
     let message: MessageRow
     let timeline: RoomTimeline
     let media: MediaLoader
@@ -1135,7 +1140,8 @@ private struct MessageView: View {
         guard message.eventID != nil, message.body != .redacted else { return nil }
         return { actions.reply(message) }
     }
-    @State private var isHovering = false
+    /// Which message shows its actions: this one, while the pointer is on it or its action bar.
+    @Environment(\.messageHover) private var hover
     @State private var showsPicker = false
     /// True while the "More" menu is open, which keeps the actions up under it.
     @State private var isMenuOpen = false
@@ -1158,7 +1164,7 @@ private struct MessageView: View {
     private var showsActions: Bool {
         // Not under the image viewer: the pointer that opened it is still over this message,
         // and no "left" arrives once the viewer is in the way.
-        (isHovering || showsPicker || isMenuOpen || isDevHovered) && message.sendState == nil
+        (hover.row(rowID).isActive || showsPicker || isMenuOpen || isDevHovered) && message.sendState == nil
             && ImageViewerState.shared.item == nil
     }
 
@@ -1180,6 +1186,10 @@ private struct MessageView: View {
         .padding(.top, layout == .modern && message.showsHeader ? 9 : 3)
         .padding(.bottom, 3)
         .opacity(message.sendState != nil && message.sendState != .failed && !isImage ? 0.55 : 1)
+        // The whole row is the message, gaps and all. Set here, before the action bar goes on,
+        // so the half of the bar that sits over the message above is this message's too: there
+        // the pointer is still on this message, and the bar's buttons take clicks.
+        .contentShape(Rectangle())
         .background {
             if isBeingEdited {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -1220,8 +1230,8 @@ private struct MessageView: View {
         .onAppear {
             if isDevHovered, DevHooks.hoverText?.hasSuffix("!") == true { showsPicker = true }
         }
-        .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
+        .onDisappear { hover.forget(rowID) }
+        .onHover { hover.pointer(isOver: $0, message: rowID) }
         .modifier(MessageActionsMenus(sections: menuSections(includingReplies: true)))
         .animation(.easeOut(duration: 0.15), value: isBeingEdited)
     }
@@ -1388,10 +1398,10 @@ private struct MessageView: View {
                     Text(emoji).font(.system(size: 15))
                 }
             }
-            ActionButton(help: "More reactions…") {
+            ActionButton(help: "Add Reaction…") {
                 showsPicker = true
             } label: {
-                Image(systemName: "face.smiling")
+                AddReactionIcon()
             }
             .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
                 EmojiPicker { emoji in
@@ -1418,6 +1428,10 @@ private struct MessageView: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.separator) }
         .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+        // On the bar, the pointer stays with this message, even over the message above.
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onHover { hover.pointer(isOverBar: $0, of: rowID) }
+        .onDisappear { hover.pointer(isOverBar: false, of: rowID) }
     }
 
     /// The people behind a reaction, by name, with "You" for this account and first.
@@ -1601,6 +1615,51 @@ private struct ReactionChipView: View {
         let shown = names.count > 4 ? Array(names.prefix(3)) + ["\(names.count - 3) others"] : names
         let who = shown.isEmpty ? "\(reaction.count) people" : shown.formatted(.list(type: .and))
         return "\(who) reacted with \(reaction.key)"
+    }
+}
+
+/// A smiling face with a plus at its top right: the icon chat apps use for adding a reaction.
+/// SF Symbols has none, so it is drawn the way SF Symbols draws its badges, the plus standing in
+/// a gap cut out of the face, which stays a gap over any background.
+struct AddReactionIcon: View {
+    /// The cut-out disc the plus stands in, and where its centre sits off the face's top right.
+    private static let badge: CGFloat = 9
+    private static let shift: CGFloat = 3
+
+    /// SF Symbols' smiling face as it is drawn in light mode, an outline, to be tinted like the
+    /// bar's other icons. In dark mode the symbol comes filled in, a grey disc beside the
+    /// outlined arrow and bubbles.
+    private static let face: NSImage = {
+        guard let symbol = NSImage(systemSymbolName: "face.smiling", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular))
+        else { return NSImage() }
+        let outline = NSImage(size: symbol.size, flipped: false) { rect in
+            NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance { symbol.draw(in: rect) }
+            return true
+        }
+        outline.isTemplate = true
+        return outline
+    }()
+
+    var body: some View {
+        Image(nsImage: Self.face)
+            .mask {
+                ZStack(alignment: .topTrailing) {
+                    Rectangle()
+                    Circle()
+                        .frame(width: Self.badge, height: Self.badge)
+                        .offset(x: Self.shift, y: -Self.shift)
+                        .blendMode(.destinationOut)
+                }
+                .compositingGroup()
+            }
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: "plus")
+                    .font(.system(size: 7, weight: .bold))
+                    .frame(width: Self.badge, height: Self.badge)
+                    .offset(x: Self.shift, y: -Self.shift)
+            }
+            .accessibilityHidden(true)
     }
 }
 
