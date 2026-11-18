@@ -199,6 +199,9 @@ struct TimelineView: View {
                                 if place.heldRow == nil, timeline.focusedEvent == nil { followsNewest = true }
                             } else if input.isRecent {
                                 // The user scrolled away.
+                                if followsNewest {
+                                    TimelineLog.log.notice("Stopped following the newest message: reader's \(input.lastKind, privacy: .public) input, \(shownRows.count) rows drawn")
+                                }
                                 followsNewest = false
                             } else if followsNewest {
                                 // The content moved under the view; go back to the end.
@@ -298,6 +301,15 @@ struct TimelineView: View {
             .onChange(of: timeline.rows.last?.id) { previousLast, _ in
                 // The first content, or a new message while following the newest.
                 guard timeline.focusedEvent == nil else { return }
+                if previousLast == nil {
+                    // Messages that arrive after the room is on screen are drawn only the newest
+                    // few dozen at first too, as those already loaded are (see `init`).
+                    let rows = timeline.rows
+                    if firstShownID == nil, rows.count > Self.rowsAtFirst {
+                        firstShownID = rows[rows.count - Self.rowsAtFirst].id
+                    }
+                    TimelineLog.log.notice("First \(rows.count) rows arrived, \(shownRows.count) drawn")
+                }
                 if previousLast == nil || followsNewest { scrollToBottom(proxy) }
             }
             // A view around an older message opens on that message, lit up.
@@ -316,6 +328,7 @@ struct TimelineView: View {
                 // Opened again after being marked unread: read as usual from here.
                 if timeline.isLive { timeline.holdsUnread = false }
                 if timeline.threadRoot == nil { PerfLog.markDrawn("room on screen, \(shownRows.count) of \(timeline.rows.count) rows drawn") }
+                TimelineLog.log.notice("Opened a \(timeline.threadRoot == nil ? "room" : "thread", privacy: .public) with \(timeline.rows.count) rows loaded")
                 if timeline.focusedEvent != nil {
                     followsNewest = false
                 } else if !timeline.rows.isEmpty {
@@ -330,6 +343,12 @@ struct TimelineView: View {
                 // Older messages were added above. While following the newest message, stay
                 // there; otherwise stay on the message being read, wherever it is in the view.
                 if followsNewest {
+                    // Out of sight above the newest ones (the SDK fetches history on its own):
+                    // not drawn until scrolled to, so the room doesn't grow and slow down for them.
+                    let rows = timeline.rows
+                    if timeline.focusedEvent == nil, shownRows.count > Self.rowsAtFirst * 2 {
+                        firstShownID = rows[rows.count - Self.rowsAtFirst].id
+                    }
                     scrollToBottom(proxy)
                 } else if let until = centersFocusUntil, Date() < until, !input.isRecent,
                           let focus = timeline.focusedEvent,
@@ -443,6 +462,7 @@ struct TimelineView: View {
             }
         }
         .background { WindowReader { typeToCompose.window = $0 } }
+        .background { InputArea(tracker: input) }
         // Images dragged anywhere over the conversation land in the composer.
         .onDrop(of: ImageDrop.types, isTargeted: $isDropTarget) { providers in
             Task { stage(await ImageDrop.sources(from: providers)) }
@@ -1635,28 +1655,92 @@ private struct ReceiptView: View {
 /// Notes when the user last scrolled (wheel or trackpad, the scroller, paging keys), to
 /// tell their scrolling apart from the content moving by itself.
 @MainActor
+/// Notices the reader scrolling the conversation: only input aimed at it counts. Scrolling the
+/// room list, or the small drag in the click that opened the room, would otherwise pass for
+/// the reader scrolling away while the room's messages are still arriving, and the room would
+/// open short of its newest message.
 private final class ScrollInputTracker {
     private var monitor: Any?
     private var lastInput = Date.distantPast
+    /// What it was, for the log.
+    private(set) var lastKind = ""
+    /// A view covering the conversation, where input has to be to count.
+    weak var area: NSView?
+    /// Whether the mouse went down in the conversation: its drags are the reader's.
+    private var dragStartedInside = false
 
     var isRecent: Bool { DevHooks.freeScroll || Date().timeIntervalSince(lastInput) < 0.6 }
 
     func start() {
         guard monitor == nil else { return }
-        // Not clicks: a click on a button (a message's actions, the composer's) isn't scrolling,
-        // and counting it would take the composer growing under it for the user scrolling away.
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged, .keyDown]) { [weak self] event in
-            // Page Up, Page Down, Home, End. Other keys are typing.
-            if event.type != .keyDown || [116, 121, 115, 119].contains(event.keyCode) {
-                self?.lastInput = Date()
-            }
+        // Clicks themselves aren't scrolling: a click on a button (a message's actions, the
+        // composer's) counted would take the composer growing under it for the user scrolling away.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .leftMouseDragged, .keyDown]) { [weak self] event in
+            self?.note(event)
             return event
         }
+    }
+
+    private func note(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            dragStartedInside = isInside(event)
+        case .leftMouseDragged:
+            if dragStartedInside { counts("drag") }
+        case .scrollWheel:
+            if isInside(event) { counts("scroll") }
+        case .keyDown:
+            // Page Up, Page Down, Home, End, with the conversation (or its composer) focused.
+            // Other keys are typing; in the room list these scroll the list.
+            if [116, 121, 115, 119].contains(event.keyCode), focusIsInside(event.window) { counts("key") }
+        default:
+            break
+        }
+    }
+
+    private func counts(_ kind: String) {
+        lastInput = Date()
+        lastKind = kind
+    }
+
+    private func isInside(_ event: NSEvent) -> Bool {
+        guard let area, let window = area.window else { return false }
+        let location: NSPoint
+        if let eventWindow = event.window {
+            guard eventWindow === window else { return false }
+            location = event.locationInWindow
+        } else {
+            // An event with no window has its location on the screen.
+            location = window.convertPoint(fromScreen: event.locationInWindow)
+        }
+        return area.bounds.contains(area.convert(location, from: nil))
+    }
+
+    private func focusIsInside(_ window: NSWindow?) -> Bool {
+        guard let area, let window, window === area.window, let responder = window.firstResponder as? NSView else {
+            return false
+        }
+        return area.bounds.intersects(area.convert(responder.bounds, from: responder))
     }
 
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+    }
+}
+
+/// Hands the tracker a view covering the conversation.
+private struct InputArea: NSViewRepresentable {
+    let tracker: ScrollInputTracker
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        tracker.area = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        tracker.area = view
     }
 }
 

@@ -114,6 +114,14 @@ Scripts/run-dev.sh alice/General
 
 The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_THREAD`, `HUDDLE_DEV_SEARCH` (opens the search beside the selected room with that query; `HUDDLE_DEV_SEARCH_ALL=1` for every room), `HUDDLE_DEV_INDEX_PAUSE` (milliseconds between pages of the full-history pass, to watch its progress), `HUDDLE_DEV_SPACE` (a space to browse at launch) and `HUDDLE_DEV_SHEET` (`newRoom`, `newSpace`, `addRooms` or `leave`, to open that sheet for it), `HUDDLE_DEV_SIGN_OUT`, `HUDDLE_DEV_HOVER`, `HUDDLE_DEV_MUTE_AUDIO` (set by `run-dev.sh`, so test runs make no sound), `HUDDLE_DEV_SLOW_ANIMATIONS` (a factor such as `20`, to watch an animation frame by frame), `HUDDLE_DEV_PERF` (prints how long each room takes to appear), `HUDDLE_DEV_AX_ACTIONS` (gives messages their actions as accessibility actions even without VoiceOver, for scripted tests), `HUDDLE_DEV_UPDATE_FEED` (an appcast to check for updates at, for testing them; build with `HUDDLE_SPARKLE_PUBLIC_KEY` set to the test key its updates are signed with, and `HUDDLE_VERSION` and `HUDDLE_BUILD` to make the newer build), and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
 
+Both builds write a few notes about scrolling a room's conversation to the system log (when a room opens, when its first messages arrive, and when it stops following the newest message, and why), with no message content or room names. To read them:
+
+```bash
+/usr/bin/log show --last 1h --predicate 'subsystem == "app.huddle.Huddle" && category == "timeline"'
+```
+
+(`app.huddle.Huddle.dev` for the Dev build. In zsh, `log` alone is a different command.)
+
 ## Releases
 
 Pushing a tag builds the release app on GitHub Actions (`.github/workflows/release.yml`) and publishes it, zipped, as that tag's release: `v1.2.0` becomes version 1.2.0, and a tag with a hyphen (`v1.3.0-beta1`) a pre-release.
