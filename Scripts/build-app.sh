@@ -94,13 +94,27 @@ else
   IDENTITY="$(security find-identity -v -p codesigning | awk '/"Apple Development:/ { print $2; exit }')"
   IDENTITY="${IDENTITY:--}"
 fi
+# With a real certificate, the hardened runtime: no other process can inject code into the app
+# (DYLD_INSERT_LIBRARIES and the like) and with it read the sessions in the Keychain, and only
+# code signed by the same team loads. Ad-hoc builds, which have no team for Sparkle to share,
+# go without. The Dev build may still be debugged and sampled; the release app may not.
+RUNTIME=()
+ENTITLEMENTS=()
+if [ "$IDENTITY" != "-" ]; then
+  RUNTIME=(--options runtime)
+  if [ "$CONFIG" = debug ]; then
+    DEV_ENTITLEMENTS="$(mktemp -t huddle-entitlements).plist"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.security.get-task-allow bool true" "$DEV_ENTITLEMENTS" >/dev/null
+    ENTITLEMENTS=(--entitlements "$DEV_ENTITLEMENTS")
+  fi
+fi
 # Sparkle's parts, innermost first, then the framework, then the app that holds it.
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
 for part in XPCServices/Installer.xpc XPCServices/Downloader.xpc Autoupdate Updater.app; do
-  codesign --force --sign "$IDENTITY" --preserve-metadata=entitlements "$SPARKLE/Versions/B/$part"
+  codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} --preserve-metadata=entitlements "$SPARKLE/Versions/B/$part"
 done
-codesign --force --sign "$IDENTITY" "$SPARKLE"
-codesign --force --sign "$IDENTITY" "$APP"
+codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} "$SPARKLE"
+codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} ${ENTITLEMENTS[@]+"${ENTITLEMENTS[@]}"} "$APP"
 touch "$APP"  # Make Finder and the Dock pick up icon changes.
 TEAM="$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
 if [ "$IDENTITY" = "-" ]; then

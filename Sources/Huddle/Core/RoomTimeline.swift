@@ -344,7 +344,7 @@ final class RoomTimeline {
                 rebuildRows()
             }
         } catch {
-            self.error = error.userMessage
+            self.error = error.actionMessage
             isLoading = false
         }
     }
@@ -572,7 +572,7 @@ final class RoomTimeline {
                 hasMoreHistory = false
             }
         } catch {
-            self.error = error.userMessage
+            self.error = error.actionMessage
         }
     }
 
@@ -588,7 +588,7 @@ final class RoomTimeline {
         do {
             if try await timeline.paginateForwards(numEvents: 40) { hasMoreNewer = false }
         } catch {
-            self.error = error.userMessage
+            self.error = error.actionMessage
         }
         return !hasMoreNewer
     }
@@ -636,7 +636,7 @@ final class RoomTimeline {
                 try? await timeline.markAsRead(receiptType: .fullyRead)
             }
         } catch {
-            self.error = error.userMessage
+            self.error = error.actionMessage
         }
     }
 
@@ -681,7 +681,7 @@ final class RoomTimeline {
                     try? await handle.join()
                     self.error = nil
                 } catch {
-                    self.error = error.userMessage
+                    self.error = error.actionMessage
                     self.dequeue(next.id)
                     continue
                 }
@@ -796,7 +796,7 @@ final class RoomTimeline {
             try await timeline.edit(eventOrTransactionId: itemID, newContent: content)
             error = nil
         } catch {
-            self.error = error.userMessage
+            self.error = error.actionMessage
         }
     }
 
@@ -806,7 +806,7 @@ final class RoomTimeline {
             try await timeline?.redactEvent(eventOrTransactionId: itemID, reason: nil)
             error = nil
         } catch {
-            self.error = error.userMessage
+            self.error = error.actionMessage
         }
     }
 
@@ -823,7 +823,7 @@ final class RoomTimeline {
         } catch {
             pinnedEventIDs = before
             rebuildRows()
-            self.error = error.userMessage
+            self.error = error.actionMessage
         }
     }
 
@@ -840,8 +840,16 @@ final class RoomTimeline {
         return nil
     }
 
+    /// The user has read what went wrong.
+    func dismissError() { error = nil }
+
     func toggleReaction(_ key: String, on itemID: EventOrTransactionId) async {
-        _ = try? await timeline?.toggleReaction(itemId: itemID, key: key)
+        do {
+            _ = try await timeline?.toggleReaction(itemId: itemID, key: key)
+        } catch {
+            // Said under the composer, as other failures here are, rather than not at all.
+            self.error = error.actionMessage
+        }
     }
 
     func retry(_ itemID: EventOrTransactionId) async {

@@ -83,8 +83,10 @@ struct ForwardSheet: View {
                         .transition(.opacity)
                 }
                 Spacer()
+                // Escape closes the sheet. Not Return: typed after a room's name in the search
+                // field, it would close the sheet without sending anything.
                 Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(12)
             .animation(.easeOut(duration: 0.2), value: sentCount)
@@ -157,7 +159,7 @@ struct ForwardSheet: View {
                 try await account.forward(request.content, to: room.id)
                 states[room.id] = .sent
             } catch {
-                states[room.id] = .failed(error.userMessage)
+                states[room.id] = .failed(error.actionMessage)
             }
         }
     }

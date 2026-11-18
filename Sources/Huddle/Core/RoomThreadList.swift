@@ -55,7 +55,7 @@ final class RoomThreadList {
                 hasMore = !endReached
             }
         } catch {
-            self.error = error.userMessage
+            self.error = error.actionMessage
             hasMore = false
         }
         isLoading = false

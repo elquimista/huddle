@@ -172,9 +172,12 @@ final class PresenceTracker {
         default: state = .offline
         }
         let ago = (body["last_active_ago"] as? NSNumber)?.doubleValue
-        return .info(PresenceInfo(state: state,
-                                  lastActive: ago.map { Date().addingTimeInterval(-$0 / 1000) },
-                                  statusMessage: body["status_msg"] as? String))
+        // To the minute, as it is shown: worked out from "how long ago", it shifts by however
+        // long each answer took, so it would never come out the same twice, and every check
+        // would count as a change and redraw what shows it.
+        let lastActive = ago.map { Date().addingTimeInterval(-$0 / 1000) }
+            .map { Date(timeIntervalSince1970: ($0.timeIntervalSince1970 / 60).rounded() * 60) }
+        return .info(PresenceInfo(state: state, lastActive: lastActive, statusMessage: body["status_msg"] as? String))
     }
 }
 

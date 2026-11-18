@@ -61,7 +61,7 @@ final class AccountStore {
                 accounts.append(session)
                 Task { await session.start() }
             case .failure(let error):
-                restoreErrors.append("\(account.userId): \(error.userMessage)")
+                restoreErrors.append("\(account.userId): \(error.actionMessage)")
             case nil:
                 break
             }

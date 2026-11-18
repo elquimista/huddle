@@ -169,8 +169,8 @@ private struct RailSpaceButton: View {
             Divider()
             Button("Leave Space…") { account.sheet = .leaveSpace(space.roomId) }
         case .invite(let invite):
-            Button("Accept Invitation") { Task { try? await account.acceptSpaceInvite(invite.id) } }
-            Button("Decline Invitation") { Task { try? await account.declineSpaceInvite(invite.id) } }
+            Button("Accept Invitation") { FailureAlert.run("Couldn't Join the Space") { try await account.acceptSpaceInvite(invite.id) } }
+            Button("Decline Invitation") { FailureAlert.run("Couldn't Decline the Invitation") { try await account.declineSpaceInvite(invite.id) } }
         }
     }
 }

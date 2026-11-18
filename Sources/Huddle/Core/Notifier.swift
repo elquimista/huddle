@@ -31,6 +31,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private let launchDate = Date()
     private var isActivated = false
     private var seen: Set<String> = []
+    private var seenOrder: [String] = []
     private var notifiedInvites = Set(UserDefaults.standard.stringArray(forKey: "notifiedInvites") ?? [])
 
     /// `UNUserNotificationCenter` only works inside an app bundle.
@@ -75,6 +76,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             threadRoot = item.threadId ?? event.threadRootEventId()
             key = "\(account.id)|\(roomID)|\(event.eventId())"
             guard seen.insert(key).inserted else { return }
+            // Only the latest are worth remembering: a repeat comes soon after, if at all.
+            seenOrder.append(key)
+            if seenOrder.count > 2000 {
+                for old in seenOrder.prefix(1000) { seen.remove(old) }
+                seenOrder.removeFirst(1000)
+            }
         case .invite(let sender):
             senderID = sender
             body = "Invited you to join"

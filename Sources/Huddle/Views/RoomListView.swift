@@ -25,9 +25,15 @@ struct RoomListView: View {
     }
 
     private var list: some View {
-        List(selection: $account.selectedRoomID) {
-            ForEach(account.sections) { section in
-                RoomListSection(account: account, section: section, actions: actions)
+        ScrollViewReader { proxy in
+            List(selection: $account.selectedRoomID) {
+                ForEach(account.sections) { section in
+                    RoomListSection(account: account, section: section, actions: actions)
+                }
+            }
+            // A room chosen some other way (Next Room, a notification) is brought into view.
+            .onChange(of: account.selectedRoomID) { _, roomID in
+                if let roomID { proxy.scrollTo(roomID) }
             }
         }
         .listStyle(.sidebar)
@@ -344,54 +350,20 @@ private struct RoomListRow: View {
                 Label(room.name, systemImage: "bubble.left")
                     .padding(6)
             }
-            .contextMenu { menu }
+            // Its own view, made only as the menu opens: built here, it would run its unread
+            // checks across every room each time any row is drawn.
+            .contextMenu { RoomRowMenu(account: account, room: room, actions: actions) }
             .accessibilityActions { placeActions }
             .onAppear { account.roomBecameVisible(room.id) }
             .onDisappear { account.roomBecameHidden(room.id) }
     }
 
-    @ViewBuilder private var menu: some View {
-        if !room.isInvite {
-            if account.isUnread(room.id) {
-                Button("Mark as Read") { account.setRoom(room.id, unread: false) }
-            } else {
-                Button("Mark as Unread") { account.setRoom(room.id, unread: true) }
-            }
-            NotificationModeMenu(mode: room.notificationMode, defaultMode: account.defaultNotificationMode(for: room)) {
-                actions.setNotifications(room.id, $0)
-            }
-            Divider()
-            let place = account.place(of: room)
-            Button(place == .favourites ? "Remove from Favourites" : "Add to Favourites") {
-                actions.move(room.id, place == .favourites ? .usual : .favourites)
-            }
-            Menu("Move To") {
-                ForEach(destinations, id: \.title) { destination in
-                    Toggle(destination.title, isOn: Binding(get: { place == destination.place },
-                                                            set: { _ in actions.move(room.id, destination.place) }))
-                }
-                Divider()
-                Button("New Section…") { actions.newSection(room.id) }
-            }
-            Divider()
-            if let space = account.selectedSpaceID {
-                Button("Mark All as Read") { account.markAllRead(inSpace: space) }
-                    .disabled(!account.hasUnreadRooms(inSpace: space))
-                if account.editableSpaceIDs.contains(space), account.isDirectChild(room.id, of: space) {
-                    Divider()
-                    Button("Remove from \(account.spaceName(space))") {
-                        Task { try? await account.removeRoom(room.id, fromSpace: space) }
-                    }
-                }
-            } else {
-                Button("Mark All as Read") { account.markAllRead() }
-                    .disabled(!account.hasUnreadRooms)
-            }
-        }
-    }
-
     /// Everywhere the room can be put, in the list's order.
     private var destinations: [(title: String, place: SectionPlace)] {
+        Self.destinations(for: room, in: account)
+    }
+
+    static func destinations(for room: RoomSummary, in account: AccountSession) -> [(title: String, place: SectionPlace)] {
         [("Favourites", .favourites)]
             + account.customSections.map { ($0.name, .custom($0.id)) }
             + [("Low Priority", .lowPriority), (account.usualSectionTitle(of: room), .usual)]
@@ -408,6 +380,62 @@ private struct RoomListRow: View {
             Button(room.isMuted ? "Unmute" : "Mute") { actions.setNotifications(room.id, room.isMuted ? nil : .mute) }
         }
     }
+}
+
+/// A room's right-click menu: read state, notifications, where it's kept, and its space.
+private struct RoomRowMenu: View {
+    let account: AccountSession
+    let room: RoomSummary
+    let actions: RoomListSection.Actions
+
+    var body: some View {
+        if room.isInvite {
+            // An invitation's own choices, rather than an empty menu.
+            Button("Accept Invitation") {
+                FailureAlert.run("Couldn't Join “\(room.name)”") { try await account.acceptInvite(roomID: room.id) }
+            }
+            Button("Decline Invitation") {
+                FailureAlert.run("Couldn't Decline the Invitation") { try await account.leave(roomID: room.id) }
+            }
+        } else {
+            if account.isUnread(room.id) {
+                Button("Mark as Read") { account.setRoom(room.id, unread: false) }
+            } else {
+                Button("Mark as Unread") { account.setRoom(room.id, unread: true) }
+            }
+            NotificationModeMenu(mode: room.notificationMode, defaultMode: account.defaultNotificationMode(for: room)) {
+                actions.setNotifications(room.id, $0)
+            }
+            Divider()
+            let place = account.place(of: room)
+            Button(place == .favourites ? "Remove from Favourites" : "Add to Favourites") {
+                actions.move(room.id, place == .favourites ? .usual : .favourites)
+            }
+            Menu("Move To") {
+                ForEach(RoomListRow.destinations(for: room, in: account), id: \.title) { destination in
+                    Toggle(destination.title, isOn: Binding(get: { place == destination.place },
+                                                            set: { _ in actions.move(room.id, destination.place) }))
+                }
+                Divider()
+                Button("New Section…") { actions.newSection(room.id) }
+            }
+            Divider()
+            if let space = account.selectedSpaceID {
+                Button("Mark All as Read") { account.markAllRead(inSpace: space) }
+                    .disabled(!account.hasUnreadRooms(inSpace: space))
+                if account.editableSpaceIDs.contains(space), account.isDirectChild(room.id, of: space) {
+                    Divider()
+                    Button("Remove from \(account.spaceName(space))") {
+                        FailureAlert.run("Couldn't Remove the Room") { try await account.removeRoom(room.id, fromSpace: space) }
+                    }
+                }
+            } else {
+                Button("Mark All as Read") { account.markAllRead() }
+                    .disabled(!account.hasUnreadRooms)
+            }
+        }
+    }
+
 }
 
 /// The room list of a space with nothing in it to show: a space with no rooms yet, or
@@ -601,7 +629,7 @@ struct RecoverySheet: View {
                 try await account.recover(with: key.trimmingCharacters(in: .whitespacesAndNewlines))
                 dismiss()
             } catch {
-                self.error = error.userMessage
+                self.error = error.actionMessage
             }
         }
     }

@@ -10,11 +10,12 @@ enum MessageFormatter {
     ///   - html: the formatted body, if the sender's client provided one.
     ///   - mentionsRoom: whether the message is flagged as mentioning the whole room.
     ///   - name: the display name for a user ID, if known.
+    ///   - keepsLinkText: for plain text, where mentions read as the sender wrote them.
     static func render(text: String, html: String?, mentionsRoom: Bool, ownUserID: String,
-                       name: @escaping (String) -> String?) -> AttributedString {
+                       keepsLinkText: Bool = false, name: @escaping (String) -> String?) -> AttributedString {
         var result: AttributedString
         if let html {
-            var parser = HTMLParser(html: html, ownUserID: ownUserID, name: name)
+            var parser = HTMLParser(html: html, ownUserID: ownUserID, keepsLinkText: keepsLinkText, name: name)
             result = parser.parse()
             if result.characters.isEmpty { result = AttributedString(text) }
         } else {
@@ -54,7 +55,7 @@ enum MessageFormatter {
     /// mentions read "@Name" and formatting is dropped.
     static func plainText(text: String, formatted: FormattedBody?, name: @escaping (String) -> String? = { _ in nil }) -> String {
         let html = formatted.flatMap { $0.format == .html ? $0.body : nil }
-        let styled = render(text: text, html: html, mentionsRoom: false, ownUserID: "", name: name)
+        let styled = render(text: text, html: html, mentionsRoom: false, ownUserID: "", keepsLinkText: true, name: name)
         return String(styled.characters)
             .replacingOccurrences(of: "\u{202F}", with: "")
             .replacingOccurrences(of: "\n", with: " ")
@@ -88,11 +89,17 @@ enum MessageFormatter {
         return pill
     }
 
-    static func mentionLabel(for userID: String, given label: String?, name: (String) -> String?) -> String {
-        var shown = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    /// A pill reads as the person it points to: their name in the room, else their username.
+    /// Not the link's own text, which the sender wrote: `<a href="…/@mallory:evil">@Alice</a>`
+    /// would otherwise pass for a mention of Alice. Plain text (`keepsLinkText`: previews and
+    /// alerts) has no pill to pass off, so there the sender's words stand, as typed text would.
+    static func mentionLabel(for userID: String, given label: String?, keepsLinkText: Bool = false,
+                             name: (String) -> String?) -> String {
+        var shown = keepsLinkText ? label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" : ""
         // Some clients put the raw ID in the link text; a name reads better.
         if shown.isEmpty || shown.hasPrefix("@") && shown.contains(":") {
-            shown = name(userID) ?? userID.matrixLocalpart
+            let known = name(userID)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            shown = known.isEmpty ? userID.matrixLocalpart : known
         }
         return shown.hasPrefix("@") ? shown : "@" + shown
     }
@@ -170,6 +177,8 @@ enum MentionAttribute: AttributedStringKey {
 private struct HTMLParser {
     let html: String
     let ownUserID: String
+    /// Mentions read as the sender wrote them (plain text), not as the person's name.
+    let keepsLinkText: Bool
     let name: (String) -> String?
 
     private var output = AttributedString()
@@ -182,10 +191,15 @@ private struct HTMLParser {
     private var atLineStart = true
     private var paragraphJustEnded = false
     private static let quoteBar = "▎ "
+    private static let deepestIndent = 6
+    /// Where each open link's text began in `output`, in characters, to check the text against
+    /// where the link goes once it ends.
+    private var linkStarts: [Int] = []
 
-    init(html: String, ownUserID: String, name: @escaping (String) -> String?) {
+    init(html: String, ownUserID: String, keepsLinkText: Bool, name: @escaping (String) -> String?) {
         self.html = html
         self.ownUserID = ownUserID
+        self.keepsLinkText = keepsLinkText
         self.name = name
     }
 
@@ -195,6 +209,13 @@ private struct HTMLParser {
             if html[index] == "<", let close = html[index...].firstIndex(of: ">") {
                 handleTag(String(html[html.index(after: index)..<close]))
                 index = html.index(after: close)
+            } else if html[index] == "<" {
+                // No ">" anywhere after this "<", so none after any later one either: the rest
+                // is text. (Looking again from each "<" would take time growing with the square
+                // of the message's length, which a message of nothing but "<" could use to hang
+                // the app.)
+                handleText(String(html[index...]))
+                break
             } else {
                 let next = html[html.index(after: index)...].firstIndex(of: "<") ?? html.endIndex
                 handleText(String(html[index..<next]))
@@ -303,7 +324,9 @@ private struct HTMLParser {
         case "li":
             breakLine()
             guard !isClosing else { return }
-            let indent = String(repeating: "    ", count: max(0, lists.count - 1))
+            // Indented no deeper than a few levels: a message nesting thousands of lists would
+            // otherwise grow to hundreds of millions of characters.
+            let indent = String(repeating: "    ", count: min(max(0, lists.count - 1), Self.deepestIndent))
             if let last = lists.indices.last, let number = lists[last] {
                 append("\(indent)\(number). ")
                 lists[last] = number + 1
@@ -320,11 +343,19 @@ private struct HTMLParser {
                 if let mention {
                     self.mention = nil
                     output.append(MessageFormatter.pill(
-                        MessageFormatter.mentionLabel(for: mention.userID, given: mention.label, name: name),
+                        MessageFormatter.mentionLabel(for: mention.userID, given: mention.label,
+                                                      keepsLinkText: keepsLinkText, name: name),
                         isOwn: mention.userID == ownUserID))
                     atLineStart = false
-                } else {
-                    _ = links.popLast()
+                } else if let start = linkStarts.popLast(), let link = links.popLast() {
+                    // Text that is itself an address, of somewhere other than where the link
+                    // goes, asks before going there (LinkPolicy).
+                    if let link, start < output.characters.count {
+                        let lower = output.characters.index(output.startIndex, offsetBy: start)
+                        let shown = String(output.characters[lower...])
+                        let checked = LinkPolicy.link(to: link, shown: shown)
+                        if checked != link { output[lower...].link = checked }
+                    }
                 }
             } else {
                 let href = Self.attribute("href", in: body).map(Self.decodeEntities)
@@ -332,6 +363,7 @@ private struct HTMLParser {
                     mention = (userID, "")
                 } else {
                     links.append(href.flatMap { URL(string: $0) })
+                    linkStarts.append(output.characters.count)
                 }
             }
         case "img":
@@ -354,8 +386,15 @@ private struct HTMLParser {
         return nil
     }
 
+    /// Made once each, rather than for every tag of every message.
+    private static let attributePatterns: [String: NSRegularExpression] = Dictionary(uniqueKeysWithValues:
+        ["href", "alt"].compactMap { name in
+            (try? NSRegularExpression(pattern: "\\b\(name)\\s*=\\s*(\"([^\"]*)\"|'([^']*)')", options: .caseInsensitive))
+                .map { (name, $0) }
+        })
+
     private static func attribute(_ name: String, in tag: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: "\\b\(name)\\s*=\\s*(\"([^\"]*)\"|'([^']*)')", options: .caseInsensitive),
+        guard let regex = attributePatterns[name],
               let match = regex.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)) else { return nil }
         for group in [2, 3] {
             if let range = Range(match.range(at: group), in: tag) { return String(tag[range]) }

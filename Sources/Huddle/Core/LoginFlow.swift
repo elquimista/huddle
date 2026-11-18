@@ -107,7 +107,10 @@ final class LoginFlow {
                                                 loginHint: nil,
                                                 deviceId: nil,
                                                 additionalScopes: nil)
-        guard let url = URL(string: data.loginUrl()) else { throw LoginError.noSupportedLoginMethod }
+        // A web page, from the server the user typed: not any other kind of link it may give.
+        guard let url = URL(string: data.loginUrl()), LinkPolicy.isSafeServerPage(url) else {
+            throw LoginError.noSupportedLoginMethod
+        }
         if AppEnvironment.isDev, ProcessInfo.processInfo.environment["HUDDLE_DEV_NO_BROWSER"] != nil {
             // Dev testing: print the sign-in URL instead of taking over the default browser.
             print("DEV_OAUTH_URL \(url.absoluteString)")

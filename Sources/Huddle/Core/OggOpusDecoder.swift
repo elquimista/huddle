@@ -136,6 +136,10 @@ enum OggOpusDecoder {
     /// channel of warm-up the system decoder left out of it.
     static func decode(_ stream: Stream) throws -> (samples: [Int16], alreadySkipped: Int) {
         let sizes = stream.packets.map(sampleCount(ofPacket:))
+        // The length the packets themselves claim, not only the one the stream states at its end:
+        // a crafted file can state a short one and claim hours, packet by packet.
+        let limit = Int(maximumDuration * sampleRate)
+        guard sizes.reduce(0, +) <= limit else { throw Failure.tooLong }
         // Nearly every encoder uses one packet size throughout; tell the decoder which.
         let framesPerPacket = sizes.first ?? 960
         let isUniform = sizes.dropLast().allSatisfy { $0 == framesPerPacket }
@@ -177,6 +181,8 @@ enum OggOpusDecoder {
             if status == .error || failure != nil { throw Failure.decodingFailed }
             if chunk.frameLength > 0, let channel = chunk.int16ChannelData {
                 samples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: Int(chunk.frameLength) * stream.channels))
+                // Whatever the packets claimed, no more than the longest recording played.
+                if samples.count > (limit + 5760) * stream.channels { throw Failure.tooLong }
             }
             if status == .endOfStream || (status == .inputRanDry && next >= stream.packets.count) { break }
             if chunk.frameLength == 0, status != .haveData { break }

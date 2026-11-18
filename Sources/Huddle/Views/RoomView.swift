@@ -278,7 +278,7 @@ private struct InviteView: View {
         isBusy = true
         Task {
             defer { isBusy = false }
-            do { try await work() } catch { self.error = error.userMessage }
+            do { try await work() } catch { self.error = error.actionMessage }
         }
     }
 }

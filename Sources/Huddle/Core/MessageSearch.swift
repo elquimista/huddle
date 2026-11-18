@@ -240,7 +240,7 @@ final class MessageSearch {
             do {
                 try await service.setQuery(query: query)
             } catch {
-                if self.trimmedQuery == query { self.failure = error.userMessage }
+                if self.trimmedQuery == query { self.failure = error.actionMessage }
             }
             if self.trimmedQuery == query { self.isPending = false }
         }

@@ -12,12 +12,15 @@ struct AudioAttachment: Equatable {
     let waveform: [Float]
     /// A recording made in the chat, as opposed to an audio file that was attached.
     let isVoice: Bool
+    /// As the sender reported it.
+    let mimetype: String?
 
     static let barCount = 48
 
     init(_ content: AudioMessageContent) {
         media = MediaRef(source: content.source)
         filename = content.filename
+        mimetype = content.info?.mimetype
         caption = content.caption
         duration = content.audio?.duration ?? content.info?.duration
         waveform = Self.bars(from: content.audio?.waveform ?? [])

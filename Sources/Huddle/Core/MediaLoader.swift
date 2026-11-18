@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import MatrixRustSDK
 
 /// Fetches (and decrypts) thumbnails through the SDK, with an in-memory cache.
@@ -85,12 +86,32 @@ final class MediaLoader: @unchecked Sendable {
     /// worth downloading unasked, or can't be had.
     func animatedImage(for image: ImageAttachment) async -> NSImage? {
         guard image.isAnimated, (image.byteCount ?? 0) <= Self.largestAutoplay,
-              let data = try? await imageFile(source: image.media.source) else { return nil }
+              let data = try? await imageFile(source: image.media.source),
+              // The size the sender reported may be missing or wrong; the file's own counts.
+              data.count <= Self.largestAutoplay,
+              Self.decodes(data, within: Self.autoplayMemory) else { return nil }
         return NSImage(data: data)
     }
 
     /// Animations larger than this show their first frame until opened.
     static let largestAutoplay: UInt64 = 8 * 1024 * 1024
+    /// What an animation playing in place may take decoded, and one opened in the viewer.
+    static let autoplayMemory = 128 * 1024 * 1024
+    static let viewerMemory = 512 * 1024 * 1024
+
+    /// Whether an image, all its frames decoded, fits in `bytes`: read from its header before
+    /// decoding, as a small file can unpack to gigabytes (a "decompression bomb").
+    nonisolated static func decodes(_ data: Data, within bytes: Int) -> Bool {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return false }
+        let frames = max(CGImageSourceGetCount(source), 1)
+        let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
+        guard !overflow, pixels > 0 else { return false }
+        let (total, overflowed) = pixels.multipliedReportingOverflow(by: frames * 4)
+        return !overflowed && total <= bytes
+    }
 
     /// The largest file this account's server accepts, if it has been learnt yet. Asking for
     /// it also starts finding out, so it is there next time; nothing here waits on the network.
@@ -137,9 +158,13 @@ final class MediaLoader: @unchecked Sendable {
         let key = "\(source.url())#\(size)" as NSString
         if let image = cache.object(forKey: key) { return image }
         let pixels = UInt64(size * 2)
+        // Decoded no larger than asked for: a server without thumbnails may send the original,
+        // which could be huge.
         guard let data = try? await client.getMediaThumbnail(mediaSource: source, width: pixels, height: pixels),
-              let image = NSImage(data: data) else { return nil }
-        cache.setObject(image, forKey: key, cost: data.count)
+              let scaled = ImagePreparer.scaled(data, to: size * 2) else { return nil }
+        let image = NSImage(cgImage: scaled, size: CGSize(width: scaled.width, height: scaled.height))
+        // What it takes in memory, as the cache's limit means, not the compressed file's size.
+        cache.setObject(image, forKey: key, cost: scaled.width * scaled.height * 4)
         return image
     }
 }

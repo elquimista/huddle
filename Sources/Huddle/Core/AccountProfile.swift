@@ -84,6 +84,8 @@ extension AccountSession {
     /// Opens a page of the server's in the browser; in the Dev build with HUDDLE_DEV_NO_BROWSER,
     /// prints it (DEV_ACCOUNT_URL …) instead.
     static func openInBrowser(_ url: URL) {
+        // The server names the page: a web page only, not any other kind of link.
+        guard LinkPolicy.isSafeServerPage(url) else { return }
         if AppEnvironment.isDev, ProcessInfo.processInfo.environment["HUDDLE_DEV_NO_BROWSER"] != nil {
             print("DEV_ACCOUNT_URL \(url.absoluteString)")
             fflush(stdout)

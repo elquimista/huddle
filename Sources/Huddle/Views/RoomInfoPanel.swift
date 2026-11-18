@@ -209,9 +209,12 @@ private struct RoomInfoContent: View {
                 .keyboardShortcut(.cancelAction)
                 Button("Save", action: save)
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                     .disabled(isSaving || details.canChangeName && draftName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
+        // Escape cancels the edit, rather than closing the panel and losing it.
+        .preference(key: PanelTakesEscape.self, value: true)
     }
 
     private func startEditing() {

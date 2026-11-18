@@ -192,6 +192,7 @@ struct TimelineView: View {
                                         editingItem: editTarget?.itemID,
                                         searchingFor: searchingFor,
                                         receipts: receipts)
+                            .equatable()
                             .id(row.id)
                             .onGeometryChange(for: CGRect?.self) { proxy in
                                 guard let visible = proxy.bounds(of: .scrollView) else { return nil }
@@ -617,10 +618,21 @@ struct TimelineView: View {
     private func composer(_ proxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if let error = timeline.error {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.leading, 36)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(error)
+                        .foregroundStyle(.red)
+                    Button {
+                        timeline.dismissError()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Dismiss")
+                    .accessibilityLabel("Dismiss")
+                }
+                .font(.caption)
+                .padding(.leading, 36)
             }
             if let imageNotice {
                 Text(imageNotice)
@@ -1068,7 +1080,18 @@ private struct RepliesDivider: View {
     }
 }
 
-private struct TimelineRowView: View {
+private struct TimelineRowView: View, Equatable {
+    /// Drawn again only when what it shows has changed. The closures in `actions` are made anew
+    /// each time the timeline is drawn (on every keystroke in the composer, for one) but always
+    /// do the same, and closures can't be compared: counted, they would redraw every message on
+    /// every keystroke. Settings and names reach the message directly, and still redraw it.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.row == rhs.row && lhs.isHighlighted == rhs.isHighlighted && lhs.editingItem == rhs.editingItem
+            && lhs.searchingFor == rhs.searchingFor && lhs.receipts == rhs.receipts
+            && lhs.timeline === rhs.timeline && lhs.media === rhs.media
+            && (lhs.actions.openThread == nil) == (rhs.actions.openThread == nil)
+    }
+
     let row: TimelineRow
     let timeline: RoomTimeline
     let media: MediaLoader
@@ -1413,7 +1436,7 @@ private struct MessageView: View {
                     Text(emoji).font(.system(size: 15))
                 }
             }
-            ActionButton(help: "Add Reaction…") {
+            ActionButton(help: "Add Reaction") {
                 showsPicker = true
             } label: {
                 AddReactionIcon()
@@ -1431,7 +1454,7 @@ private struct MessageView: View {
                 }
             }
             if let openThread {
-                ActionButton(help: "Reply in thread", action: openThread) {
+                ActionButton(help: "Reply in Thread", action: openThread) {
                     Image(systemName: "bubble.left.and.text.bubble.right")
                 }
             }
@@ -1653,7 +1676,7 @@ private struct AddReactionChip: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .help("Add Reaction…")
+        .help("Add Reaction")
         .accessibilityLabel("Add Reaction")
     }
 }
@@ -1723,6 +1746,8 @@ struct ActionButton<Label: View>: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .help(help)
+        // Its icon says nothing to VoiceOver; what it does, as the tooltip has it, does.
+        .accessibilityLabel(help)
     }
 }
 

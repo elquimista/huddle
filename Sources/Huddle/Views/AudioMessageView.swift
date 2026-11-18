@@ -1,6 +1,7 @@
 import AppKit
 import MatrixRustSDK
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// An audio message: a play button, the sound's shape (or a plain track) to scrub through, and
 /// the time. Voice messages are one line; attached files also show their name.
@@ -309,15 +310,37 @@ private struct LoadingArc: View {
 @MainActor
 enum AttachmentSaver {
     static func save(_ audio: AudioAttachment, media: MediaLoader) {
-        save(named: audio.filename.isEmpty ? "Audio" : audio.filename, kind: "audio") {
+        let type = audio.mimetype.flatMap { UTType(mimeType: $0) }.flatMap { $0.conforms(to: .audio) ? $0 : nil }
+        // A voice message is Ogg Opus, as Matrix has it.
+        save(named: safeName(audio.filename.isEmpty ? "Audio" : audio.filename, as: type ?? .audio,
+                             otherwise: audio.isVoice ? "ogg" : "m4a"),
+             kind: "audio") {
             try await media.audioFile(source: audio.media.source)
         }
     }
 
     static func save(_ image: ImageAttachment, media: MediaLoader) {
-        save(named: image.suggestedFilename, kind: "image") {
+        let type = image.mimetype.flatMap { UTType(mimeType: $0) }.flatMap { $0.conforms(to: .image) ? $0 : nil }
+        save(named: safeName(image.suggestedFilename, as: type ?? .image, otherwise: "png"), kind: "image") {
             try await media.imageFile(source: image.media.source)
         }
+    }
+
+    /// The sender's name for the file, made safe to suggest: without the invisible characters
+    /// that reverse text to hide an extension ("photo‮gnp.app" shows as "photoppa.png"), and
+    /// ending in an extension of the kind of file it is shown as, so an "image" named
+    /// "x.terminal" isn't saved as something that runs when opened.
+    /// - Parameter fallback: the extension to give it when its kind doesn't name one.
+    static func safeName(_ name: String, as type: UTType, otherwise fallback: String) -> String {
+        let invisible = CharacterSet(charactersIn: "\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}")
+        var cleaned = String(String.UnicodeScalarView(name.unicodeScalars.filter { !invisible.contains($0) }))
+        cleaned = (cleaned as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty || cleaned.hasPrefix(".") { cleaned = (type.conforms(to: .image) ? "Image" : "Audio") + cleaned }
+        let ext = (cleaned as NSString).pathExtension
+        // Kept when it already says what the file is shown as.
+        if !ext.isEmpty, let existing = UTType(filenameExtension: ext),
+           existing.conforms(to: type.conforms(to: .image) ? .image : .audio) { return cleaned }
+        return "\(cleaned).\(type.preferredFilenameExtension ?? fallback)"
     }
 
     private static func save(named name: String, kind: String, load: @escaping () async throws -> Data) {
@@ -325,10 +348,16 @@ enum AttachmentSaver {
         panel.nameFieldStringValue = name
         panel.canCreateDirectories = true
         let finish: (NSApplication.ModalResponse) -> Void = { response in
-            guard response == .OK, let url = panel.url else { return }
+            guard response == .OK, var url = panel.url else { return }
             Task {
                 do {
                     try await load().write(to: url, options: .atomic)
+                    // Marked as downloaded, as a browser marks what it saves: macOS then checks
+                    // the file before anything opens it, as it would one from the web.
+                    var values = URLResourceValues()
+                    values.quarantineProperties = [kLSQuarantineAgentNameKey as String: "Huddle",
+                                                   kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload]
+                    try? url.setResourceValues(values)
                 } catch {
                     let alert = NSAlert()
                     alert.messageText = "The \(kind) couldn't be saved."

@@ -28,6 +28,9 @@ struct ThreadPanel: View {
     @State private var showsLast = false
     /// Counts moves, so one that has been overtaken doesn't tidy up after the next.
     @State private var moveCount = 0
+    /// A page is editing something (Room Info's name and topic), and Escape cancels that
+    /// instead of closing the panel.
+    @State private var pageTakesEscape = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -52,6 +55,7 @@ struct ThreadPanel: View {
             // full height of the room: shrunk to its content, it would float mid-column.
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
+            .onPreferenceChange(PanelTakesEscape.self) { pageTakesEscape = $0 }
         }
         // The content fades in a beat behind the panel, so the panel seems to bring it along
         // rather than arrive already full.
@@ -181,8 +185,9 @@ struct ThreadPanel: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .keyboardShortcut(.cancelAction)
+            .keyboardShortcut(pageTakesEscape ? nil : .cancelAction)
             .help("Close")
+            .accessibilityLabel("Close")
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
@@ -313,4 +318,11 @@ private struct ThreadListRow: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
     }
+}
+
+/// Set by a panel page while Escape is its own (to cancel an edit), so the panel's close
+/// button doesn't take it too.
+struct PanelTakesEscape: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }

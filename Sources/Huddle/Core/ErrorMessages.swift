@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import MatrixRustSDK
 
 extension Error {
@@ -53,6 +53,29 @@ extension Error {
         }
         if let error = self as? RoomNotAddedToSpace { return error.underlying.actionMessage }
         return userMessage
+    }
+}
+
+/// For an action started from a menu, with nowhere of its own to say what went wrong.
+@MainActor
+enum FailureAlert {
+    /// Does it, and if it fails, says why in an alert titled `title`, on the window in front.
+    static func run(_ title: String, _ work: @escaping () async throws -> Void) {
+        Task {
+            do {
+                try await work()
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = title
+                alert.informativeText = error.actionMessage
+                alert.addButton(withTitle: "OK")
+                if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+                    alert.beginSheetModal(for: window, completionHandler: nil)
+                } else {
+                    alert.runModal()
+                }
+            }
+        }
     }
 }
 

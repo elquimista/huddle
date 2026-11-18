@@ -61,10 +61,17 @@ struct HuddleApp: App {
                     Divider()
                     Button("Find Next") { account?.showSearchResult(after: 1) }
                         .keyboardShortcut("g", modifiers: .command)
+                        .disabled(!canSearch)
                     Button("Find Previous") { account?.showSearchResult(after: -1) }
                         .keyboardShortcut("g", modifiers: [.command, .shift])
+                        .disabled(!canSearch)
                 }
             }
+            // View ▸ Show/Hide Sidebar (⌃⌘S).
+            SidebarCommands()
+            // There is no help book: no Huddle Help item that only says so. The Help menu keeps
+            // its search of the menus.
+            CommandGroup(replacing: .help) {}
             CommandMenu("Room") {
                 let account = store.selected
                 let roomID = account?.selectedRoomID
@@ -76,6 +83,20 @@ struct HuddleApp: App {
                 .keyboardShortcut("i", modifiers: .command)
                 .disabled(roomID == nil || account?.browsingSpaceID != nil)
                 Divider()
+                // As Messages goes from one conversation to the next.
+                Button("Next Room") { account?.showRoom(step: 1) }
+                    .keyboardShortcut(.tab, modifiers: .control)
+                    .disabled(account == nil)
+                Button("Previous Room") { account?.showRoom(step: -1) }
+                    .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                    .disabled(account == nil)
+                Button("Next Unread Room") { account?.showRoom(step: 1, unreadOnly: true) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                    .disabled(!(account?.hasUnreadRooms ?? false))
+                Button("Previous Unread Room") { account?.showRoom(step: -1, unreadOnly: true) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                    .disabled(!(account?.hasUnreadRooms ?? false))
+                Divider()
                 let unread = roomID.map { account?.isUnread($0) ?? false } ?? false
                 Button(unread ? "Mark as Read" : "Mark as Unread") {
                     if let account, let roomID { account.setRoom(roomID, unread: !unread) }
@@ -86,10 +107,13 @@ struct HuddleApp: App {
                     .disabled(!(account?.hasUnreadRooms ?? false))
             }
             CommandMenu("Accounts") {
+                // The one showing ticked; ⌘1 to ⌘9 for the first nine, and no shortcut after that
+                // (rather than all of the rest sharing one).
                 ForEach(Array(store.accounts.enumerated()), id: \.element.id) { index, account in
-                    Button(account.displayName ?? account.userID) { store.selectedID = account.id }
-                        .keyboardShortcut(index < 9 ? KeyEquivalent(Character("\(index + 1)")) : KeyEquivalent("0"),
-                                          modifiers: .command)
+                    Toggle(account.displayName ?? account.userID, isOn: Binding(
+                        get: { store.selectedID == account.id }, set: { _ in store.selectedID = account.id }))
+                        .keyboardShortcut(index < 9 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 1)")),
+                                                                       modifiers: .command) : nil)
                 }
             }
         }
@@ -131,6 +155,11 @@ struct RootView: View {
             LoginView(isFirstAccount: false)
                 .frame(width: 440, height: 520)
         }
+        // Links in messages open only web pages and email (LinkPolicy). Set here, inside the
+        // window's view, not on it in the scene: macOS reopens the window by a name made from
+        // the type of the scene's view, and a modifier added there would change it, so after an
+        // update the window wouldn't come back.
+        .environment(\.openURL, LinkPolicy.action)
     }
 }
 

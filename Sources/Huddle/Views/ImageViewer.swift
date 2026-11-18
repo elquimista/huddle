@@ -245,7 +245,7 @@ struct ImageViewer: View {
                 // An animation keeps its frames. Anything else is decoded the right way up (a
                 // phone photo is often stored on its side, with a note saying so), and no larger
                 // than is useful, so a huge photo doesn't take hundreds of megabytes.
-                if isAnimated { return NSImage(data: data) }
+                if isAnimated, MediaLoader.decodes(data, within: MediaLoader.viewerMemory) { return NSImage(data: data) }
                 guard let image = ImagePreparer.scaled(data, to: side) else { return nil }
                 return NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
             }.value

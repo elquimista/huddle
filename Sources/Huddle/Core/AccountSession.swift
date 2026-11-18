@@ -247,7 +247,7 @@ final class AccountSession: Identifiable {
             ownPresence.start()
             presence.start()
         } catch {
-            startError = error.userMessage
+            startError = error.actionMessage
         }
         await loadProfile()
     }
@@ -908,6 +908,23 @@ final class AccountSession: Identifiable {
         guard let room = rooms.first(where: { $0.id == roomID }) ?? allRooms.first(where: { $0.id == roomID })
         else { return false }
         return Self.isUnread(room)
+    }
+
+    /// Next Room and Previous Room: the room `step` along the list as it shows, round from one
+    /// end to the other. Next Unread Room (`unreadOnly`) looks in folded sections too, so
+    /// nothing unread is passed over.
+    func showRoom(step: Int, unreadOnly: Bool = false) {
+        let showing = searchText.isEmpty ? sections.filter { !collapsedSections.contains($0.id) } : sections
+        let list = unreadOnly ? rooms : showing.flatMap(\.rooms)
+        guard !list.isEmpty, step != 0 else { return }
+        let start = selectedRoomID.flatMap { id in list.firstIndex { $0.id == id } } ?? (step > 0 ? -1 : list.count)
+        for distance in 1...list.count {
+            let index = ((start + step * distance) % list.count + list.count) % list.count
+            if !unreadOnly || Self.isUnread(list[index]) {
+                if list[index].id != selectedRoomID { selectedRoomID = list[index].id }
+                return
+            }
+        }
     }
 
     static func isUnread(_ room: RoomSummary) -> Bool {
