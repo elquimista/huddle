@@ -373,6 +373,7 @@ private struct AccountsSettingsTab: View {
     @State private var accountToVerify: AccountSession?
     @State private var accountToEdit: AccountSession?
     @State private var accountToChangePassword: AccountSession?
+    @State private var accountForDevices: AccountSession?
 
     var body: some View {
         SettingsForm {
@@ -381,6 +382,7 @@ private struct AccountsSettingsTab: View {
                     AccountSettingsRow(account: account,
                                        editProfile: { accountToEdit = account },
                                        changePassword: { accountToChangePassword = account },
+                                       devices: { accountForDevices = account },
                                        verify: { accountToVerify = account },
                                        signOut: { accountToSignOut = account })
                 }
@@ -399,6 +401,9 @@ private struct AccountsSettingsTab: View {
         }
         .sheet(item: $accountToChangePassword) { account in
             ChangePasswordSheet(account: account)
+        }
+        .sheet(item: $accountForDevices) { account in
+            DevicesSheet(account: account)
         }
         .confirmationDialog("Sign out of \(accountToSignOut?.userID ?? "")?",
                             isPresented: Binding(get: { accountToSignOut != nil },
@@ -431,6 +436,7 @@ private struct AccountSettingsRow: View {
     let account: AccountSession
     let editProfile: () -> Void
     let changePassword: () -> Void
+    let devices: () -> Void
     let verify: () -> Void
     let signOut: () -> Void
 
@@ -467,6 +473,7 @@ private struct AccountSettingsRow: View {
                 } else {
                     Button("Change Password…", action: changePassword)
                 }
+                Button("Devices…", action: devices)
                 Divider()
                 Button("Sign Out…", action: signOut)
             } label: {

@@ -144,6 +144,10 @@ struct ChangePasswordSheet: View {
     @State private var isChanging = false
     @State private var failure: String?
     @State private var isDone = false
+    /// The current password given was wrong: said under its field, which is cleared to try again.
+    @State private var currentIsWrong = false
+    @State private var window: NSWindow?
+    @FocusState private var currentFocused: Bool
 
     private var mismatch: Bool { !confirmation.isEmpty && confirmation != new }
     private var canSubmit: Bool {
@@ -169,10 +173,13 @@ struct ChangePasswordSheet: View {
         }
         .padding(20)
         .frame(width: 420)
+        .background(WindowReader { window = $0 })
         .task {
             let allowed = await account.profileCapabilities().canChangePassword
             if !allowed { accountPage = await account.accountPageURL() }
             canChange = allowed
+            // Once the fields are enabled.
+            if allowed { currentFocused = true }
         }
     }
 
@@ -183,6 +190,19 @@ struct ChangePasswordSheet: View {
                     Text("Current password:").gridColumnAlignment(.trailing)
                     SecureField("Current password", text: $current, prompt: Text("Required"))
                         .accessibilityLabel("Current password")
+                        .focused($currentFocused)
+                }
+                if currentIsWrong {
+                    GridRow {
+                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                        Label("That password isn't right. Try again.", systemImage: "exclamationmark.circle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            // As wide as the field, on more lines if need be.
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .transition(.opacity)
+                    }
                 }
                 GridRow {
                     Text("New password:")
@@ -199,7 +219,11 @@ struct ChangePasswordSheet: View {
             .textFieldStyle(.roundedBorder)
             .disabled(canChange != true || isChanging)
             // What went wrong last time no longer applies once the passwords are changed.
-            .onChange(of: [current, new, confirmation]) { failure = nil }
+            .onChange(of: [current, new, confirmation]) {
+                failure = nil
+                if !current.isEmpty { currentIsWrong = false }
+            }
+            .animation(.snappy(duration: 0.2), value: currentIsWrong)
             VStack(alignment: .leading, spacing: 2) {
                 Toggle("Sign out of your other devices", isOn: $signsOutOtherDevices)
                     .toggleStyle(.checkbox)
@@ -281,15 +305,24 @@ struct ChangePasswordSheet: View {
         isChanging = true
         failure = nil
         Task {
-            defer { isChanging = false }
             do {
                 try await account.changePassword(from: current, to: new, signingOutOtherDevices: signsOutOtherDevices)
                 current = ""
                 new = ""
                 confirmation = ""
+                isChanging = false
                 isDone = true
             } catch {
-                failure = error.actionMessage
+                // Enabled again before the field takes the cursor back.
+                isChanging = false
+                if case PasswordChangeError.wrongPassword = error {
+                    currentIsWrong = true
+                    current = ""
+                    currentFocused = true
+                    window?.shake()
+                } else {
+                    failure = error.actionMessage
+                }
             }
         }
     }

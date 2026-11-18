@@ -1153,6 +1153,8 @@ enum AccountSheet: Identifiable, Equatable {
     /// The account's own name and picture.
     case profile
     case changePassword
+    /// The devices signed in to the account.
+    case devices
 
     var id: String {
         switch self {
@@ -1164,6 +1166,7 @@ enum AccountSheet: Identifiable, Equatable {
         case .invite(let roomID): "invite-\(roomID)"
         case .profile: "profile"
         case .changePassword: "changePassword"
+        case .devices: "devices"
         }
     }
 }

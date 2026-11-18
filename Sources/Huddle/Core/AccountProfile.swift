@@ -78,8 +78,15 @@ extension AccountSession {
     /// HUDDLE_DEV_NO_BROWSER, prints it instead.
     func openAccountPage() async throws {
         guard let url = await accountPageURL() else { throw PasswordChangeError.noAccountPage }
+        Self.openInBrowser(url)
+    }
+
+    /// Opens a page of the server's in the browser; in the Dev build with HUDDLE_DEV_NO_BROWSER,
+    /// prints it (DEV_ACCOUNT_URL …) instead.
+    static func openInBrowser(_ url: URL) {
         if AppEnvironment.isDev, ProcessInfo.processInfo.environment["HUDDLE_DEV_NO_BROWSER"] != nil {
             print("DEV_ACCOUNT_URL \(url.absoluteString)")
+            fflush(stdout)
             return
         }
         NSWorkspace.shared.open(url)
@@ -88,17 +95,24 @@ extension AccountSession {
     /// Changes the account's password, proving who it is with the current one. Signing out the
     /// other devices revokes their sessions; this one stays signed in either way.
     func changePassword(from current: String, to new: String, signingOutOtherDevices: Bool) async throws {
-        var body: [String: Any] = ["new_password": new, "logout_devices": signingOutOtherDevices]
+        try await clientAPI("POST", "account/password",
+                            body: ["new_password": new, "logout_devices": signingOutOtherDevices],
+                            password: current)
+    }
+
+    /// A request the server wants the account's password for (user-interactive auth). The
+    /// password goes with the first request; a server that wants its own session for it answers
+    /// 401 with one, and is asked again with it.
+    func clientAPI(_ method: String, _ path: String, body: [String: Any], password: String) async throws {
+        var body = body
         var auth: [String: Any] = [
             "type": "m.login.password",
             "identifier": ["type": "m.id.user", "user": userID],
-            "password": current,
+            "password": password,
         ]
-        // The current password goes with the first request. A server that wants its own session
-        // for that answers 401 with one, and is asked again with it.
         for attempt in 0..<2 {
             body["auth"] = auth
-            let (status, json) = try await clientAPI("POST", "account/password", body: body)
+            let (status, json) = try await clientAPI(method, path, body: body)
             switch status {
             case 200:
                 return
@@ -128,9 +142,9 @@ enum PasswordChangeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .wrongPassword:
-            "Your current password isn't right."
+            "That password isn't right."
         case .needsMoreThanPassword:
-            "Your server asks for more than your password to change it. Change it on your server's website instead."
+            "Your server asks for more than your password for this. Do it on your server's website instead."
         case .noAccountPage:
             "Your server doesn't have an account page."
         case .refused(let message):

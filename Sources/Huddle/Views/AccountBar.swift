@@ -61,6 +61,10 @@ struct AccountBar: View {
                             account.sheet = .changePassword
                         }
                     }
+                    Button("Devices…") {
+                        store.selectedID = account.id
+                        account.sheet = .devices
+                    }
                     Divider()
                     Button("New Space…") {
                         store.selectedID = account.id
