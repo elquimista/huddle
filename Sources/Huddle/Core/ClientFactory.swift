@@ -38,6 +38,12 @@ enum ClientFactory {
             // a room's unread badge. Huddle instead hides replies from the room timeline and
             // opens thread-focused timelines itself (see RoomTimeline).
             .threadsEnabled(enabled: false, threadSubscriptions: false)
+            // Message search: messages are indexed on this Mac as they arrive or are loaded,
+            // encrypted ones included once decrypted, in an index encrypted with the store's key.
+            // Back-pagination in the background fills it with older history (see
+            // AccountSession.start).
+            .withSearchIndexStore(path: paths.data.appendingPathComponent("search-index").path, key: passphrase)
+            .enableAutomaticBackPagination(enableAutomaticBackPagination: true)
 
         switch server {
         case .discover(let input):

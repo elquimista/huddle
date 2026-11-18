@@ -3,44 +3,45 @@ import SwiftUI
 
 // MARK: - Rail
 
-/// Below the accounts in the rail: every room ("All Rooms"), then the account's spaces, the
-/// spaces it has been invited to, and a way to make a new one. Spaces are rounded squares,
-/// accounts round, so the two read apart. An account with no spaces shows only the way to
-/// make one.
-struct SpaceRailSection: View {
+/// Down the left of the sidebar: every room ("All Rooms"), then the account's spaces, the
+/// spaces it has been invited to, and a way to make a new one. Shown only for an account
+/// with spaces or an invitation to one; for the rest, the room list has the sidebar to itself.
+struct SpaceRail: View {
     let account: AccountSession
 
+    /// Whether the account has anything for the rail to show.
+    static func isShown(for account: AccountSession) -> Bool {
+        !account.spaces.isEmpty || !account.invitedSpaces.isEmpty
+    }
+
     var body: some View {
-        let invites = account.invitedSpaces
-        VStack(spacing: 2) {
-            Capsule()
-                .fill(.separator)
-                .frame(width: 24, height: 2)
-                .padding(.vertical, 6)
-            if !account.spaces.isEmpty || !invites.isEmpty {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 2) {
                 RailSpaceButton(account: account, kind: .home)
                 ForEach(account.spaces, id: \.roomId) { space in
                     RailSpaceButton(account: account, kind: .space(space))
                 }
-                ForEach(invites) { invite in
+                ForEach(account.invitedSpaces) { invite in
                     RailSpaceButton(account: account, kind: .invite(invite))
                 }
+                Button {
+                    account.sheet = .newSpace
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, height: 34)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: RailSpaceButton.corner, style: .continuous))
+                        .padding(7)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("New space")
+                .accessibilityLabel("New Space")
             }
-            Button {
-                account.sheet = .newSpace
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 34, height: 34)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: RailSpaceButton.corner, style: .continuous))
-                    .padding(7)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("New space")
-            .accessibilityLabel("New Space")
+            .padding(.vertical, 3)
         }
+        .frame(width: 54)
     }
 }
 

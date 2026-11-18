@@ -6,6 +6,7 @@ struct ThreadPanel: View {
         case thread(String)
         case threadList
         case pinned
+        case search
     }
 
     let account: AccountSession
@@ -75,6 +76,8 @@ struct ThreadPanel: View {
             }
         case .pinned:
             PinnedListView(account: account, roomID: roomID)
+        case .search:
+            SearchPanelView(account: account, roomID: roomID)
         }
     }
 
@@ -132,6 +135,7 @@ struct ThreadPanel: View {
         case .thread: "Thread"
         case .threadList: "Threads"
         case .pinned: "Pinned Messages"
+        case .search: "Search"
         }
     }
 

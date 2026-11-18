@@ -123,6 +123,7 @@ private struct SectionNote: View {
         Text(text)
             .font(.subheadline)
             .foregroundStyle(.secondary)
+            .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 10)
     }
@@ -316,7 +317,16 @@ private struct ConversationPreview: View {
 // MARK: - Privacy
 
 private struct PrivacySettingsTab: View {
+    @Environment(AccountStore.self) private var store
     @AppStorage(OwnPresence.sharingKey) private var sharesPresence = true
+    @AppStorage(HistoryIndexer.defaultsKey) private var indexesFullHistory = true
+
+    /// Every account's full-history pass, taken together.
+    private var progress: (done: Int, total: Int)? {
+        let running = store.accounts.map(\.historyIndexer).filter(\.isRunning)
+        guard !running.isEmpty else { return nil }
+        return (running.reduce(0) { $0 + $1.roomsDone }, running.reduce(0) { $0 + $1.roomsTotal })
+    }
 
     var body: some View {
         SettingsForm {
@@ -327,6 +337,26 @@ private struct PrivacySettingsTab: View {
                 }
             } footer: {
                 SectionNote(text: "Some servers don't share anyone's online status.")
+            }
+            Section {
+                Toggle(isOn: $indexesFullHistory) {
+                    Text("Search the full history of encrypted rooms")
+                    Text("Downloads each room's history once, to index it on this Mac.")
+                }
+                if indexesFullHistory, let progress {
+                    SettingRow(title: "Indexing older messages",
+                               detail: "\(progress.done) of \(progress.total) rooms done") {
+                        ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                            .frame(width: 120)
+                    }
+                }
+            } footer: {
+                SectionNote(text: "The index is encrypted and never leaves this Mac. Your server searches unencrypted rooms itself.")
+            }
+        }
+        .onChange(of: indexesFullHistory) { _, on in
+            for account in store.accounts {
+                if on { account.historyIndexer.start(for: account) } else { account.historyIndexer.stop() }
             }
         }
     }

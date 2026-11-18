@@ -236,3 +236,33 @@ final class SpacePaginationListener: SpaceRoomListPaginationStateListener, @unch
     init(_ handler: @escaping (SpaceRoomListPaginationState) -> Void) { self.handler = handler }
     func onUpdate(paginationState: SpaceRoomListPaginationState) { handler(paginationState) }
 }
+
+extension SearchServiceResultsUpdate {
+    var diff: VectorDiff<SearchServiceResult> {
+        switch self {
+        case .append(let values): .append(values)
+        case .clear: .clear
+        case .pushFront(let value): .pushFront(value)
+        case .pushBack(let value): .pushBack(value)
+        case .popFront: .popFront
+        case .popBack: .popBack
+        case .insert(let index, let value): .insert(Int(index), value)
+        case .set(let index, let value): .set(Int(index), value)
+        case .remove(let index): .remove(Int(index))
+        case .truncate(let length): .truncate(Int(length))
+        case .reset(let values): .reset(values)
+        }
+    }
+}
+
+final class SearchResultsListener: SearchServiceResultsListener, @unchecked Sendable {
+    private let handler: ([SearchServiceResultsUpdate]) -> Void
+    init(_ handler: @escaping ([SearchServiceResultsUpdate]) -> Void) { self.handler = handler }
+    func onUpdate(updates: [SearchServiceResultsUpdate]) { handler(updates) }
+}
+
+final class SearchPaginationListener: SearchServicePaginationStateListener, @unchecked Sendable {
+    private let handler: (SearchServicePaginationState) -> Void
+    init(_ handler: @escaping (SearchServicePaginationState) -> Void) { self.handler = handler }
+    func onUpdate(paginationState: SearchServicePaginationState) { handler(paginationState) }
+}

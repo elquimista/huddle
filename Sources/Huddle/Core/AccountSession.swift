@@ -99,6 +99,16 @@ final class AccountSession: Identifiable {
     var browsingSpaceID: String?
     /// A window to show over the main one: creating a room or space, adding rooms, leaving.
     var sheet: AccountSheet?
+    /// Searching this account's messages; made the first time it's wanted.
+    var search: MessageSearch {
+        if let searchModel { return searchModel }
+        let search = MessageSearch(client: client)
+        searchModel = search
+        return search
+    }
+    @ObservationIgnored private var searchModel: MessageSearch?
+    /// Goes through encrypted rooms' whole history, so search finds all of it.
+    let historyIndexer = HistoryIndexer()
     /// The room last open with each space selected ("" for all rooms), to go back to.
     @ObservationIgnored private var lastRoomBySpace: [String: String] = [:]
     @ObservationIgnored private(set) var spaceService: SpaceService?
@@ -185,6 +195,10 @@ final class AccountSession: Identifiable {
             })
 
             await syncService.start()
+            // Fills the search index with about three months of every room's history, newest
+            // weeks first, pausing between pages so it never holds up what's on screen.
+            handles.append(client.runSearchBackfill(strategy: .foreground))
+            historyIndexer.start(for: self)
             startError = nil
             ownPresence.start()
             presence.start()
@@ -233,6 +247,8 @@ final class AccountSession: Identifiable {
         timelines.removeAll()
         bannerPinTimelines.values.forEach { $0.stop() }
         bannerPinTimelines.removeAll()
+        searchModel?.stop()
+        historyIndexer.stop()
         subscriptionTask?.cancel()
         presence.stop()
         ownPresence.stop()
@@ -427,6 +443,45 @@ final class AccountSession: Identifiable {
         } else {
             browsingSpaceID = nil
         }
+    }
+
+    /// Opens a search result: goes to its room, the search still beside it, and to the
+    /// message there.
+    func open(_ hit: SearchHit) {
+        search.selectedEventID = hit.eventID
+        if hit.roomID != selectedRoomID {
+            sidePanels[hit.roomID] = .search
+            // Into the list too: a room outside the space shown would be open but not in it.
+            if let space = selectedSpaceID, !roomIDs(inSpace: space).contains(hit.roomID) {
+                selectedSpaceID = nil
+            }
+        }
+        let timeline = timeline(for: hit.roomID)
+        selectedRoomID = hit.roomID
+        // Straight there if the room shows the message itself; otherwise first find out
+        // which message it belongs to (an edit's, a thread's).
+        if hit.jumpEventID == nil, timeline?.rows.contains(where: { $0.eventID == hit.eventID }) == true {
+            timeline?.requestedJump = hit.eventID
+            return
+        }
+        Task {
+            let target = await search.jumpTarget(for: hit)
+            guard search.selectedEventID == hit.eventID else { return }
+            timeline?.requestedJump = target
+        }
+    }
+
+    /// Opens the search beside the open room: Find (this room) or Find in All Rooms.
+    func showSearch(scope: MessageSearch.Scope) {
+        guard let roomID = selectedRoomID, browsingSpaceID == nil else { return }
+        sidePanels[roomID] = .search
+        search.focus(scope: scope)
+    }
+
+    /// Find Next and Find Previous: the next result along, opened.
+    func showSearchResult(after offset: Int) {
+        guard let hit = searchModel?.step(by: offset) else { return }
+        open(hit)
     }
 
     /// Shows a space's rooms in the main area, joined or not, with the list narrowed to the

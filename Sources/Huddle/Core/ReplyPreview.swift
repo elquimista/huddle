@@ -73,7 +73,9 @@ struct ReplyPreview: Equatable {
         }
     }
 
-    private static func describe(_ content: TimelineItemContent, senderName: String) -> (String, String?) {
+    /// One line of plain text for a message's content, and an SF Symbol for what it is when it
+    /// isn't plain text.
+    static func describe(_ content: TimelineItemContent, senderName: String) -> (String, String?) {
         guard case .msgLike(let message) = content else {
             return (content.preview(sender: senderName) ?? "Message", nil)
         }
@@ -81,11 +83,11 @@ struct ReplyPreview: Equatable {
         case .message(let content):
             switch content.msgType {
             case .text(let text):
-                return (MessageFormatter.plainText(text: text.body, formatted: text.formatted), nil)
+                return (ReplyFallback.plainText(text.body, text.formatted), nil)
             case .notice(let notice):
-                return (MessageFormatter.plainText(text: notice.body, formatted: notice.formatted), nil)
+                return (ReplyFallback.plainText(notice.body, notice.formatted), nil)
             case .emote(let emote):
-                return ("* \(senderName) " + MessageFormatter.plainText(text: emote.body, formatted: emote.formatted), nil)
+                return ("* \(senderName) " + ReplyFallback.plainText(emote.body, emote.formatted), nil)
             case .image(let image):
                 return (AttachmentText.line(name: image.filename, caption: image.caption, kind: "Image"), "photo")
             case .video(let video):
@@ -105,5 +107,29 @@ struct ReplyPreview: Equatable {
         case .unableToDecrypt: return ("Encrypted message", "lock")
         case .other, .liveLocation: return ("Message", nil)
         }
+    }
+}
+
+/// The quote of the message answered that a reply starts with, for clients that don't show
+/// replies ("> <@bob:example.org> …" and, in HTML, an `<mx-reply>` block). Left out wherever a
+/// message is shown as one line of its own words.
+enum ReplyFallback {
+    /// A message's plain text without the quote, from its HTML if it has any.
+    static func plainText(_ body: String, _ formatted: FormattedBody?) -> String {
+        let formatted = formatted.map { FormattedBody(format: $0.format, body: strip(html: $0.body)) }
+        return MessageFormatter.plainText(text: strip(body: body), formatted: formatted)
+    }
+
+    static func strip(body: String) -> String {
+        let lines = body.components(separatedBy: "\n")
+        guard lines.first?.hasPrefix("> <") == true else { return body }
+        return lines.drop { $0.hasPrefix(">") }
+            .drop { $0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .joined(separator: "\n")
+    }
+
+    static func strip(html: String) -> String {
+        guard let end = html.range(of: "</mx-reply>") else { return html }
+        return String(html[end.upperBound...])
     }
 }

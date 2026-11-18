@@ -62,12 +62,12 @@ struct MoreActionsButton: View {
     }
 }
 
-/// Holds the AppKit view the menu is shown from.
-private final class MenuAnchor {
+/// Holds the AppKit view a menu is shown from.
+final class MenuAnchor {
     weak var view: NSView?
 }
 
-private struct MenuAnchorView: NSViewRepresentable {
+struct MenuAnchorView: NSViewRepresentable {
     let anchor: MenuAnchor
 
     func makeNSView(context: Context) -> NSView {

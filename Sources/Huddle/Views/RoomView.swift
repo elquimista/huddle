@@ -93,6 +93,18 @@ struct RoomView: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button {
+                            if panel == .search {
+                                panel = nil
+                            } else {
+                                account.showSearch(scope: .room)
+                            }
+                        } label: {
+                            Label("Search", systemImage: "magnifyingglass")
+                        }
+                        .help("Search messages (⌘F)")
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
                             panel = panel == .threadList ? nil : .threadList
                         } label: {
                             Label("Threads", systemImage: "bubble.left.and.text.bubble.right")

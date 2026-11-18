@@ -9,6 +9,8 @@ import Foundation
 ///   HUDDLE_DEV_PASSWORD  their shared test password
 ///   HUDDLE_DEV_SELECT    "username" or "username/Room Name" to open at launch
 ///   HUDDLE_DEV_THREAD    with HUDDLE_DEV_SELECT: "list", or text of a message whose thread to open
+///   HUDDLE_DEV_SEARCH    with HUDDLE_DEV_SELECT: opens the search beside the room with this query
+///                        (HUDDLE_DEV_SEARCH_ALL=1 for every room)
 ///   HUDDLE_DEV_SPACE     with HUDDLE_DEV_SELECT: name of a space (one of the account's, or an
 ///                        invitation) to browse at launch; "" for all rooms
 ///   HUDDLE_DEV_SHEET     with HUDDLE_DEV_SPACE: newRoom, newSpace, addRooms or leave, to open that sheet
@@ -118,6 +120,10 @@ enum DevHooks {
     /// Gives every message its actions as accessibility actions even without VoiceOver, so tests
     /// can reach them.
     static let accessibilityActions = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_AX_ACTIONS"] != nil
+    /// Milliseconds between pages of the full-history pass (HUDDLE_DEV_INDEX_PAUSE), to watch its
+    /// progress on a test server whose rooms would otherwise be done in moments.
+    static let indexPauseMilliseconds: Int? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_INDEX_PAUSE"].flatMap(Int.init) : nil
 
     /// Images to stage in the composer of the room opened at launch.
     static let stagedImagePaths: [String] = AppEnvironment.isDev
@@ -174,6 +180,10 @@ enum DevHooks {
                     }
                     account.selectedRoomID = room.id
                     await openThread(env["HUDDLE_DEV_THREAD"], in: room.id, of: account)
+                    if let query = env["HUDDLE_DEV_SEARCH"] {
+                        account.showSearch(scope: env["HUDDLE_DEV_SEARCH_ALL"] == nil ? .room : .all)
+                        account.search.query = query
+                    }
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(200))

@@ -31,6 +31,24 @@ struct HuddleApp: App {
                 Button("Add Account…") { store.isAddingAccount = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
             }
+            CommandGroup(after: .pasteboard) {
+                let account = store.selected
+                let canSearch = account?.selectedRoomID != nil && account?.browsingSpaceID == nil
+                Divider()
+                Menu("Find") {
+                    Button("Find…") { account?.showSearch(scope: .room) }
+                        .keyboardShortcut("f", modifiers: .command)
+                        .disabled(!canSearch)
+                    Button("Find in All Rooms…") { account?.showSearch(scope: .all) }
+                        .keyboardShortcut("f", modifiers: [.command, .shift])
+                        .disabled(!canSearch)
+                    Divider()
+                    Button("Find Next") { account?.showSearchResult(after: 1) }
+                        .keyboardShortcut("g", modifiers: .command)
+                    Button("Find Previous") { account?.showSearchResult(after: -1) }
+                        .keyboardShortcut("g", modifiers: [.command, .shift])
+                }
+            }
             CommandMenu("Room") {
                 let account = store.selected
                 let roomID = account?.selectedRoomID
@@ -69,8 +87,9 @@ struct RootView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let account = store.selected {
+                // Not rebuilt for each account (its columns' contents are): a rebuilt split view
+                // puts its toolbar items back at the far end, the account bar included.
                 MainView(account: account)
-                    .id(account.id)
             } else {
                 LoginView(isFirstAccount: true)
             }
@@ -94,27 +113,42 @@ struct RootView: View {
 struct MainView: View {
     @Environment(AccountStore.self) private var store
     @Bindable var account: AccountSession
+    @State private var sidebar = SidebarWidth()
 
     var body: some View {
         NavigationSplitView {
             HStack(spacing: 0) {
-                AccountRail()
-                Divider()
+                if SpaceRail.isShown(for: account) {
+                    SpaceRail(account: account)
+                    Divider()
+                }
                 RoomListView(account: account)
             }
+            .id(account.id)
+            // Measured inside the column-width modifier: outside it, the split view no longer
+            // sees the width and opens the sidebar far narrower than its minimum.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebar.width = $0 }
             .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)
-        } detail: {
-            if let spaceID = account.browsingSpaceID {
-                SpaceBrowserView(account: account, spaceID: spaceID)
-                    .id(spaceID)
-            } else if let roomID = account.selectedRoomID {
-                RoomView(account: account, roomID: roomID)
-                    .id(roomID)
-            } else {
-                ContentUnavailableView("No Room Selected",
-                                       systemImage: "bubble.left.and.bubble.right",
-                                       description: Text("Pick a conversation from the list."))
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    AccountBar(sidebar: sidebar)
+                }
             }
+        } detail: {
+            Group {
+                if let spaceID = account.browsingSpaceID {
+                    SpaceBrowserView(account: account, spaceID: spaceID)
+                        .id(spaceID)
+                } else if let roomID = account.selectedRoomID {
+                    RoomView(account: account, roomID: roomID)
+                        .id(roomID)
+                } else {
+                    ContentUnavailableView("No Room Selected",
+                                           systemImage: "bubble.left.and.bubble.right",
+                                           description: Text("Pick a conversation from the list."))
+                }
+            }
+            .id(account.id)
         }
         .sheet(item: $account.sheet) { sheet in
             AccountSheetView(account: account, sheet: sheet)
