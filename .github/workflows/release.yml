@@ -10,6 +10,11 @@
 # certificate, so it keeps its Team ID and the Keychain doesn't ask again after updating. Without
 # them it is signed ad hoc.
 #
+# Updates: with the SPARKLE_PRIVATE_KEY and RELEASES_TOKEN secrets set, each release is also signed
+# for Sparkle and published, with the appcast the app checks, to a public repository (the
+# UPDATES_REPO variable, else <owner>/huddle-releases), so the app can find and install updates
+# while this repository stays private. Without them the release isn't offered as an update.
+#
 # The app is Apple Silicon only.
 name: Release
 
@@ -28,6 +33,8 @@ jobs:
   release:
     runs-on: macos-15
     timeout-minutes: 120
+    env:
+      UPDATES_REPO: ${{ vars.UPDATES_REPO || format('{0}/huddle-releases', github.repository_owner) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,7 +85,7 @@ jobs:
       - name: Build
         run: |
           version="${GITHUB_REF_NAME#v}"
-          HUDDLE_VERSION="$version" Scripts/build-app.sh
+          HUDDLE_VERSION="$version" HUDDLE_UPDATES_REPO="$UPDATES_REPO" Scripts/build-app.sh
           ditto -c -k --keepParent build/Huddle.app "Huddle-$version.zip"
 
       - name: Publish the release
@@ -94,6 +101,56 @@ jobs:
             gh release create "$GITHUB_REF_NAME" "Huddle-$version.zip" --verify-tag \
               --title "Huddle $version" --generate-notes $prerelease
           fi
+
+      - name: Publish the update
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          if [ -z "$SPARKLE_PRIVATE_KEY" ] || [ -z "$GH_TOKEN" ]; then
+            echo "::warning::No SPARKLE_PRIVATE_KEY or RELEASES_TOKEN secret: this release won't be offered as an update."
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          zip="Huddle-$version.zip"
+          build="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' build/Huddle.app/Contents/Info.plist)"
+          signature="$(echo "$SPARKLE_PRIVATE_KEY" | .build/artifacts/sparkle/Sparkle/bin/sign_update --ed-key-file - -p "$zip")"
+          length="$(stat -f %z "$zip")"
+          beta="" prerelease="" exclude="--exclude=*-*"
+          case "$GITHUB_REF_NAME" in *-*) beta="--beta" prerelease="--prerelease" exclude="" ;; esac
+
+          # What changed: the commits since the last release (the last stable one, for a stable release).
+          previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' $exclude "$GITHUB_REF_NAME^" 2> /dev/null || true)"
+          git log --no-merges --format=%s "${previous:+$previous..}$GITHUB_REF_NAME" > "$RUNNER_TEMP/changes.txt"
+          sed 's/^/- /' "$RUNNER_TEMP/changes.txt" > "$RUNNER_TEMP/notes.md"
+
+          # A new public repository needs a first commit for the release's tag to point at.
+          updates="$RUNNER_TEMP/updates"
+          git clone -q "https://x-access-token:$GH_TOKEN@github.com/$UPDATES_REPO.git" "$updates"
+          git -C "$updates" config user.name "github-actions[bot]"
+          git -C "$updates" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git -C "$updates" rev-parse -q --verify HEAD > /dev/null; then
+            git -C "$updates" checkout -q -b main
+            printf '# Huddle releases\n\nBuilds of Huddle, and the appcast the app checks for updates.\n' > "$updates/README.md"
+            git -C "$updates" add README.md
+            git -C "$updates" commit -q -m "Start the releases repository"
+            git -C "$updates" push -q origin main
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" -R "$UPDATES_REPO" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" \
+              --title "Huddle $version" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+          fi
+
+          # Listed in the appcast only now, so nobody is offered an archive that isn't there yet.
+          Scripts/appcast.py "$updates/appcast.xml" --version "$version" --build "$build" \
+            --url "https://github.com/$UPDATES_REPO/releases/download/$GITHUB_REF_NAME/$zip" \
+            --length "$length" --signature "$signature" --changes "$RUNNER_TEMP/changes.txt" $beta
+          git -C "$updates" add appcast.xml
+          git -C "$updates" commit -q -m "Huddle $version"
+          git -C "$updates" push -q origin HEAD
 
       - name: Remove the signing keychain
         if: always()

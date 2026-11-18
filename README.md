@@ -6,7 +6,8 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Sliding sync:** the room list loads instantly whatever the account's size. The rooms on screen in the list are kept subscribed, so their previews (reactions included) stay current and opening one shows its latest messages at once; rooms further down get only their newest event until they scroll into view. Homeservers without native sliding sync (MSC4186) are not supported.
 - **Multiple accounts:** small avatars in the title bar above the sidebar switch accounts (⌘1–9), with any that don't fit in a +N menu; each has its own unread badge and its own encrypted local store. Settings ▸ Accounts lists them with whether this Mac is verified for each, and has Verify, Copy User ID, Sign Out and Add Account.
 - **Spaces:** an account's spaces sit in a rail down the left of the sidebar (shown once it has a space or an invitation to one), each with a badge for its rooms that need attention. Choosing one narrows the room list to its rooms, including those in the spaces within it; All Rooms shows everything. Browsing a space lists every room and space in it, joined or not, to join or go into, and an invitation to a space shows who sent it and what is inside before you accept. Make a space, or a room (File ▸ New Room…, ⌥⌘N) that its members, only people invited, or anyone can join; add rooms you're in to a space or take them out; and leave a space along with any of its rooms.
-- **Settings (⌘,):** tabs for Notifications, Appearance (message layout and emoji size, with a live preview of a short conversation), Privacy and Accounts.
+- **Settings (⌘,):** tabs for Notifications, Appearance (message layout and emoji size, with a live preview of a short conversation), Privacy, Accounts and Updates.
+- **Updates:** Huddle ▸ Check for Updates…, or Check Now in Settings ▸ Updates, looks for a newer release; it also checks once a day by itself unless that's turned off. A new version shows what changed, then downloads, is checked against Huddle's signing key, installs and relaunches ([Sparkle](https://sparkle-project.org)). Settings can also have updates installed without asking (when Huddle quits) and offer beta versions. The Dev build never updates itself.
 - **Sign-in:** username and password in the app wherever the homeserver accepts them, with OAuth in your browser as the alternative (needed for single sign-on, passkeys and two-step verification) or where it is the only way.
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions with a searchable emoji picker, formatted messages with mention pills, and a markdown composer that suggests people as you type "@". Settings (⌘,) switches between the modern message layout and a compact IRC-style one.
 - **Images:** pictures show at their own size up to a sensible limit, with the sender's blurred preview while they load; GIFs play in place. Clicking one opens it full size over the window, where it can be zoomed, rotated, moved, copied and saved; a click outside it, or Escape, closes it. Send images with the + button, by pasting, or by dragging them in: they wait in the composer with a caption, upload one at a time in order with progress, and can be cancelled or retried. HEIC and TIFF are converted so every client can show them.
@@ -109,7 +110,7 @@ To wipe either one, run `docker compose down && rm -rf data` in its folder.
 Scripts/run-dev.sh alice/General
 ```
 
-The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_THREAD`, `HUDDLE_DEV_SEARCH` (opens the search beside the selected room with that query; `HUDDLE_DEV_SEARCH_ALL=1` for every room), `HUDDLE_DEV_INDEX_PAUSE` (milliseconds between pages of the full-history pass, to watch its progress), `HUDDLE_DEV_SPACE` (a space to browse at launch) and `HUDDLE_DEV_SHEET` (`newRoom`, `newSpace`, `addRooms` or `leave`, to open that sheet for it), `HUDDLE_DEV_SIGN_OUT`, `HUDDLE_DEV_HOVER`, `HUDDLE_DEV_MUTE_AUDIO` (set by `run-dev.sh`, so test runs make no sound), `HUDDLE_DEV_SLOW_ANIMATIONS` (a factor such as `20`, to watch an animation frame by frame), `HUDDLE_DEV_PERF` (prints how long each room takes to appear), `HUDDLE_DEV_AX_ACTIONS` (gives messages their actions as accessibility actions even without VoiceOver, for scripted tests), and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
+The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_THREAD`, `HUDDLE_DEV_SEARCH` (opens the search beside the selected room with that query; `HUDDLE_DEV_SEARCH_ALL=1` for every room), `HUDDLE_DEV_INDEX_PAUSE` (milliseconds between pages of the full-history pass, to watch its progress), `HUDDLE_DEV_SPACE` (a space to browse at launch) and `HUDDLE_DEV_SHEET` (`newRoom`, `newSpace`, `addRooms` or `leave`, to open that sheet for it), `HUDDLE_DEV_SIGN_OUT`, `HUDDLE_DEV_HOVER`, `HUDDLE_DEV_MUTE_AUDIO` (set by `run-dev.sh`, so test runs make no sound), `HUDDLE_DEV_SLOW_ANIMATIONS` (a factor such as `20`, to watch an animation frame by frame), `HUDDLE_DEV_PERF` (prints how long each room takes to appear), `HUDDLE_DEV_AX_ACTIONS` (gives messages their actions as accessibility actions even without VoiceOver, for scripted tests), `HUDDLE_DEV_UPDATE_FEED` (an appcast to check for updates at, for testing them; build with `HUDDLE_SPARKLE_PUBLIC_KEY` set to the test key its updates are signed with, and `HUDDLE_VERSION` and `HUDDLE_BUILD` to make the newer build), and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
 
 ## Releases
 
@@ -122,6 +123,19 @@ git tag v0.2.0 && git push origin v0.2.0
 The workflow compiles the Matrix SDK and caches it, so the first run, and the first after the pinned SDK commit changes, takes much longer than the rest.
 
 To sign releases with your Apple Development certificate, add two repository secrets: `MACOS_CERTIFICATE_P12`, the base64 of the certificate and its private key exported from Keychain Access as a .p12 (`base64 -i cert.p12 | pbcopy`), and `MACOS_CERTIFICATE_PASSWORD`, the export password. Without them releases are signed ad hoc.
+
+### Updates
+
+The app finds updates in an appcast, a feed listing each release with its EdDSA signature. Since this repository is private, the workflow also publishes every release, and the appcast, to a public repository, `huddle-releases` under the same owner (or the `UPDATES_REPO` repository variable, as `owner/name`). The app reads `appcast.xml` on that repository's `main` branch; `Scripts/build-app.sh` puts that address and the public key in the release app's Info.plist. Pre-releases go in the appcast's beta channel, offered only to those who turn on beta versions.
+
+To set it up:
+
+1. Create the public repository `huddle-releases` (it can be empty).
+2. Add two secrets to this repository: `SPARKLE_PRIVATE_KEY`, the private signing key, and `RELEASES_TOKEN`, a fine-grained personal access token with read and write access to Contents on `huddle-releases` only.
+
+Without them, releases are still built and published here, but not offered as updates.
+
+The signing key is in the login Keychain under the account `huddle`. Sparkle's tools export it again (`.build/artifacts/sparkle/Sparkle/bin/generate_keys --account huddle -x key.txt`) or show its public half (`-p`). Updates signed with any other key are refused, so keep it safe: a lost key means people have to download the next release by hand.
 
 ## Before distributing
 

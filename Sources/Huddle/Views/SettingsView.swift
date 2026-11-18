@@ -79,7 +79,7 @@ extension EnvironmentValues {
 /// tall as what it holds, and the window takes the height of the tab showing.
 struct SettingsView: View {
     enum Tab: String {
-        case notifications, appearance, privacy, accounts
+        case notifications, appearance, privacy, accounts, updates
     }
 
     @AppStorage("settingsTab") private var tab = Tab.notifications
@@ -98,6 +98,9 @@ struct SettingsView: View {
             AccountsSettingsTab()
                 .tabItem { Label("Accounts", systemImage: "at") }
                 .tag(Tab.accounts)
+            UpdateSettingsTab()
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
+                .tag(Tab.updates)
         }
     }
 }
@@ -494,3 +497,50 @@ private struct TintedIconLabel: LabelStyle {
         }
     }
 }
+
+// MARK: - Updates
+
+private struct UpdateSettingsTab: View {
+    @Bindable private var updater = AppUpdater.shared
+
+    var body: some View {
+        SettingsForm {
+            Section {
+                SettingRow(title: "Huddle \(AppUpdater.version)", detail: lastChecked) {
+                    Button("Check Now") { updater.checkForUpdates() }
+                        .disabled(!updater.canCheck)
+                }
+            } footer: {
+                if !updater.isAvailable {
+                    SectionNote(text: "The Dev build doesn't update itself.")
+                }
+            }
+            Section {
+                Toggle(isOn: $updater.checksAutomatically) {
+                    Text("Check for updates automatically")
+                    Text("Once a day.")
+                }
+                Toggle(isOn: $updater.installsAutomatically) {
+                    // A disabled switch dims by itself; its label has to be told.
+                    Text("Download and install automatically")
+                        .foregroundStyle(updater.checksAutomatically ? .primary : .tertiary)
+                    Text("Updates are installed when you quit Huddle.")
+                        .foregroundStyle(updater.checksAutomatically ? .secondary : .tertiary)
+                }
+                .disabled(!updater.checksAutomatically)
+                Toggle(isOn: $updater.includesBetas) {
+                    Text("Include beta versions")
+                    Text("New features sooner, before they're finished.")
+                }
+            }
+            .disabled(!updater.isAvailable)
+        }
+    }
+
+    private var lastChecked: String {
+        guard let date = updater.lastChecked else { return "Not checked for updates yet." }
+        if date.timeIntervalSinceNow > -60 { return "Last checked just now." }
+        return "Last checked \(date.formatted(.relative(presentation: .named)))."
+    }
+}
+

@@ -29,6 +29,8 @@ import Foundation
 ///   HUDDLE_DEV_SLOW_ANIMATIONS  slow the timeline's animations down by this factor, to inspect them
 ///   HUDDLE_DEV_PRESENCE_INTERVAL  seconds between presence checks, instead of 30 and 90
 ///   HUDDLE_DEV_NO_BROWSER  print the OAuth sign-in URL (DEV_OAUTH_URL ...) instead of opening it
+///   HUDDLE_DEV_UPDATE_FEED  appcast URL to look for updates at (the Dev build otherwise never does);
+///                        build with HUDDLE_SPARKLE_PUBLIC_KEY set to the key its updates are signed with
 @MainActor
 enum DevHooks {
     static func applyAppearance() {
@@ -95,6 +97,11 @@ enum DevHooks {
         && ProcessInfo.processInfo.environment["HUDDLE_DEV_ASSUME_ACTIVE"] != nil
 
     /// Stands in for the pointer, which automation cannot move over the Dev app.
+    /// A test appcast for Check for Updates. Without one the Dev build doesn't look for updates.
+    nonisolated static let updateFeed: String? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_UPDATE_FEED"].flatMap { $0.isEmpty ? nil : $0 }
+        : nil
+
     static let hoverText: String? = AppEnvironment.isDev ? ProcessInfo.processInfo.environment["HUDDLE_DEV_HOVER"] : nil
 
     /// Keeps test runs from making noise.

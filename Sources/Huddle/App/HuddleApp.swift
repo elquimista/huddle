@@ -3,6 +3,8 @@ import SwiftUI
 @main
 struct HuddleApp: App {
     @State private var store = AccountStore()
+    /// Started with the app, so it can look for updates on its schedule.
+    private let updater = AppUpdater.shared
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +18,10 @@ struct HuddleApp: App {
         }
         .defaultSize(width: 1040, height: 680)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheck)
+            }
             CommandGroup(replacing: .newItem) {
                 let account = store.selected
                 Button("New Message…") { account?.sheet = .newMessage }
