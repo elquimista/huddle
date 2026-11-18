@@ -26,7 +26,9 @@ import Foundation
 ///   HUDDLE_DEV_AUDIO_DEVICE  UID of the output device to play through, instead of the Mac's default
 ///   HUDDLE_DEV_AUDIO_DELAY   seconds to stall before audio starts, standing in for a slow output device
 ///   HUDDLE_DEV_IMAGE_DELAY   seconds to wait before each image loads, to see the placeholders
-///   HUDDLE_DEV_STAGE         comma-separated image paths to put in the composer at launch, as if dropped there
+///   HUDDLE_DEV_STAGE         comma-separated paths of pictures or files to put in the composer at launch,
+///                        as if dropped there (in the room HUDDLE_DEV_SELECT names)
+///   HUDDLE_DEV_DOWNLOAD_TO   a folder each file shown in a conversation is downloaded into, as Save File As would
 ///   HUDDLE_DEV_FREE_SCROLL   treat scrolling done through accessibility as the user's, so tests can scroll up
 ///   HUDDLE_DEV_CROP_THUMBNAILS  send images with a square thumbnail cropped from the middle, as some phone apps do
 ///   HUDDLE_DEV_SLOW_ANIMATIONS  slow the timeline's animations down by this factor, to inspect them
@@ -122,6 +124,12 @@ enum DevHooks {
         ? ProcessInfo.processInfo.environment["HUDDLE_DEV_PICK_FILE"].flatMap { $0.isEmpty ? nil : $0 }
         : nil
 
+    /// A folder every file shown in a conversation is downloaded into, as Save File As would,
+    /// so tests can check what arrives without a save panel or opening another app.
+    static let fileDownloadFolder: URL? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_DOWNLOAD_TO"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+        : nil
+
     /// A test appcast for Check for Updates. Without one the Dev build doesn't look for updates.
     nonisolated static let updateFeed: String? = AppEnvironment.isDev
         ? ProcessInfo.processInfo.environment["HUDDLE_DEV_UPDATE_FEED"].flatMap { $0.isEmpty ? nil : $0 }
@@ -160,6 +168,15 @@ enum DevHooks {
     /// Images to stage in the composer of the room opened at launch.
     static let stagedImagePaths: [String] = AppEnvironment.isDev
         ? (ProcessInfo.processInfo.environment["HUDDLE_DEV_STAGE"] ?? "").split(separator: ",").map(String.init) : []
+
+    /// Whether to stage those in this room: the one HUDDLE_DEV_SELECT names, if it names one,
+    /// rather than a room opened before it (the one last open, say).
+    static func stagesFiles(inRoomNamed name: String?) -> Bool {
+        guard !stagedImagePaths.isEmpty, !didStageImages else { return false }
+        let selected = ProcessInfo.processInfo.environment["HUDDLE_DEV_SELECT"] ?? ""
+        guard let slash = selected.firstIndex(of: "/") else { return true }
+        return name == String(selected[selected.index(after: slash)...])
+    }
 
     /// First-run preview: nothing is restored and no hooks run.
     static var startsFresh: Bool {

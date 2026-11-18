@@ -4,7 +4,7 @@ import MatrixRustSDK
 
 /// Fetches (and decrypts) thumbnails through the SDK, with an in-memory cache.
 final class MediaLoader: @unchecked Sendable {
-    private let client: Client
+    let client: Client
     private let cache = NSCache<NSString, NSImage>()
     /// Audio files as sent, and what the player plays (the same bytes, or a decoded copy).
     private let audioFiles = NSCache<NSString, NSData>()

@@ -330,6 +330,33 @@ enum AttachmentSaver {
     /// that reverse text to hide an extension ("photo‮gnp.app" shows as "photoppa.png"), and
     /// ending in an extension of the kind of file it is shown as, so an "image" named
     /// "x.terminal" isn't saved as something that runs when opened.
+    /// A file as it was sent, written straight to disk as it downloads, so a large one is never
+    /// all in memory. Marked as downloaded, so macOS checks it before anything opens it.
+    static func save(_ file: FileAttachment, media: MediaLoader) {
+        guard let source = file.media else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = file.safeFilename
+        panel.canCreateDirectories = true
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task {
+                do {
+                    try await media.download(source, mimetype: file.mimetype, to: url)
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "The file couldn't be saved."
+                    alert.informativeText = "It couldn't be downloaded. Check your connection and try again."
+                    alert.runModal()
+                }
+            }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            panel.begin(completionHandler: finish)
+        }
+    }
+
     /// - Parameter fallback: the extension to give it when its kind doesn't name one.
     static func safeName(_ name: String, as type: UTType, otherwise fallback: String) -> String {
         let invisible = CharacterSet(charactersIn: "\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}")

@@ -36,6 +36,8 @@ struct TimelineView: View {
     @State private var searchingFor: String?
     /// Images waiting in the composer to be sent.
     @State private var stagedImages: [StagedImage] = []
+    /// Other files waiting in the composer to be sent, read from disk as they upload.
+    @State private var stagedFiles: [StagedFile] = []
     /// Something about attaching or opening an image that the user should know.
     @State private var imageNotice: String?
     @State private var isDropTarget = false
@@ -46,7 +48,7 @@ struct TimelineView: View {
     /// Lets a reader's avatar move from one message to another instead of vanishing and
     /// reappearing.
     @Namespace private var receipts
-    private static let mostImagesAtOnce = 10
+    private static let mostAttachmentsAtOnce = 10
     /// Mentions picked from the suggestions for the message being written.
     @State private var composedMentions: [ComposedMention] = []
     @State private var suggestionIndex = 0
@@ -471,11 +473,12 @@ struct TimelineView: View {
             }
             input.start()
             pasteInterceptor.onImages = { stage($0) }
+            pasteInterceptor.onFiles = { attach($0) }
             pasteInterceptor.start()
             _ = media.uploadLimit       // learn the server's size limit before it is needed
-            if timeline.threadRoot == nil, !DevHooks.stagedImagePaths.isEmpty, !DevHooks.didStageImages {
+            if timeline.threadRoot == nil, DevHooks.stagesFiles(inRoomNamed: timeline.room.displayName()) {
                 DevHooks.didStageImages = true
-                stage(DevHooks.stagedImagePaths.map { .file(URL(fileURLWithPath: $0)) })
+                attach(DevHooks.stagedImagePaths.map { URL(fileURLWithPath: $0) })
             }
         }
         .onChange(of: composerFocused, initial: true) { pasteInterceptor.isActive = composerFocused }
@@ -499,7 +502,11 @@ struct TimelineView: View {
         .background { InputArea(tracker: input) }
         // Images dragged anywhere over the conversation land in the composer.
         .onDrop(of: ImageDrop.types, isTargeted: $isDropTarget) { providers in
-            Task { stage(await ImageDrop.sources(from: providers)) }
+            Task {
+                let dropped = await ImageDrop.sources(from: providers)
+                stage(dropped.images)
+                attach(dropped.files)
+            }
             return true
         }
         .overlay {
@@ -640,9 +647,11 @@ struct TimelineView: View {
                     .foregroundStyle(.red)
                     .padding(.leading, 36)
             }
-            if !stagedImages.isEmpty {
-                StagedImagesRow(images: stagedImages) { image in
+            if !stagedImages.isEmpty || !stagedFiles.isEmpty {
+                StagedImagesRow(images: stagedImages, files: stagedFiles) { image in
                     stagedImages.removeAll { $0.id == image.id }
+                } removeFile: { file in
+                    stagedFiles.removeAll { $0.id == file.id }
                 }
                 .padding(.leading, 36)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -665,7 +674,7 @@ struct TimelineView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 Group {
                     if editTarget == nil {
-                        AttachButton { pickImages() }
+                        AttachButton { pickFiles() }
                     } else {
                         // Nothing to attach to an edit: the place says what the field is doing.
                         Image(systemName: "pencil")
@@ -729,6 +738,7 @@ struct TimelineView: View {
         .animation(.snappy(duration: 0.2), value: replyTarget?.eventID)
         .animation(.snappy(duration: 0.2), value: editTarget?.itemID)
         .animation(.snappy(duration: 0.2), value: stagedImages.map(\.id))
+        .animation(.snappy(duration: 0.2), value: stagedFiles.map(\.id))
         .background(.bar)
         // Not Divider: inside the room's HStack it would draw itself vertically.
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
@@ -750,12 +760,12 @@ struct TimelineView: View {
             // A caption can be emptied; a message can't.
             return editTarget.kind == .caption || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        return !stagedImages.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !stagedImages.isEmpty || !stagedFiles.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var composerPlaceholder: String {
         if let editTarget { return editTarget.kind == .caption ? "Edit caption" : "Edit message" }
-        return stagedImages.isEmpty ? placeholder : "Add a caption…"
+        return stagedImages.isEmpty && stagedFiles.isEmpty ? placeholder : "Add a caption…"
     }
 
     private func send(_ proxy: ScrollViewProxy) {
@@ -764,21 +774,24 @@ struct TimelineView: View {
             return
         }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let images = stagedImages
-        guard !text.isEmpty || !images.isEmpty else { return }
+        // Pictures first, then other files, each in the order it was added.
+        let attachments = stagedImages.map(RoomTimeline.StagedAttachment.image)
+            + stagedFiles.map(RoomTimeline.StagedAttachment.file)
+        guard !text.isEmpty || !attachments.isEmpty else { return }
         let mentions = composedMentions
         let replyTo = replyTarget?.eventID
         draft = ""
         composedMentions = []
         replyTarget = nil
         stagedImages = []
+        stagedFiles = []
         imageNotice = nil
         scrollToBottom(proxy)
-        if images.isEmpty {
+        if attachments.isEmpty {
             Task { await timeline.send(text, mentions: mentions, replyTo: replyTo) }
         } else {
-            // With images, what was typed is their caption.
-            timeline.send(images: images, caption: text, mentions: mentions, replyTo: replyTo)
+            // With attachments, what was typed is their caption.
+            timeline.send(attachments, caption: text, mentions: mentions, replyTo: replyTo)
         }
         // Sent from a view of older messages: it arrives at the end of the room, so go there.
         if timeline.focusedEvent != nil { room?.returnToLive() }
@@ -786,15 +799,14 @@ struct TimelineView: View {
 
     // MARK: Images
 
-    private func pickImages() {
+    private func pickFiles() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.prompt = "Attach"
-        panel.message = "Choose images to send"
+        panel.message = "Choose pictures or files to send"
         let finish: (NSApplication.ModalResponse) -> Void = { response in
-            if response == .OK { stage(panel.urls.map(ImageSource.file)) }
+            if response == .OK { attach(panel.urls) }
         }
         if let window = NSApp.keyWindow {
             panel.beginSheetModal(for: window, completionHandler: finish)
@@ -815,8 +827,8 @@ struct TimelineView: View {
             // If the server's size limit isn't known yet, the server itself will say so on upload.
             let limit = media.uploadLimit
             for source in sources {
-                guard stagedImages.count < Self.mostImagesAtOnce else {
-                    imageNotice = "Up to \(Self.mostImagesAtOnce) images can be sent at once."
+                guard stagedImages.count + stagedFiles.count < Self.mostAttachmentsAtOnce else {
+                    imageNotice = "Up to \(Self.mostAttachmentsAtOnce) pictures and files can be sent at once."
                     break
                 }
                 // Decoding and scaling can take a moment for a large photo: not on the main thread.
@@ -827,6 +839,50 @@ struct TimelineView: View {
                 case .success(let image): stagedImages.append(image)
                 case .failure(let error):
                     imageNotice = (error as? ImagePreparationError)?.message ?? "That image couldn't be read."
+                }
+            }
+            composerFocused = true
+        }
+    }
+
+    /// Readies picked, dropped or pasted files and puts them in the composer: pictures as
+    /// pictures (shown in the conversation), anything else as a file. A picture Huddle can't
+    /// read (an SVG, say) goes as a file too.
+    private func attach(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        guard editTarget == nil else {
+            imageNotice = "Finish editing to attach files."
+            return
+        }
+        imageNotice = nil
+        Task {
+            let limit = media.uploadLimit
+            for url in urls {
+                guard stagedImages.count + stagedFiles.count < Self.mostAttachmentsAtOnce else {
+                    imageNotice = "Up to \(Self.mostAttachmentsAtOnce) pictures and files can be sent at once."
+                    break
+                }
+                let isPicture = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)?.conforms(to: .image) == true
+                if isPicture {
+                    let result = await Task.detached(priority: .userInitiated) {
+                        Result { try ImagePreparer.prepare(.file(url), uploadLimit: limit) }
+                    }.value
+                    switch result {
+                    case .success(let image):
+                        stagedImages.append(image)
+                        continue
+                    case .failure(let error):
+                        if let error = error as? ImagePreparationError, case .tooLarge = error {
+                            imageNotice = error.message
+                            continue
+                        }
+                        // Not one Huddle can draw: send it as a file.
+                    }
+                }
+                do {
+                    stagedFiles.append(try await FilePreparer.prepare(url, uploadLimit: limit))
+                } catch {
+                    imageNotice = (error as? FilePreparationError)?.message ?? "“\(url.lastPathComponent)” couldn't be read."
                 }
             }
             composerFocused = true
@@ -920,7 +976,8 @@ struct TimelineView: View {
     private func startEdit(_ message: MessageRow) {
         guard let kind = message.editKind, let original = ReplyPreview(replyingTo: message) else { return }
         if editTarget == nil {
-            stashedDraft = StashedDraft(text: draft, mentions: composedMentions, reply: replyTarget, images: stagedImages)
+            stashedDraft = StashedDraft(text: draft, mentions: composedMentions, reply: replyTarget, images: stagedImages,
+                                        files: stagedFiles)
             followedBeforeEdit = followsNewest
         }
         let restored = kind == .text
@@ -930,6 +987,7 @@ struct TimelineView: View {
         composedMentions = restored.mentions
         replyTarget = nil
         stagedImages = []
+        stagedFiles = []
         imageNotice = nil
         dismissedQuery = nil
         editTarget = EditTarget(itemID: message.itemID, kind: kind, text: restored.text, original: original)
@@ -956,12 +1014,13 @@ struct TimelineView: View {
         composedMentions = stash.mentions
         replyTarget = stash.reply
         stagedImages = stash.images
+        stagedFiles = stash.files
     }
 
     /// Up arrow: moves through mention suggestions; in an empty composer, edits your last message.
     private func upArrow() -> KeyPress.Result {
         if !suggestions.isEmpty { return moveSuggestion(-1) }
-        guard draft.isEmpty, editTarget == nil, stagedImages.isEmpty,
+        guard draft.isEmpty, editTarget == nil, stagedImages.isEmpty, stagedFiles.isEmpty,
               let message = timeline.rows.reversed().lazy.compactMap(\.message)
                 .first(where: { $0.isOwn && ($0.editKind == .text || $0.editKind == .emote) })
         else { return .ignored }
@@ -1153,9 +1212,12 @@ private struct MessageView: View {
         return { onOpenThread(eventID) }
     }
 
+    /// A picture or file, which shows how its upload is going rather than fading while it goes.
     private var isImage: Bool {
-        if case .image = message.body { return true }
-        return false
+        switch message.body {
+        case .image, .file: return true
+        default: return false
+        }
     }
 
     /// Starts a reply to this message. Nil for one that hasn't been sent yet or was deleted.
@@ -1305,6 +1367,9 @@ private struct MessageView: View {
             share.append(.init("Save Image As…") { AttachmentSaver.save(image, media: media) })
         case .audio(let audio):
             share.append(.init("Save Audio As…") { AttachmentSaver.save(audio, media: media) })
+        case .file(let file) where message.sendState == nil && file.media != nil:
+            share.append(.init("Open") { Task { try? await media.open(file) } })
+            share.append(.init("Save File As…") { AttachmentSaver.save(file, media: media) })
         default:
             break
         }
@@ -1527,6 +1592,18 @@ private struct MessageView: View {
                     (Text(styled(caption)) + editedLabel).textSelection(.enabled)
                 }
             }
+        case .file(let file):
+            VStack(alignment: .leading, spacing: 4) {
+                FileMessageView(file: file, media: media, sendState: message.sendState,
+                                uploadProgress: message.uploadProgress,
+                                cancelUpload: message.sendState == nil ? nil : {
+                                    Task { await timeline.discard(message.itemID) }
+                                })
+                if let caption = file.caption {
+                    (Text(styled(caption)) + editedLabel).textSelection(.enabled)
+                }
+            }
+            .padding(.vertical, 3)
         case .audio(let audio):
             VStack(alignment: .leading, spacing: 4) {
                 AudioMessageView(id: message.eventID ?? audio.media.source.url(), audio: audio,
@@ -2275,6 +2352,7 @@ struct StashedDraft {
     var mentions: [ComposedMention] = []
     var reply: ReplyPreview?
     var images: [StagedImage] = []
+    var files: [StagedFile] = []
 }
 
 /// A message on its way to other rooms: what it looks like, and what to send.

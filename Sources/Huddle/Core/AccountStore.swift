@@ -27,6 +27,7 @@ final class AccountStore {
         // this clears anything that build left behind.
         try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory
             .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".preview", isDirectory: true))
+        MediaLoader.clearOpenedFiles()
         if !DevHooks.startsFresh { await restoreStoredAccounts() }
         isRestoring = false
         await DevHooks.run(store: self)

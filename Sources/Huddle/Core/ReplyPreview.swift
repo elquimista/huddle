@@ -62,6 +62,10 @@ struct ReplyPreview: Equatable {
         case .audio(let audio):
             (text, icon) = (audio.isVoice ? "Voice message"
                             : AttachmentText.line(name: audio.filename, caption: audio.caption, kind: "Audio"), "waveform")
+        case .file(let file):
+            (text, icon) = (AttachmentText.line(name: file.filename, caption: file.caption,
+                                                kind: file.isVideo ? "Video" : "File"),
+                            file.isVideo ? "film" : "doc")
         case .attachment(let symbol, let name):
             (text, icon) = (name, symbol)
         case .undecryptable:

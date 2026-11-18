@@ -42,6 +42,8 @@ struct MessageRow: Equatable {
         case emote(String)
         case image(ImageAttachment)
         case audio(AudioAttachment)
+        /// A document, archive, video or other file, shown as a tile to open or save.
+        case file(FileAttachment)
         case attachment(icon: String, name: String)
         case undecryptable
         case redacted
@@ -179,6 +181,7 @@ struct ReactionPreview: Equatable {
                     target = "“\(plain.prefix(60))”"
                 case .image(let image): target = image.isSticker ? "a sticker" : (image.filename.isEmpty ? "an image" : image.filename)
                 case .audio(let audio): target = audio.isVoice ? "a voice message" : audio.filename
+                case .file(let file): target = file.filename
                 case .attachment(_, let name): target = name
                 default: target = "a message"
                 }
@@ -646,22 +649,40 @@ final class RoomTimeline {
     private struct QueuedImage {
         let id = UUID()
         let queuedAt = Date()
-        let image: StagedImage
+        let item: StagedAttachment
         let caption: (plain: String, html: String?, mentions: Mentions?)?
         let replyTo: String?
+
+        /// What its row shows until the SDK's own row for it takes over.
+        var body: MessageRow.Body {
+            switch item {
+            case .image(let image): .image(ImageAttachment(staged: image, caption: caption?.plain, id: id))
+            case .file(let file): .file(FileAttachment(staged: file, caption: caption?.plain))
+            }
+        }
+
+        var preview: NSImage? {
+            if case .image(let image) = item { image.preview } else { nil }
+        }
+    }
+
+    /// Something waiting in the composer to be sent: a picture, or any other file.
+    enum StagedAttachment {
+        case image(StagedImage)
+        case file(StagedFile)
     }
 
     private static let queuedPrefix = "queued-"
 
-    /// Sends images, each as a message of its own, in the order given. The caption, and the
-    /// reply if this is one, go with the first.
+    /// Sends pictures and files, each as a message of its own, in the order given. The caption,
+    /// and the reply if this is one, go with the first.
     ///
     /// They are uploaded one at a time. Handed to the SDK together they upload side by side and
     /// arrive in whatever order they finish, which is rarely the order they were chosen in.
-    func send(images: [StagedImage], caption: String, mentions: [ComposedMention] = [], replyTo: String? = nil) {
+    func send(_ items: [StagedAttachment], caption: String, mentions: [ComposedMention] = [], replyTo: String? = nil) {
         let captionParts = caption.isEmpty ? nil : MentionComposer.parts(for: caption, mentions: mentions)
-        for (index, image) in images.enumerated() {
-            imageQueue.append(QueuedImage(image: image, caption: index == 0 ? captionParts : nil,
+        for (index, item) in items.enumerated() {
+            imageQueue.append(QueuedImage(item: item, caption: index == 0 ? captionParts : nil,
                                           replyTo: index == 0 ? replyTo : nil))
         }
         rebuildRows()
@@ -677,7 +698,7 @@ final class RoomTimeline {
                 self.handover = (next.id, self.unsentImageRows(in: self.rows))
                 do {
                     let handle = try timeline.sendAttachment(params: Self.parameters(for: next),
-                                                             attachment: Self.attachment(for: next.image))
+                                                             attachment: Self.attachment(for: next.item))
                     try? await handle.join()
                     self.error = nil
                 } catch {
@@ -706,12 +727,15 @@ final class RoomTimeline {
         rebuildRows()
     }
 
-    /// Rows for images of ours that the SDK is uploading, or has failed to.
+    /// Rows for pictures and files of ours that the SDK is uploading, or has failed to.
     private func unsentImageRows(in rows: [TimelineRow]) -> Set<String> {
         Set(rows.compactMap { row in
-            guard case .message(let message) = row.kind, case .image = message.body,
+            guard case .message(let message) = row.kind,
                   message.sendState == .sending || message.sendState == .failed else { return nil }
-            return row.id
+            switch message.body {
+            case .image, .file, .audio: return row.id
+            default: return nil
+            }
         })
     }
 
@@ -730,9 +754,9 @@ final class RoomTimeline {
                 senderAvatarURL: profiles[ownUserID]?.avatarURL,
                 isOwn: true,
                 date: queued.queuedAt,
-                body: .image(ImageAttachment(staged: queued.image, caption: queued.caption?.plain, id: queued.id)),
+                body: queued.body,
                 sendState: .waiting,
-                localPreview: queued.image.preview)
+                localPreview: queued.preview)
             if let previous, previous.sender == ownUserID, message.date.timeIntervalSince(previous.date) < 300 {
                 message.showsHeader = false
             }
@@ -742,13 +766,39 @@ final class RoomTimeline {
     }
 
     private static func parameters(for queued: QueuedImage) -> UploadParameters {
-        UploadParameters(
-            source: .data(bytes: queued.image.data, filename: queued.image.filename),
+        let source: UploadSource
+        switch queued.item {
+        case .image(let image): source = .data(bytes: image.data, filename: image.filename)
+        // Read from disk as it uploads: a large file is never all in memory.
+        case .file(let file): source = .file(filename: file.url.path)
+        }
+        return UploadParameters(
+            source: source,
             caption: queued.caption?.plain,
             formattedCaption: queued.caption?.html.map { FormattedBody(format: .html, body: $0) },
             mentions: queued.caption?.mentions,
             inReplyTo: queued.replyTo,
             extraContentJson: nil)
+    }
+
+    private static func attachment(for item: StagedAttachment) -> AttachmentKind {
+        switch item {
+        case .image(let image): return attachment(for: image)
+        case .file(let file):
+            switch file.kind {
+            case .file:
+                return .file(fileInfo: FileInfo(mimetype: file.mimetype, size: file.size,
+                                                thumbnailInfo: nil, thumbnailSource: nil))
+            case .video(let duration, let size):
+                return .video(videoInfo: VideoInfo(duration: duration, height: size.map { UInt64($0.height) },
+                                                   width: size.map { UInt64($0.width) }, mimetype: file.mimetype,
+                                                   size: file.size, thumbnailInfo: nil, thumbnailSource: nil,
+                                                   blurhash: nil),
+                              thumbnailSource: nil)
+            case .audio(let duration):
+                return .audio(audioInfo: AudioInfo(duration: duration, size: file.size, mimetype: file.mimetype))
+            }
+        }
     }
 
     private static func attachment(for image: StagedImage) -> AttachmentKind {
@@ -991,9 +1041,9 @@ extension MessageRow.Body {
         case .notice(let content): self = .text(content.body)
         case .emote(let content): self = .emote(content.body)
         case .image(let content): self = .image(ImageAttachment(content))
-        case .video(let content): self = .attachment(icon: "film", name: content.filename)
+        case .video(let content): self = .file(FileAttachment(content))
         case .audio(let content): self = .audio(AudioAttachment(content))
-        case .file(let content): self = .attachment(icon: "doc", name: content.filename)
+        case .file(let content): self = .file(FileAttachment(content))
         case .gallery: self = .attachment(icon: "photo.on.rectangle", name: message.body)
         case .location: self = .attachment(icon: "mappin.and.ellipse", name: "Location")
         case .other(_, let body): self = .text(body)
@@ -1146,7 +1196,7 @@ extension MessageRow {
         case .text: return .text
         case .emote: return .emote
         case .image(let image): return image.isSticker ? nil : .caption
-        case .audio: return .caption
+        case .audio, .file: return .caption
         default: return nil
         }
     }
@@ -1157,6 +1207,7 @@ extension MessageRow {
         case .text(let text), .emote(let text): return text
         case .image(let image): return image.caption ?? ""
         case .audio(let audio): return audio.caption ?? ""
+        case .file(let file): return file.caption ?? ""
         default: return ""
         }
     }
@@ -1165,7 +1216,7 @@ extension MessageRow {
     var canForward: Bool {
         guard eventID != nil else { return false }
         switch body {
-        case .text, .emote, .audio, .attachment: return true
+        case .text, .emote, .audio, .file, .attachment: return true
         case .image(let image): return !image.isSticker
         case .undecryptable, .redacted, .unsupported: return false
         }
