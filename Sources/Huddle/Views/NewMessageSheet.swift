@@ -6,8 +6,17 @@ import SwiftUI
 /// (one person, or a group of exactly those people), or makes one: unencrypted unless asked
 /// to be encrypted, and for a group, named or not. With nothing typed, the people
 /// already chatted with come first.
+///
+/// The same picker invites people to a room: then those already in it can't be chosen.
 struct NewMessageSheet: View {
+    /// What the sheet is for.
+    enum Purpose: Equatable {
+        case message
+        case invite(roomID: String)
+    }
+
     let account: AccountSession
+    var purpose: Purpose = .message
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     /// The people in the To field, in the order they were added.
@@ -30,6 +39,8 @@ struct NewMessageSheet: View {
     @State private var isEncrypted = false
     /// Changed to put the cursor back in the To field.
     @State private var focusRequest = 0
+    /// When inviting: who is in the room already, or invited.
+    @State private var memberships: [String: MembershipState] = [:]
 
     /// Someone to message, and the chat already had with them, if any.
     struct Person: Identifiable, Equatable {
@@ -38,12 +49,32 @@ struct NewMessageSheet: View {
         let name: String
         let avatarURL: String?
         var roomID: String?
-        /// A typed Matrix ID the server says nobody has. Shown, so it's clear why, but not
-        /// to be messaged: some servers accept an invitation to anyone at all.
-        var doesNotExist = false
+        /// Why they can't be chosen: a typed Matrix ID the server says nobody has (some
+        /// servers accept an invitation to anyone at all), or, when inviting, someone in the
+        /// room already. Shown, so it's clear why.
+        var unavailable: String?
     }
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The room people are being invited to, if they are.
+    private var inviteRoomID: String? {
+        if case .invite(let roomID) = purpose { roomID } else { nil }
+    }
+
+    private var title: String {
+        guard let inviteRoomID else { return "New Message" }
+        guard let name = account.allRooms.first(where: { $0.id == inviteRoomID })?.name else { return "Invite People" }
+        return "Invite to “\(name)”"
+    }
+
+    /// Marks someone already in the room people are being invited to.
+    private func marked(_ person: Person) -> Person {
+        guard inviteRoomID != nil, let membership = memberships[person.userID] else { return person }
+        var person = person
+        person.unavailable = membership == .invite ? "Invited already" : "In this room already"
+        return person
+    }
 
     /// People with a direct chat already, most recent first.
     private var recent: [Person] {
@@ -60,7 +91,10 @@ struct NewMessageSheet: View {
     /// that ID itself.
     private var people: [Person] {
         let chosenIDs = Set(chosen.map(\.userID))
-        guard !trimmed.isEmpty else { return Array(recent.filter { !chosenIDs.contains($0.userID) }.prefix(30)) }
+        guard !trimmed.isEmpty else {
+            // Those in the room already are left out, rather than shown and not choosable.
+            return Array(recent.filter { !chosenIDs.contains($0.userID) && memberships[$0.userID] == nil }.prefix(30))
+        }
         let matchingRecent = recent.filter {
             $0.name.localizedCaseInsensitiveContains(trimmed) || $0.userID.localizedCaseInsensitiveContains(trimmed)
         }
@@ -71,9 +105,10 @@ struct NewMessageSheet: View {
             result.append(person)
         }
         if let typed = typedUserID, !seen.contains(typed) {
-            result.append(Person(userID: typed, name: typed, avatarURL: nil, doesNotExist: typedIDNotFound))
+            result.append(Person(userID: typed, name: typed, avatarURL: nil,
+                                 unavailable: typedIDNotFound ? "Nobody on this server has this Matrix ID" : nil))
         }
-        return result.filter { !chosenIDs.contains($0.userID) }
+        return result.filter { !chosenIDs.contains($0.userID) }.map(marked)
     }
 
     /// Whether what's typed matches only people already in the To field.
@@ -94,7 +129,8 @@ struct NewMessageSheet: View {
 
     /// Whether going takes the user to a chat they already have, rather than making one.
     private var goesToExisting: Bool {
-        switch chosen.count {
+        guard inviteRoomID == nil else { return false }
+        return switch chosen.count {
         case 0: false
         case 1: chosen[0].roomID != nil
         default: existingGroupID != nil && !startsNewGroup
@@ -102,6 +138,7 @@ struct NewMessageSheet: View {
     }
 
     private var actionTitle: String {
+        if inviteRoomID != nil { return chosen.count > 1 ? "Invite \(chosen.count) People" : "Invite" }
         if goesToExisting { return "Go to Chat" }
         return chosen.count > 1 ? "Start Group Chat" : "Start Chat"
     }
@@ -117,14 +154,15 @@ struct NewMessageSheet: View {
         let people = people
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("New Message")
+                Text(title)
                     .font(.headline)
+                    .lineLimit(1)
                 toField(people)
-                if chosen.count > 1, existingGroupID != nil, !startsNewGroup {
+                if inviteRoomID == nil, chosen.count > 1, existingGroupID != nil, !startsNewGroup {
                     existingGroupNote
                         .transition(.opacity)
                 }
-                if chosen.count > 1, !goesToExisting {
+                if inviteRoomID == nil, chosen.count > 1, !goesToExisting {
                     TextField("Group name", text: $groupName, prompt: Text("Group name (optional)"))
                         .textFieldStyle(.plain)
                         .padding(.horizontal, 8)
@@ -144,7 +182,7 @@ struct NewMessageSheet: View {
             Divider()
             HStack(spacing: 8) {
                 // Only for a chat about to be made: an existing one's can't be changed.
-                if !chosen.isEmpty, !goesToExisting, failure == nil {
+                if inviteRoomID == nil, !chosen.isEmpty, !goesToExisting, failure == nil {
                     Toggle("End-to-end encryption", isOn: $isEncrypted)
                         .toggleStyle(.checkbox)
                         .help(isEncrypted
@@ -173,10 +211,14 @@ struct NewMessageSheet: View {
             .padding(12)
         }
         .frame(width: 440, height: 520)
-        .onAppear { highlighted = people.first?.id }
+        .onAppear { highlighted = people.first { $0.unavailable == nil }?.id }
         .task(id: trimmed) { await search(trimmed) }
         .task(id: chosen.map(\.userID)) { await findExistingGroup() }
-        .onChange(of: people.map(\.id)) { _, ids in
+        .task {
+            if let inviteRoomID { memberships = await account.memberships(in: inviteRoomID) }
+        }
+        // Only someone who can be chosen is highlighted.
+        .onChange(of: people.filter { $0.unavailable == nil }.map(\.id)) { _, ids in
             if !ids.contains(highlighted ?? "") { highlighted = ids.first }
         }
     }
@@ -221,16 +263,17 @@ struct NewMessageSheet: View {
     private func submit(_ people: [Person]) {
         if trimmed.isEmpty, !chosen.isEmpty {
             start()
-        } else if let person = people.first(where: { $0.id == highlighted }) ?? people.first {
+        } else if let person = people.first(where: { $0.id == highlighted })
+                    ?? people.first(where: { $0.unavailable == nil }) {
             add(person)
         }
     }
 
     private func add(_ person: Person) {
-        guard !person.doesNotExist, !chosen.contains(where: { $0.userID == person.userID }) else { return }
+        guard person.unavailable == nil, !chosen.contains(where: { $0.userID == person.userID }) else { return }
         var person = person
         // Someone found in the directory may have a chat with this account all the same.
-        if person.roomID == nil { person.roomID = account.existingDirectChat(with: person.userID) }
+        if inviteRoomID == nil, person.roomID == nil { person.roomID = account.existingDirectChat(with: person.userID) }
         withAnimation(.snappy(duration: 0.15)) { chosen.append(person) }
         query = ""
         failure = nil
@@ -265,7 +308,7 @@ struct NewMessageSheet: View {
     private func findExistingGroup() async {
         existingGroupID = nil
         startsNewGroup = false
-        guard chosen.count > 1 else { return }
+        guard inviteRoomID == nil, chosen.count > 1 else { return }
         let ids = Set(chosen.map(\.userID))
         let found = await account.existingGroupChat(with: ids)
         guard !Task.isCancelled, Set(chosen.map(\.userID)) == ids else { return }
@@ -279,9 +322,12 @@ struct NewMessageSheet: View {
             if trimmed.isEmpty {
                 if chosen.isEmpty {
                     ContentUnavailableView {
-                        Label("Message Someone", systemImage: "person.crop.circle.badge.plus")
+                        Label(inviteRoomID == nil ? "Message Someone" : "Invite Someone",
+                              systemImage: "person.crop.circle.badge.plus")
                     } description: {
-                        Text("Type a name, or a Matrix ID like @name:matrix.org. Add several people for a group chat.")
+                        Text(inviteRoomID == nil
+                             ? "Type a name, or a Matrix ID like @name:matrix.org. Add several people for a group chat."
+                             : "Type a name, or a Matrix ID like @name:matrix.org. Add as many people as you like.")
                     }
                 } else {
                     Color.clear
@@ -335,6 +381,7 @@ struct NewMessageSheet: View {
     }
 
     private func move(_ offset: Int, in people: [Person]) -> Bool {
+        let people = people.filter { $0.unavailable == nil }
         guard !people.isEmpty else { return false }
         let current = people.firstIndex { $0.id == highlighted } ?? -1
         let next = min(max(current + offset, 0), people.count - 1)
@@ -380,8 +427,10 @@ struct NewMessageSheet: View {
     // MARK: Going
 
     /// One person: the chat with them, made if there isn't one. Several: a new group chat.
+    /// Or, when inviting, the invitations.
     private func start() {
         guard !chosen.isEmpty, !isStarting else { return }
+        if let inviteRoomID { return invite(to: inviteRoomID) }
         if goesToExisting, let roomID = chosen.count == 1 ? chosen[0].roomID : existingGroupID {
             dismiss()
             account.showRoom(roomID)
@@ -392,13 +441,9 @@ struct NewMessageSheet: View {
         let people = chosen
         Task {
             defer { isStarting = false }
-            // Typed IDs the search hadn't vouched for: check they're someone's before
-            // inviting them, as some servers accept an invitation to anyone at all.
-            for person in people where person.name == person.userID && person.roomID == nil {
-                if await account.userExists(person.userID) == false {
-                    failure = "Nobody on this server is \(person.userID)."
-                    return
-                }
+            if let nobody = await firstNonexistent(people) {
+                failure = "Nobody on this server is \(nobody)."
+                return
             }
             do {
                 let roomID = people.count == 1
@@ -410,6 +455,37 @@ struct NewMessageSheet: View {
                 failure = "Couldn't start the chat: \(error.actionMessage)"
             }
         }
+    }
+
+    /// Invites everyone chosen. Any who couldn't be invited stay in the To field, with why.
+    private func invite(to roomID: String) {
+        isStarting = true
+        failure = nil
+        let people = chosen
+        Task {
+            defer { isStarting = false }
+            if let nobody = await firstNonexistent(people) {
+                failure = "Nobody on this server is \(nobody)."
+                return
+            }
+            let failures = await account.invite(people.map(\.userID), to: roomID)
+            guard let first = failures.first else { return dismiss() }
+            let failed = Set(failures.map(\.userID))
+            withAnimation(.snappy(duration: 0.15)) { chosen.removeAll { !failed.contains($0.userID) } }
+            let name = people.first { $0.userID == first.userID }?.name ?? first.userID
+            failure = failures.count == 1
+                ? "Couldn't invite \(name): \(first.error.actionMessage)"
+                : "Couldn't invite \(failures.count) people: \(first.error.actionMessage)"
+        }
+    }
+
+    /// The first typed Matrix ID that nobody has. Only IDs the search hadn't vouched for are
+    /// checked, before inviting them, as some servers accept an invitation to anyone at all.
+    private func firstNonexistent(_ people: [Person]) async -> String? {
+        for person in people where person.name == person.userID && person.roomID == nil {
+            if await account.userExists(person.userID) == false { return person.userID }
+        }
+        return nil
     }
 }
 
@@ -461,9 +537,9 @@ private struct PersonRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(person.name)
                         .lineLimit(1)
-                        .foregroundStyle(person.doesNotExist ? .secondary : .primary)
-                    if person.doesNotExist {
-                        Text("Nobody on this server has this Matrix ID")
+                        .foregroundStyle(person.unavailable == nil ? .primary : .secondary)
+                    if let unavailable = person.unavailable {
+                        Text(unavailable)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else if person.name != person.userID {
@@ -482,10 +558,11 @@ private struct PersonRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(person.doesNotExist)
+        .disabled(person.unavailable != nil)
         .onHover { isHovering = $0 }
-        .help(person.doesNotExist ? "" : "Add \(person.name)")
-        .accessibilityLabel(person.name == person.userID ? person.name : "\(person.name), \(person.userID)")
+        .help(person.unavailable == nil ? "Add \(person.name)" : "")
+        .accessibilityLabel([person.name, person.name == person.userID ? nil : person.userID, person.unavailable]
+            .compactMap { $0 }.joined(separator: ", "))
     }
 
     private var background: some ShapeStyle {

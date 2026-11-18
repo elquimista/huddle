@@ -693,6 +693,30 @@ final class AccountSession: Identifiable {
         return try await client.createRoom(request: parameters)
     }
 
+    /// Who is in a room or invited to it, and which.
+    func memberships(in roomID: String) async -> [String: MembershipState] {
+        guard let room = room(id: roomID), let members = try? await room.members() else { return [:] }
+        var result: [String: MembershipState] = [:]
+        while let chunk = members.nextChunk(chunkSize: 200) {
+            for member in chunk where member.membership == .join || member.membership == .invite {
+                result[member.userId] = member.membership
+            }
+        }
+        return result
+    }
+
+    /// Invites people to a room, one at a time. Returns those who couldn't be invited, and why.
+    func invite(_ userIDs: [String], to roomID: String) async -> [(userID: String, error: Error)] {
+        guard let room = room(id: roomID) else {
+            return userIDs.map { ($0, RoomError.unavailable) }
+        }
+        var failures: [(userID: String, error: Error)] = []
+        for userID in userIDs {
+            do { try await room.inviteUserById(userId: userID) } catch { failures.append((userID, error)) }
+        }
+        return failures
+    }
+
     /// Shows a room, with the list on every room if the space shown doesn't hold it (as no
     /// space holds a direct chat).
     func showRoom(_ roomID: String) {
@@ -870,15 +894,15 @@ final class AccountSession: Identifiable {
 
     /// Sends a message's content, as it is, to another room.
     func forward(_ content: RoomMessageEventContentWithoutRelation, to roomID: String) async throws {
-        guard let room = room(id: roomID) else { throw ForwardError.roomUnavailable }
+        guard let room = room(id: roomID) else { throw RoomError.unavailable }
         // The room's send queue takes it from here, as for anything typed in the room itself.
         room.enableSendQueue(enable: true)
         let timeline = try await room.timeline()
         _ = try await timeline.send(msg: content)
     }
 
-    enum ForwardError: LocalizedError {
-        case roomUnavailable
+    enum RoomError: LocalizedError {
+        case unavailable
         var errorDescription: String? { "That room isn't available." }
     }
 
@@ -1061,6 +1085,8 @@ enum AccountSheet: Identifiable, Equatable {
     case newSpace
     case addRooms(toSpace: String)
     case leaveSpace(String)
+    /// Inviting people to a room.
+    case invite(roomID: String)
 
     var id: String {
         switch self {
@@ -1069,6 +1095,7 @@ enum AccountSheet: Identifiable, Equatable {
         case .newSpace: "newSpace"
         case .addRooms(let space): "addRooms-\(space)"
         case .leaveSpace(let space): "leaveSpace-\(space)"
+        case .invite(let roomID): "invite-\(roomID)"
         }
     }
 }

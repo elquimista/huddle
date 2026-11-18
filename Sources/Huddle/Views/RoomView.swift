@@ -105,6 +105,14 @@ struct RoomView: View {
                     }
                     ToolbarItem(placement: .primaryAction) {
                         Button {
+                            panel = panel == .info ? nil : .info
+                        } label: {
+                            Label("Info", systemImage: "info.circle")
+                        }
+                        .help("Details, members and settings (⌘I)")
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
                             panel = panel == .threadList ? nil : .threadList
                         } label: {
                             Label("Threads", systemImage: "bubble.left.and.text.bubble.right")

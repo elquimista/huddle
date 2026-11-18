@@ -276,7 +276,7 @@ enum ImagePreparer {
         CGImageSourceCreateWithData(data as CFData, nil).flatMap { scaled($0, to: side) }
     }
 
-    private static func encode(_ image: CGImage, as type: UTType, quality: Double) -> Data? {
+    static func encode(_ image: CGImage, as type: UTType, quality: Double) -> Data? {
         let output = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(output, type.identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)

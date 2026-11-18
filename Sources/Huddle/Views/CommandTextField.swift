@@ -43,7 +43,16 @@ struct CommandTextField: NSViewRepresentable {
         field.setAccessibilityLabel(accessibilityLabel ?? placeholder)
         if context.coordinator.lastFocusRequest != focusRequest {
             context.coordinator.lastFocusRequest = focusRequest
-            DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+            DispatchQueue.main.async {
+                // Already being typed in: select what's there (as Find does), rather than
+                // make it first responder again, which restarts editing and loses a key
+                // pressed meanwhile (a quick second Return).
+                if let editor = field.currentEditor() {
+                    editor.selectAll(nil)
+                } else {
+                    field.window?.makeFirstResponder(field)
+                }
+            }
         }
     }
 

@@ -55,6 +55,14 @@ struct HuddleApp: App {
             CommandMenu("Room") {
                 let account = store.selected
                 let roomID = account?.selectedRoomID
+                Button("Room Info") {
+                    if let account, let roomID {
+                        account.sidePanels[roomID] = account.sidePanels[roomID] == .info ? nil : .info
+                    }
+                }
+                .keyboardShortcut("i", modifiers: .command)
+                .disabled(roomID == nil || account?.browsingSpaceID != nil)
+                Divider()
                 let unread = roomID.map { account?.isUnread($0) ?? false } ?? false
                 Button(unread ? "Mark as Read" : "Mark as Unread") {
                     if let account, let roomID { account.setRoom(roomID, unread: !unread) }
@@ -146,23 +154,33 @@ struct MainView: View {
                 }
             }
         } detail: {
-            Group {
-                if let spaceID = account.browsingSpaceID {
-                    SpaceBrowserView(account: account, spaceID: spaceID)
-                        .id(spaceID)
-                } else if let roomID = account.selectedRoomID {
-                    RoomView(account: account, roomID: roomID)
-                        .id(roomID)
-                } else {
-                    ContentUnavailableView("No Room Selected",
-                                           systemImage: "bubble.left.and.bubble.right",
-                                           description: Text("Pick a conversation from the list."))
+            // The edge between the toolbar and the conversation, drawn here because AppKit's
+            // own separator is turned off (see `detailTitlebarSeparatorHidden`). Above the
+            // content rather than over it: pictures scrolling up under it would cover it.
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(.separator)
+                    .frame(height: 1)
+                Group {
+                    if let spaceID = account.browsingSpaceID {
+                        SpaceBrowserView(account: account, spaceID: spaceID)
+                            .id(spaceID)
+                    } else if let roomID = account.selectedRoomID {
+                        RoomView(account: account, roomID: roomID)
+                            .id(roomID)
+                    } else {
+                        ContentUnavailableView("No Room Selected",
+                                               systemImage: "bubble.left.and.bubble.right",
+                                               description: Text("Pick a conversation from the list."))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
+                .id(account.id)
             }
-            .id(account.id)
         }
         .sheet(item: $account.sheet) { sheet in
             AccountSheetView(account: account, sheet: sheet)
         }
+        .detailTitlebarSeparatorHidden()
     }
 }

@@ -7,6 +7,7 @@ struct ThreadPanel: View {
         case threadList
         case pinned
         case search
+        case info
     }
 
     let account: AccountSession
@@ -78,6 +79,8 @@ struct ThreadPanel: View {
             PinnedListView(account: account, roomID: roomID)
         case .search:
             SearchPanelView(account: account, roomID: roomID)
+        case .info:
+            RoomInfoPanelView(account: account, roomID: roomID)
         }
     }
 
@@ -136,6 +139,7 @@ struct ThreadPanel: View {
         case .threadList: "Threads"
         case .pinned: "Pinned Messages"
         case .search: "Search"
+        case .info: account.allRooms.first { $0.id == roomID }?.isDirect == true ? "Chat Info" : "Room Info"
         }
     }
 
