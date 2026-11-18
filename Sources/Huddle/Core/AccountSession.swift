@@ -259,7 +259,7 @@ final class AccountSession: Identifiable {
         await syncService?.stop()
     }
 
-    private func loadProfile() async {
+    func loadProfile() async {
         let client = client
         async let name = try? client.displayName()
         async let avatar = try? client.avatarUrl()
@@ -1090,6 +1090,9 @@ enum AccountSheet: Identifiable, Equatable {
     case leaveSpace(String)
     /// Inviting people to a room.
     case invite(roomID: String)
+    /// The account's own name and picture.
+    case profile
+    case changePassword
 
     var id: String {
         switch self {
@@ -1099,6 +1102,8 @@ enum AccountSheet: Identifiable, Equatable {
         case .addRooms(let space): "addRooms-\(space)"
         case .leaveSpace(let space): "leaveSpace-\(space)"
         case .invite(let roomID): "invite-\(roomID)"
+        case .profile: "profile"
+        case .changePassword: "changePassword"
         }
     }
 }

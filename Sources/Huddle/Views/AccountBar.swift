@@ -49,6 +49,19 @@ struct AccountBar: View {
                     Button("Mark All as Read") { account.markAllRead() }
                         .disabled(!account.hasUnreadRooms)
                     Divider()
+                    Button("Edit Profile…") {
+                        store.selectedID = account.id
+                        account.sheet = .profile
+                    }
+                    if account.signsInWithOAuth {
+                        Button("Manage Account…") { openAccountPage(of: account) }
+                    } else {
+                        Button("Change Password…") {
+                            store.selectedID = account.id
+                            account.sheet = .changePassword
+                        }
+                    }
+                    Divider()
                     Button("New Space…") {
                         store.selectedID = account.id
                         account.sheet = .newSpace

@@ -213,7 +213,8 @@ struct ServerSearch {
     }
 }
 
-private extension String {
+extension String {
+    /// The string without that ending, if it has it (a URL path's trailing slash).
     func trimmingSuffix(_ suffix: String) -> String {
         hasSuffix(suffix) ? String(dropLast(suffix.count)) : self
     }

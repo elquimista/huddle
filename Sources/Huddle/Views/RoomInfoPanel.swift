@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// A room's details in the panel beside it: its picture, name and topic (changeable where this
 /// account may), whether it's encrypted, who is in it (with inviting people and, for admins
@@ -167,15 +166,16 @@ private struct RoomInfoContent: View {
 
     /// The room's picture: clicked to change it, where that's allowed.
     private var picture: some View {
-        AvatarPicker(account: account, details: details, isBusy: isChangingPicture) { action in
-            switch action {
-            case .choose(let url):
-                isChangingPicture = true
-                run { try await details.setAvatar(from: url) } done: { isChangingPicture = false }
-            case .remove:
-                isChangingPicture = true
-                run { try await details.removeAvatar() } done: { isChangingPicture = false }
-            }
+        EditableAvatar(canChange: details.canChangeAvatar, isBusy: isChangingPicture,
+                       hasPicture: details.avatarURL != nil,
+                       chooseMessage: "Choose a picture for “\(details.name)”") { url in
+            isChangingPicture = true
+            run { try await details.setAvatar(from: url) } done: { isChangingPicture = false }
+        } remove: {
+            isChangingPicture = true
+            run { try await details.removeAvatar() } done: { isChangingPicture = false }
+        } picture: {
+            AvatarView(media: account.media, url: details.avatarURL, name: details.name, seed: details.roomID, size: 76)
         }
     }
 
@@ -371,65 +371,6 @@ private struct RoomInfoContent: View {
             do { try await work() } catch { failure = error.actionMessage }
             done()
         }
-    }
-}
-
-/// The room's picture, large, and the way to change it: a click chooses a new one (or,
-/// for a room that has one, offers to remove it too).
-private struct AvatarPicker: View {
-    enum Action {
-        case choose(URL)
-        case remove
-    }
-
-    let account: AccountSession
-    let details: RoomDetails
-    let isBusy: Bool
-    let perform: (Action) -> Void
-    @State private var isHovering = false
-    @State private var anchor = MenuAnchor()
-
-    private var canChange: Bool { details.canChangeAvatar && !isBusy }
-
-    var body: some View {
-        Button(action: open) {
-            AvatarView(media: account.media, url: details.avatarURL, name: details.name, seed: details.roomID, size: 76)
-                .overlay {
-                    if isBusy {
-                        Circle().fill(.black.opacity(0.35))
-                        ProgressView().controlSize(.small).tint(.white)
-                    } else if canChange, isHovering {
-                        Circle().fill(.black.opacity(0.4))
-                        Text("Edit")
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.white)
-                    }
-                }
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!canChange)
-        .background(MenuAnchorView(anchor: anchor))
-        .onHover { isHovering = $0 }
-        .help(canChange ? "Change the picture" : "")
-        .accessibilityLabel(canChange ? "Change picture" : "Picture")
-    }
-
-    private func open() {
-        guard details.avatarURL != nil, let view = anchor.view else { return choose() }
-        let menu = NSMenu()
-        menu.addItem(ClosureMenuItem(title: "Choose Picture…") { choose() })
-        menu.addItem(ClosureMenuItem(title: "Remove Picture") { perform(.remove) })
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
-    }
-
-    private func choose() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose a picture for “\(details.name)”"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        perform(.choose(url))
     }
 }
 

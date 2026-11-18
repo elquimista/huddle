@@ -11,6 +11,8 @@ struct AccountSheetView: View {
         switch sheet {
         case .newMessage: NewMessageSheet(account: account)
         case .invite(let roomID): NewMessageSheet(account: account, purpose: .invite(roomID: roomID))
+        case .profile: ProfileSheet(account: account)
+        case .changePassword: ChangePasswordSheet(account: account)
         case .newSpace: NewSpaceSheet(account: account)
         case .newRoom(let spaceID): NewRoomSheet(account: account, spaceID: spaceID)
         case .addRooms(let spaceID): AddRoomsSheet(account: account, spaceID: spaceID)

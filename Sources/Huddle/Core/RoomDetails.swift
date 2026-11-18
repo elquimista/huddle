@@ -1,7 +1,5 @@
-import AppKit
 import Foundation
 import MatrixRustSDK
-import UniformTypeIdentifiers
 
 /// What the Room Info panel shows and changes: a room's name, topic and picture, whether it is
 /// encrypted, and who is in it. Follows the room as it changes (here or on another device), and
@@ -194,28 +192,10 @@ final class RoomDetails {
         try await room.setTopic(topic: topic.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Makes a picture the room's: cropped to a square from its middle and scaled to 512
-    /// points across, as JPEG (PNG if it has see-through parts).
+    /// Makes a picture the room's, prepared as `AvatarImage` describes.
     func setAvatar(from url: URL) async throws {
-        let data = try Data(contentsOf: url)
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                  kCGImageSourceCreateThumbnailFromImageAlways: true,
-                  kCGImageSourceCreateThumbnailWithTransform: true,
-                  kCGImageSourceThumbnailMaxPixelSize: 1024,
-              ] as CFDictionary),
-              let square = Self.squared(image, side: 512) else {
-            throw RoomDetailsError.unreadableImage
-        }
-        let hasAlpha = ![.none, .noneSkipFirst, .noneSkipLast].contains(square.alphaInfo)
-        let type: UTType = hasAlpha ? .png : .jpeg
-        guard let encoded = ImagePreparer.encode(square, as: type, quality: 0.85) else {
-            throw RoomDetailsError.unreadableImage
-        }
-        let info = ImageInfo(height: UInt64(square.height), width: UInt64(square.width),
-                             mimetype: type.preferredMIMEType, size: UInt64(encoded.count),
-                             thumbnailInfo: nil, thumbnailSource: nil, blurhash: nil, isAnimated: false)
-        try await room.uploadAvatar(mimeType: type.preferredMIMEType ?? "image/jpeg", data: encoded, mediaInfo: info)
+        let image = try AvatarImage(contentsOf: url)
+        try await room.uploadAvatar(mimeType: image.mimeType, data: image.data, mediaInfo: image.info)
     }
 
     func removeAvatar() async throws {
@@ -237,36 +217,9 @@ final class RoomDetails {
         try await room.enableEncryption()
     }
 
-    /// The middle square of a picture, scaled to `side` pixels across (or less, if smaller),
-    /// with see-through parts only if the picture had any.
-    private static func squared(_ image: CGImage, side: Int) -> CGImage? {
-        let length = min(image.width, image.height)
-        let crop = CGRect(x: (image.width - length) / 2, y: (image.height - length) / 2, width: length, height: length)
-        guard let cropped = image.cropping(to: crop) else { return nil }
-        let target = min(side, length)
-        let opaque = [.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
-        let alpha: CGImageAlphaInfo = opaque ? .noneSkipLast : .premultipliedLast
-        guard let context = CGContext(data: nil, width: target, height: target, bitsPerComponent: 8, bytesPerRow: 0,
-                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                      bitmapInfo: alpha.rawValue) else { return nil }
-        context.interpolationQuality = .high
-        context.draw(cropped, in: CGRect(x: 0, y: 0, width: target, height: target))
-        return context.makeImage()
-    }
-
     func stop() {
         handle?.cancel()
         handle = nil
         memberTask?.cancel()
-    }
-}
-
-enum RoomDetailsError: LocalizedError {
-    case unreadableImage
-
-    var errorDescription: String? {
-        switch self {
-        case .unreadableImage: "That picture couldn't be read. Try a JPEG, PNG or HEIC image."
-        }
     }
 }

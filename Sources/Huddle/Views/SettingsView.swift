@@ -371,12 +371,16 @@ private struct AccountsSettingsTab: View {
     @Environment(AccountStore.self) private var store
     @State private var accountToSignOut: AccountSession?
     @State private var accountToVerify: AccountSession?
+    @State private var accountToEdit: AccountSession?
+    @State private var accountToChangePassword: AccountSession?
 
     var body: some View {
         SettingsForm {
             Section {
                 ForEach(store.accounts) { account in
                     AccountSettingsRow(account: account,
+                                       editProfile: { accountToEdit = account },
+                                       changePassword: { accountToChangePassword = account },
                                        verify: { accountToVerify = account },
                                        signOut: { accountToSignOut = account })
                 }
@@ -389,6 +393,12 @@ private struct AccountsSettingsTab: View {
         }
         .sheet(item: $accountToVerify) { account in
             RecoverySheet(account: account)
+        }
+        .sheet(item: $accountToEdit) { account in
+            ProfileSheet(account: account)
+        }
+        .sheet(item: $accountToChangePassword) { account in
+            ChangePasswordSheet(account: account)
         }
         .confirmationDialog("Sign out of \(accountToSignOut?.userID ?? "")?",
                             isPresented: Binding(get: { accountToSignOut != nil },
@@ -415,9 +425,12 @@ extension AccountsSettingsTab {
     }
 }
 
-/// An account: who it is, whether this Mac is a trusted session of it, and signing out.
+/// An account: who it is, whether this Mac is a trusted session of it, and in its menu,
+/// editing its profile and password, and signing out.
 private struct AccountSettingsRow: View {
     let account: AccountSession
+    let editProfile: () -> Void
+    let changePassword: () -> Void
     let verify: () -> Void
     let signOut: () -> Void
 
@@ -446,6 +459,13 @@ private struct AccountSettingsRow: View {
                 }
                 if account.verification == .unverified {
                     Button("Verify This Mac…", action: verify)
+                }
+                Divider()
+                Button("Edit Profile…", action: editProfile)
+                if account.signsInWithOAuth {
+                    Button("Manage Account…") { openAccountPage(of: account) }
+                } else {
+                    Button("Change Password…", action: changePassword)
                 }
                 Divider()
                 Button("Sign Out…", action: signOut)
