@@ -223,6 +223,7 @@ private struct RoomListSection: View {
             }
         }
         .contentShape(Rectangle())
+        .background(SectionHeaderKeeper())
         .dropDestination(for: String.self) { roomIDs, _ in drop(roomIDs) }
         .contextMenu { headerMenu }
         .accessibilityElement(children: .combine)
@@ -261,6 +262,51 @@ private struct RoomListSection: View {
             moved = true
         }
         return moved
+    }
+}
+
+/// Keeps each section header the sidebar shows alive a while after its section goes.
+///
+/// AppKit's sidebar remembers which section header the pointer is on, for its Show/Hide button,
+/// without holding on to it. SwiftUI lets a section's header go as soon as the section leaves the
+/// list, so a section that goes while the pointer rests on its header (the last invitation
+/// answered, a search narrowing the list, a space switched to) leaves the sidebar remembering
+/// something that no longer exists, and the app crashes the next time the sidebar looks at it.
+/// Kept alive, the header is simply no longer in the list when the sidebar next looks, and it
+/// forgets it. Only headers that have been on screen can be under the pointer, so those are the
+/// ones kept: the last few dozen, far more than come and go before the sidebar next looks.
+private struct SectionHeaderKeeper: NSViewRepresentable {
+    func makeNSView(context: Context) -> Marker { Marker() }
+
+    func updateNSView(_ marker: Marker, context: Context) {
+        marker.keepHeaderSoon()
+    }
+
+    final class Marker: NSView {
+        private static var kept: [AnyObject] = []
+        private static let keptAtMost = 64
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil { keepHeaderSoon() }
+        }
+
+        /// Once the sidebar has put the header's row in place.
+        func keepHeaderSoon() {
+            DispatchQueue.main.async { [weak self] in self?.keepHeader() }
+        }
+
+        private func keepHeader() {
+            var view = superview
+            while let current = view, !(current is NSOutlineView) { view = current.superview }
+            guard let sidebar = view as? NSOutlineView else { return }
+            let row = sidebar.row(for: self)
+            guard row >= 0, let header = sidebar.item(atRow: row) else { return }
+            let object = header as AnyObject
+            guard !Self.kept.contains(where: { $0 === object }) else { return }
+            Self.kept.append(object)
+            if Self.kept.count > Self.keptAtMost { Self.kept.removeFirst(Self.kept.count - Self.keptAtMost) }
+        }
     }
 }
 
