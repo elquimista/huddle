@@ -1,21 +1,35 @@
 import MatrixRustSDK
 import SwiftUI
 
-/// Starting a direct chat: find someone by name or Matrix ID, and go to the chat with them,
-/// made for the occasion if there isn't one yet. With nothing typed, the people already
-/// chatted with come first.
+/// Starting a chat with one person or several. People are found by name or Matrix ID and
+/// gathered in the To field; then going takes the user to the chat already had with them
+/// (one person, or a group of exactly those people), or makes one: unencrypted unless asked
+/// to be encrypted, and for a group, named or not. With nothing typed, the people
+/// already chatted with come first.
 struct NewMessageSheet: View {
     let account: AccountSession
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    /// The people in the To field, in the order they were added.
+    @State private var chosen: [Person] = []
+    @State private var groupName = ""
     @State private var found: [Person] = []
     @State private var isSearching = false
     @State private var searchFailed = false
-    /// The row Return opens, moved with the arrow keys.
+    /// For a typed Matrix ID: true once the server has said nobody has it.
+    @State private var typedIDNotFound = false
+    /// The row Return adds, moved with the arrow keys.
     @State private var highlighted: String?
-    @State private var starting: String?
+    @State private var isStarting = false
     @State private var failure: String?
-    @FocusState private var fieldIsFocused: Bool
+    /// A group chat already had with exactly the people chosen, found as they are chosen.
+    @State private var existingGroupID: String?
+    /// True when the user wants a new group even though one with these people exists.
+    @State private var startsNewGroup = false
+    /// Off unless ticked: new chats start unencrypted.
+    @State private var isEncrypted = false
+    /// Changed to put the cursor back in the To field.
+    @State private var focusRequest = 0
 
     /// Someone to message, and the chat already had with them, if any.
     struct Person: Identifiable, Equatable {
@@ -29,9 +43,6 @@ struct NewMessageSheet: View {
         var doesNotExist = false
     }
 
-    /// For a typed Matrix ID: true once the server has said nobody has it.
-    @State private var typedIDNotFound = false
-
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     /// People with a direct chat already, most recent first.
@@ -44,10 +55,12 @@ struct NewMessageSheet: View {
         }
     }
 
-    /// What the list shows: those already chatted with who match, then the server's
-    /// matches, then (for a full Matrix ID nobody else matched) that ID itself.
+    /// What the list shows, leaving out those already chosen: those already chatted with who
+    /// match, then the server's matches, then (for a full Matrix ID nobody else matched)
+    /// that ID itself.
     private var people: [Person] {
-        guard !trimmed.isEmpty else { return Array(recent.prefix(30)) }
+        let chosenIDs = Set(chosen.map(\.userID))
+        guard !trimmed.isEmpty else { return Array(recent.filter { !chosenIDs.contains($0.userID) }.prefix(30)) }
         let matchingRecent = recent.filter {
             $0.name.localizedCaseInsensitiveContains(trimmed) || $0.userID.localizedCaseInsensitiveContains(trimmed)
         }
@@ -60,7 +73,16 @@ struct NewMessageSheet: View {
         if let typed = typedUserID, !seen.contains(typed) {
             result.append(Person(userID: typed, name: typed, avatarURL: nil, doesNotExist: typedIDNotFound))
         }
-        return result
+        return result.filter { !chosenIDs.contains($0.userID) }
+    }
+
+    /// Whether what's typed matches only people already in the To field.
+    private var matchesAreAllChosen: Bool {
+        let chosenIDs = Set(chosen.map(\.userID))
+        let matching = recent.filter {
+            $0.name.localizedCaseInsensitiveContains(trimmed) || $0.userID.localizedCaseInsensitiveContains(trimmed)
+        } + found
+        return !matching.isEmpty && matching.allSatisfy { chosenIDs.contains($0.userID) }
     }
 
     /// The query, when it is a whole Matrix ID ("@name:server.org").
@@ -70,59 +92,205 @@ struct NewMessageSheet: View {
         return trimmed
     }
 
+    /// Whether going takes the user to a chat they already have, rather than making one.
+    private var goesToExisting: Bool {
+        switch chosen.count {
+        case 0: false
+        case 1: chosen[0].roomID != nil
+        default: existingGroupID != nil && !startsNewGroup
+        }
+    }
+
+    private var actionTitle: String {
+        if goesToExisting { return "Go to Chat" }
+        return chosen.count > 1 ? "Start Group Chat" : "Start Chat"
+    }
+
+    private var existingGroupName: String? {
+        existingGroupID.flatMap { id in account.allRooms.first { $0.id == id }?.name }
+    }
+
+    /// The height of a row in the To field: a chip's.
+    private static let rowHeight: CGFloat = 20
+
     var body: some View {
         let people = people
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text("New Message")
                     .font(.headline)
-                SearchField(text: $query, prompt: "Name or Matrix ID")
-                    .focused($fieldIsFocused)
-                    .onSubmit { if let person = people.first(where: { $0.id == highlighted }) ?? people.first { start(person) } }
-                    .onKeyPress(.downArrow) { move(1, in: people) }
-                    .onKeyPress(.upArrow) { move(-1, in: people) }
+                toField(people)
+                if chosen.count > 1, existingGroupID != nil, !startsNewGroup {
+                    existingGroupNote
+                        .transition(.opacity)
+                }
+                if chosen.count > 1, !goesToExisting {
+                    TextField("Group name", text: $groupName, prompt: Text("Group name (optional)"))
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(.separator) }
+                        .onSubmit(start)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
             .padding(16)
+            .animation(.snappy(duration: 0.2), value: chosen.count > 1)
+            .animation(.snappy(duration: 0.2), value: goesToExisting)
             Divider()
             list(people)
                 .frame(maxHeight: .infinity)
             Divider()
             HStack(spacing: 8) {
+                // Only for a chat about to be made: an existing one's can't be changed.
+                if !chosen.isEmpty, !goesToExisting, failure == nil {
+                    Toggle("End-to-end encryption", isOn: $isEncrypted)
+                        .toggleStyle(.checkbox)
+                        .help(isEncrypted
+                              ? "Only the people in the chat can read its messages. This can't be turned off later."
+                              : "Your server will be able to read this chat's messages. Encryption can be turned on later, but not off.")
+                }
                 if let failure {
                     Label(failure, systemImage: "exclamationmark.triangle.fill")
                         .font(.callout)
                         .foregroundStyle(.red)
                         .lineLimit(2)
                         .help(failure)
+                } else if isStarting {
+                    ProgressView()
+                        .controlSize(.small)
                 }
                 Spacer(minLength: 8)
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                // Return in the To field (with nothing typed) does this; a default button would
+                // take Return from the field even while someone is being picked.
+                Button(actionTitle, action: start)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(chosen.isEmpty || isStarting)
             }
             .padding(12)
         }
         .frame(width: 440, height: 520)
-        .onAppear {
-            fieldIsFocused = true
-            highlighted = people.first?.id
-        }
+        .onAppear { highlighted = people.first?.id }
         .task(id: trimmed) { await search(trimmed) }
-        .onChange(of: people.first?.id) { _, first in
-            if !people.contains(where: { $0.id == highlighted }) { highlighted = first }
+        .task(id: chosen.map(\.userID)) { await findExistingGroup() }
+        .onChange(of: people.map(\.id)) { _, ids in
+            if !ids.contains(highlighted ?? "") { highlighted = ids.first }
         }
     }
+
+    // MARK: The To field
+
+    /// The people chosen, as chips, and the field to find more, wrapping onto more lines as
+    /// it fills.
+    private func toField(_ people: [Person]) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            // As tall as a row of chips, so the label lines up with the first of them.
+            Text("To:")
+                .foregroundStyle(.secondary)
+                .frame(height: Self.rowHeight)
+            FlowLayout(spacing: 4) {
+                ForEach(chosen) { person in
+                    PersonChip(account: account, person: person) { remove(person) }
+                }
+                CommandTextField(text: $query, placeholder: chosen.isEmpty ? "Name or Matrix ID" : "",
+                                 focusRequest: focusRequest,
+                                 onSubmit: { submit(people) },
+                                 onMove: { move($0, in: people) },
+                                 onDeleteWhenEmpty: {
+                                     // Backspace in an empty field takes off the last person.
+                                     if let last = chosen.last { remove(last) }
+                                 },
+                                 accessibilityLabel: "To")
+                    .frame(minWidth: 120, minHeight: Self.rowHeight)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(minHeight: 30)
+        .background(.background, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(.separator) }
+        .contentShape(Rectangle())
+        .onTapGesture { focusRequest += 1 }
+    }
+
+    /// Return: adds the highlighted person while something is typed (or nobody is chosen
+    /// yet); with the field empty and people chosen, goes.
+    private func submit(_ people: [Person]) {
+        if trimmed.isEmpty, !chosen.isEmpty {
+            start()
+        } else if let person = people.first(where: { $0.id == highlighted }) ?? people.first {
+            add(person)
+        }
+    }
+
+    private func add(_ person: Person) {
+        guard !person.doesNotExist, !chosen.contains(where: { $0.userID == person.userID }) else { return }
+        var person = person
+        // Someone found in the directory may have a chat with this account all the same.
+        if person.roomID == nil { person.roomID = account.existingDirectChat(with: person.userID) }
+        withAnimation(.snappy(duration: 0.15)) { chosen.append(person) }
+        query = ""
+        failure = nil
+        focusRequest += 1
+    }
+
+    private func remove(_ person: Person) {
+        withAnimation(.snappy(duration: 0.15)) { chosen.removeAll { $0.userID == person.userID } }
+        failure = nil
+        focusRequest += 1
+    }
+
+    /// "You already have a group with these people", and a way to make another anyway.
+    private var existingGroupNote: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .foregroundStyle(.secondary)
+            Text(existingGroupName.map { "You already have a group with them, “\($0)”." }
+                 ?? "You already have a group with them.")
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer(minLength: 4)
+            Button("Start a New One") { startsNewGroup = true }
+                .buttonStyle(.link)
+        }
+        .font(.callout)
+        .padding(.horizontal, 2)
+    }
+
+    /// Looks for a group chat with exactly the people chosen, so that going takes the user
+    /// back to it rather than making another.
+    private func findExistingGroup() async {
+        existingGroupID = nil
+        startsNewGroup = false
+        guard chosen.count > 1 else { return }
+        let ids = Set(chosen.map(\.userID))
+        let found = await account.existingGroupChat(with: ids)
+        guard !Task.isCancelled, Set(chosen.map(\.userID)) == ids else { return }
+        existingGroupID = found
+    }
+
+    // MARK: The list
 
     @ViewBuilder private func list(_ people: [Person]) -> some View {
         if people.isEmpty {
             if trimmed.isEmpty {
-                ContentUnavailableView {
-                    Label("Message Someone", systemImage: "person.crop.circle.badge.plus")
-                } description: {
-                    Text("Type a name, or a Matrix ID like @name:matrix.org.")
+                if chosen.isEmpty {
+                    ContentUnavailableView {
+                        Label("Message Someone", systemImage: "person.crop.circle.badge.plus")
+                    } description: {
+                        Text("Type a name, or a Matrix ID like @name:matrix.org. Add several people for a group chat.")
+                    }
+                } else {
+                    Color.clear
                 }
             } else if isSearching {
                 ProgressView()
                     .controlSize(.small)
+            } else if matchesAreAllChosen {
+                Color.clear
             } else {
                 ContentUnavailableView {
                     Label("Nobody Found", systemImage: "person.crop.circle.badge.questionmark")
@@ -145,9 +313,8 @@ struct NewMessageSheet: View {
                                 .padding(.bottom, 4)
                         }
                         ForEach(people) { person in
-                            PersonRow(account: account, person: person, isHighlighted: person.id == highlighted,
-                                      isStarting: starting == person.userID) {
-                                start(person)
+                            PersonRow(account: account, person: person, isHighlighted: person.id == highlighted) {
+                                add(person)
                             }
                             .id(person.id)
                         }
@@ -167,16 +334,16 @@ struct NewMessageSheet: View {
         }
     }
 
-    private func move(_ offset: Int, in people: [Person]) -> KeyPress.Result {
-        guard !people.isEmpty else { return .ignored }
+    private func move(_ offset: Int, in people: [Person]) -> Bool {
+        guard !people.isEmpty else { return false }
         let current = people.firstIndex { $0.id == highlighted } ?? -1
         let next = min(max(current + offset, 0), people.count - 1)
         highlighted = people[next].id
-        return .handled
+        return true
     }
 
     /// Asks the server's directory a moment after the last keystroke. A whole Matrix ID is
-    /// looked up too, for its name and picture.
+    /// looked up too, for its name and picture, and to know if nobody has it.
     private func search(_ term: String) async {
         found = []
         searchFailed = false
@@ -210,32 +377,71 @@ struct NewMessageSheet: View {
         isSearching = false
     }
 
-    private func start(_ person: Person) {
-        guard starting == nil, !person.doesNotExist else { return }
-        if let roomID = person.roomID {
+    // MARK: Going
+
+    /// One person: the chat with them, made if there isn't one. Several: a new group chat.
+    private func start() {
+        guard !chosen.isEmpty, !isStarting else { return }
+        if goesToExisting, let roomID = chosen.count == 1 ? chosen[0].roomID : existingGroupID {
             dismiss()
             account.showRoom(roomID)
             return
         }
-        starting = person.userID
+        isStarting = true
         failure = nil
+        let people = chosen
         Task {
-            defer { starting = nil }
-            // A typed ID the search hasn't vouched for yet: check it's someone's before
+            defer { isStarting = false }
+            // Typed IDs the search hadn't vouched for: check they're someone's before
             // inviting them, as some servers accept an invitation to anyone at all.
-            if !found.contains(where: { $0.userID == person.userID }), recent.allSatisfy({ $0.userID != person.userID }),
-               await account.userExists(person.userID) == false {
-                typedIDNotFound = true
-                return
+            for person in people where person.name == person.userID && person.roomID == nil {
+                if await account.userExists(person.userID) == false {
+                    failure = "Nobody on this server is \(person.userID)."
+                    return
+                }
             }
             do {
-                let roomID = try await account.directChat(with: person.userID)
+                let roomID = people.count == 1
+                    ? try await account.directChat(with: people[0].userID, encrypted: isEncrypted)
+                    : try await account.groupChat(with: people.map(\.userID), name: groupName, encrypted: isEncrypted)
                 dismiss()
                 account.showRoom(roomID)
             } catch {
-                failure = "Couldn't start a chat with \(person.name): \(error.actionMessage)"
+                failure = "Couldn't start the chat: \(error.actionMessage)"
             }
         }
+    }
+}
+
+/// Someone in the To field: their picture and name, and a button to take them off.
+private struct PersonChip: View {
+    let account: AccountSession
+    let person: NewMessageSheet.Person
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            AvatarView(media: account.media, url: person.avatarURL, name: person.name, seed: person.userID, size: 16)
+                .accessibilityHidden(true)
+            Text(person.name)
+                .lineLimit(1)
+            Button(action: remove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Remove \(person.name)")
+            .accessibilityLabel("Remove \(person.name)")
+        }
+        .padding(.leading, 2)
+        .padding(.trailing, 4)
+        .frame(height: 20)
+        .background(Color.accentColor.opacity(0.15), in: Capsule())
+        .transition(.scale(scale: 0.8).combined(with: .opacity))
+        .help(person.userID)
     }
 }
 
@@ -244,12 +450,11 @@ private struct PersonRow: View {
     let account: AccountSession
     let person: NewMessageSheet.Person
     let isHighlighted: Bool
-    let isStarting: Bool
-    let open: () -> Void
+    let add: () -> Void
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: open) {
+        Button(action: add) {
             HStack(spacing: 10) {
                 AvatarView(media: account.media, url: person.avatarURL, name: person.name, seed: person.userID, size: 32)
                     .accessibilityHidden(true)
@@ -269,10 +474,6 @@ private struct PersonRow: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if isStarting {
-                    ProgressView()
-                        .controlSize(.small)
-                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -283,7 +484,7 @@ private struct PersonRow: View {
         .buttonStyle(.plain)
         .disabled(person.doesNotExist)
         .onHover { isHovering = $0 }
-        .help(person.doesNotExist ? "" : person.roomID == nil ? "Start a chat with \(person.name)" : "Go to your chat with \(person.name)")
+        .help(person.doesNotExist ? "" : "Add \(person.name)")
         .accessibilityLabel(person.name == person.userID ? person.name : "\(person.name), \(person.userID)")
     }
 
@@ -291,5 +492,54 @@ private struct PersonRow: View {
         if isHighlighted { return AnyShapeStyle(Color.accentColor.opacity(0.14)) }
         if isHovering { return AnyShapeStyle(.quaternary.opacity(0.6)) }
         return AnyShapeStyle(.clear)
+    }
+}
+
+/// Lays its views out in rows, left to right, starting a new row when one is full; the
+/// last view (the To field's text field) takes what is left of its row.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 300
+        let rows = arrange(subviews, in: width)
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews, in: bounds.width) {
+            var x = bounds.minX
+            for (index, size) in row.items {
+                let isLast = index == subviews.count - 1
+                let width = isLast ? bounds.maxX - x : size.width
+                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+                                      proposal: ProposedViewSize(width: width, height: size.height))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var items: [(Int, CGSize)] = []
+        var height: CGFloat = 0
+    }
+
+    private func arrange(_ subviews: Subviews, in width: CGFloat) -> [Row] {
+        var rows = [Row()]
+        var x: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                rows.append(Row())
+                x = 0
+            }
+            rows[rows.count - 1].items.append((index, size))
+            rows[rows.count - 1].height = max(rows[rows.count - 1].height, size.height)
+            x += size.width + spacing
+        }
+        return rows
     }
 }

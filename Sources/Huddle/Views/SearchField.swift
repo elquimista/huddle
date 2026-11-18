@@ -5,14 +5,19 @@ import SwiftUI
 struct SearchField: View {
     @Binding var text: String
     let prompt: String
+    /// Changed to put the cursor in the field; it also takes the cursor when it appears.
+    var focusRequest = 0
+    var onSubmit: () -> Void = {}
+    var onMove: ((Int) -> Bool)?
+    var onEscape: (() -> Bool)?
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            TextField(prompt, text: $text)
-                .textFieldStyle(.plain)
+            CommandTextField(text: $text, placeholder: prompt, focusRequest: focusRequest,
+                             onSubmit: onSubmit, onMove: onMove, onEscape: onEscape)
             if !text.isEmpty {
                 Button {
                     text = ""

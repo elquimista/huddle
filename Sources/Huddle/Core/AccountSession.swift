@@ -644,13 +644,52 @@ final class AccountSession: Identifiable {
         await ServerSearch(client: client).userExists(userID)
     }
 
-    /// The direct chat with someone, made (encrypted, with them invited) if there isn't one
-    /// yet. Returns its ID.
-    func directChat(with userID: String) async throws -> String {
-        if let room = try? client.getDmRoom(userId: userID) { return room.id() }
+    /// The direct chat already had with someone, if any.
+    func existingDirectChat(with userID: String) -> String? {
+        (try? client.getDmRoom(userId: userID))?.id()
+    }
+
+    /// The direct chat with someone, made (with them invited, and encrypted unless asked
+    /// not to be) if there isn't one yet. Returns its ID.
+    func directChat(with userID: String, encrypted: Bool = true) async throws -> String {
+        if let roomID = existingDirectChat(with: userID) { return roomID }
         let parameters = CreateRoomParameters(
-            name: nil, topic: nil, isEncrypted: true, isDirect: true,
+            name: nil, topic: nil, isEncrypted: encrypted, isDirect: true,
             visibility: .private, preset: .trustedPrivateChat, invite: [userID])
+        return try await client.createRoom(request: parameters)
+    }
+
+    /// A group chat already had with exactly these people: its other members, joined or
+    /// invited, are them and nobody else. Only chats with the right number of members have
+    /// their members looked at.
+    func existingGroupChat(with userIDs: Set<String>) async -> String? {
+        for summary in allRooms where summary.isDirect && !summary.isInvite && !summary.isSpace {
+            guard let room = room(id: summary.id), let info = try? await room.roomInfo(),
+                  info.activeMembersCount == UInt64(userIDs.count + 1),
+                  let members = try? await room.members() else { continue }
+            var others = Set<String>()
+            while let chunk = members.nextChunk(chunkSize: 100) {
+                for member in chunk {
+                    switch member.membership {
+                    case .join, .invite: others.insert(member.userId)
+                    default: break
+                    }
+                }
+            }
+            others.remove(userID)
+            if others == userIDs { return summary.id }
+        }
+        return nil
+    }
+
+    /// Starts a group chat with several people (all of them invited, and encrypted unless
+    /// asked not to be), named if a name is given; otherwise clients name it after who's in
+    /// it. Returns its ID.
+    func groupChat(with userIDs: [String], name: String?, encrypted: Bool = true) async throws -> String {
+        let name = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parameters = CreateRoomParameters(
+            name: name?.isEmpty == false ? name : nil, topic: nil, isEncrypted: encrypted, isDirect: true,
+            visibility: .private, preset: .trustedPrivateChat, invite: userIDs)
         return try await client.createRoom(request: parameters)
     }
 

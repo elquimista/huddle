@@ -5,7 +5,6 @@ import SwiftUI
 struct SearchPanelView: View {
     let account: AccountSession
     let roomID: String
-    @FocusState private var fieldIsFocused: Bool
 
     private var search: MessageSearch { account.search }
 
@@ -13,17 +12,15 @@ struct SearchPanelView: View {
         @Bindable var search = search
         VStack(spacing: 0) {
             VStack(spacing: 10) {
-                SearchField(text: $search.query, prompt: "Search messages")
-                    .focused($fieldIsFocused)
-                    .onSubmit { open(search.selectedEventID == nil ? search.shown.first : nil) }
-                    .onKeyPress(.downArrow) { step(1) }
-                    .onKeyPress(.upArrow) { step(-1) }
-                    .onKeyPress(.escape) {
-                        // Escape clears what was typed first; with nothing typed, it closes.
-                        guard !search.query.isEmpty else { return .ignored }
-                        search.query = ""
-                        return .handled
-                    }
+                SearchField(text: $search.query, prompt: "Search messages", focusRequest: search.focusRequest,
+                            onSubmit: { open(search.selectedEventID == nil ? search.shown.first : nil) },
+                            onMove: { step($0) },
+                            onEscape: {
+                                // Escape clears what was typed first; with nothing typed, it closes.
+                                guard !search.query.isEmpty else { return false }
+                                search.query = ""
+                                return true
+                            })
                 Picker("Search in", selection: $search.scope) {
                     Text("This Room").tag(MessageSearch.Scope.room)
                     Text("All Rooms").tag(MessageSearch.Scope.all)
@@ -39,11 +36,7 @@ struct SearchPanelView: View {
                 IndexingNote(indexer: account.historyIndexer)
             }
         }
-        .onAppear {
-            search.roomID = roomID
-            fieldIsFocused = true
-        }
-        .onChange(of: search.focusRequest) { fieldIsFocused = true }
+        .onAppear { search.roomID = roomID }
     }
 
     @ViewBuilder private var results: some View {
@@ -94,10 +87,10 @@ struct SearchPanelView: View {
         }
     }
 
-    private func step(_ offset: Int) -> KeyPress.Result {
-        guard let hit = search.step(by: offset) else { return .ignored }
+    private func step(_ offset: Int) -> Bool {
+        guard let hit = search.step(by: offset) else { return false }
         account.open(hit)
-        return .handled
+        return true
     }
 
     private func open(_ hit: SearchHit?) {

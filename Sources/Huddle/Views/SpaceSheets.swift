@@ -171,7 +171,8 @@ struct NewRoomSheet: View {
     @State private var topic = ""
     @State private var spaceID: String?
     @State private var access: AccountSession.RoomAccess
-    @State private var isEncrypted = true
+    /// Off unless switched on: new rooms start unencrypted, as new chats do.
+    @State private var isEncrypted = false
     /// A room made on an earlier try that couldn't then be put in its space.
     @State private var createdRoomID: String?
     @State private var isBusy = false
@@ -255,11 +256,6 @@ struct NewRoomSheet: View {
                 access = .invited
             }
         }
-        .onChange(of: access) { old, new in
-            // A room anyone can join is usually a public one, where encryption only gets in
-            // the way; a private one is encrypted.
-            if new == .anyone { isEncrypted = false } else if old == .anyone { isEncrypted = true }
-        }
     }
 
     private func create() {
@@ -304,7 +300,6 @@ struct AddRoomsSheet: View {
     @State private var chosen: Set<String> = []
     @State private var isBusy = false
     @State private var failure: String?
-    @FocusState private var isSearching: Bool
 
     /// The account's rooms and spaces not yet in this one, by name. A space this one is in
     /// can't go inside it.
@@ -327,7 +322,6 @@ struct AddRoomsSheet: View {
                 SheetTitle(title: "Add Rooms to \(account.spaceName(spaceID))",
                            detail: "They stay where they are for everyone already in them, and members of the space can find them here too.")
                 SearchField(text: $query, prompt: "Find a room")
-                    .focused($isSearching)
             }
             .padding(16)
             Divider()
@@ -363,7 +357,6 @@ struct AddRoomsSheet: View {
                 .padding(16)
         }
         .frame(width: 440, height: 520)
-        .onAppear { isSearching = true }
     }
 
     private func row(_ room: RoomSummary) -> some View {
