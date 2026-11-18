@@ -93,7 +93,10 @@ final class AccountSession: Identifiable {
             if let selectedRoomID {
                 browsingSpaceID = nil
                 lastRoomBySpace[selectedSpaceID ?? ""] = selectedRoomID
+                UserDefaults.standard.set(lastRoomBySpace, forKey: "lastRooms.\(id)")
             }
+            // Something else was chosen first (by hand, from a notification): that stands.
+            roomToReopen = nil
             guard selectedRoomID != oldValue else { return }
             PerfLog.began("room selected")
             updatePresenceWatch()
@@ -153,6 +156,8 @@ final class AccountSession: Identifiable {
     let historyIndexer = HistoryIndexer()
     /// The room last open with each space selected ("" for all rooms), to go back to.
     @ObservationIgnored private var lastRoomBySpace: [String: String] = [:]
+    /// The room that was open when the app last quit, to open again once the room list has it.
+    @ObservationIgnored private var roomToReopen: String?
     @ObservationIgnored private(set) var spaceService: SpaceService?
     @ObservationIgnored private var allEntries: RoomListEntriesWithDynamicAdaptersResult?
     @ObservationIgnored private var allController: RoomListDynamicEntriesController?
@@ -188,6 +193,17 @@ final class AccountSession: Identifiable {
         // The space the room list was narrowed to last time (didSet doesn't run in init).
         selectedSpaceID = UserDefaults.standard.string(forKey: "selectedSpace.\(id)")
         collapsedSections = Set(UserDefaults.standard.stringArray(forKey: "collapsedSections.\(id)") ?? [])
+        // And the room last open in each space, the one showing then to be opened again.
+        lastRoomBySpace = UserDefaults.standard.dictionary(forKey: "lastRooms.\(id)") as? [String: String] ?? [:]
+        roomToReopen = lastRoomBySpace[selectedSpaceID ?? ""]
+    }
+
+    /// Opens the room that was open at the last quit, once the room list has it: opened before
+    /// then, it would show as unavailable. Not if anything has been opened since.
+    private func reopenLastRoom() {
+        guard let roomID = roomToReopen, selectedRoomID == nil, browsingSpaceID == nil,
+              allRooms.contains(where: { $0.id == roomID && !$0.isInvite }) else { return }
+        selectedRoomID = roomID
     }
 
     // MARK: Lifecycle
@@ -432,6 +448,7 @@ final class AccountSession: Identifiable {
         allRooms = all
         updateBadges()
         rebuildSections()
+        reopenLastRoom()
         // Marked unread from another device: a room open here stays unread too, rather than
         // being read again by the next message that arrives.
         let wasMarked = Set(previous.filter(\.isMarkedUnread).map(\.id))

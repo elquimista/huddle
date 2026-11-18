@@ -5,9 +5,12 @@ struct HuddleApp: App {
     @State private var store = AccountStore()
     /// Started with the app, so it can look for updates on its schedule.
     private let updater = AppUpdater.shared
+    /// Opens the window at launch if macOS couldn't put it back (MainWindow.swift).
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        WindowGroup {
+        // Under a fixed name, so macOS finds it again whatever changes inside it (MainWindow).
+        WindowGroup(id: MainWindow.id) {
             RootView()
                 .environment(store)
                 .frame(minWidth: 720, minHeight: 540)
@@ -69,6 +72,11 @@ struct HuddleApp: App {
             }
             // View ▸ Show/Hide Sidebar (⌃⌘S).
             SidebarCommands()
+            // Window ▸ Huddle (⌘0): the window back after closing it.
+            CommandGroup(before: .windowList) {
+                MainWindowCommand()
+                Divider()
+            }
             // There is no help book: no Huddle Help item that only says so. The Help menu keeps
             // its search of the menus.
             CommandGroup(replacing: .help) {}
