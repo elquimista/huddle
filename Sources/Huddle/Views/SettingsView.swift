@@ -415,6 +415,7 @@ private struct AccountsSettingsTab: View {
     @Environment(AccountStore.self) private var store
     @State private var accountToSignOut: AccountSession?
     @State private var accountToVerify: AccountSession?
+    @State private var accountForRecoveryKey: AccountSession?
     @State private var accountToEdit: AccountSession?
     @State private var accountToChangePassword: AccountSession?
     @State private var accountForDevices: AccountSession?
@@ -428,6 +429,7 @@ private struct AccountsSettingsTab: View {
                                        changePassword: { accountToChangePassword = account },
                                        devices: { accountForDevices = account },
                                        verify: { accountToVerify = account },
+                                       recoveryKey: { accountForRecoveryKey = account },
                                        signOut: { accountToSignOut = account })
                 }
             } footer: {
@@ -439,6 +441,9 @@ private struct AccountsSettingsTab: View {
         }
         .sheet(item: $accountToVerify) { account in
             VerificationSheet(account: account)
+        }
+        .sheet(item: $accountForRecoveryKey) { account in
+            RecoveryKeySheet(account: account)
         }
         .sheet(item: $accountToEdit) { account in
             ProfileSheet(account: account)
@@ -482,6 +487,7 @@ private struct AccountSettingsRow: View {
     let changePassword: () -> Void
     let devices: () -> Void
     let verify: () -> Void
+    let recoveryKey: () -> Void
     let signOut: () -> Void
 
     var body: some View {
@@ -509,6 +515,10 @@ private struct AccountSettingsRow: View {
                 }
                 if account.verification == .unverified {
                     Button("Verify This Mac…", action: verify)
+                }
+                if account.managesRecoveryKey {
+                    Button(account.recoveryState == .disabled ? "Set Up Recovery Key…" : "Change Recovery Key…",
+                           action: recoveryKey)
                 }
                 Divider()
                 Button("Edit Profile…", action: editProfile)
@@ -541,6 +551,17 @@ private struct AccountSettingsRow: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .labelStyle(TintedIconLabel(tint: .green))
+            if account.suggestsRecoveryKey {
+                HStack(spacing: 6) {
+                    Label("No recovery key", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .labelStyle(TintedIconLabel(tint: .orange))
+                    Button("Set Up…", action: recoveryKey)
+                        .buttonStyle(.link)
+                        .font(.subheadline)
+                }
+            }
         case .unverified:
             HStack(spacing: 6) {
                 Label("This Mac isn't verified", systemImage: "exclamationmark.triangle.fill")

@@ -8,6 +8,8 @@ struct VerificationSheet: View {
     let account: AccountSession
     @Environment(\.dismiss) private var dismiss
     @State private var usesRecoveryKey = false
+    /// Starting the account's encryption over, having neither another device nor the key.
+    @State private var resetsIdentity = false
     /// How many of the account's other devices are verified, once known: with none, there's no
     /// device to compare emoji with.
     @State private var otherVerifiedDevices: Int?
@@ -18,10 +20,7 @@ struct VerificationSheet: View {
         VStack(spacing: 20) {
             content
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
-        .padding(.bottom, 20)
-        .frame(width: 480)
+        .centredSheetLayout()
         .onAppear { flow.windowOpened() }
         .onDisappear { flow.windowClosed() }
         .onChange(of: flow.step) { _, step in
@@ -33,7 +32,9 @@ struct VerificationSheet: View {
     @ViewBuilder private var content: some View {
         switch flow.step {
         case .idle:
-            if usesRecoveryKey {
+            if resetsIdentity {
+                ResetIdentityFlow(account: account, back: { resetsIdentity = false })
+            } else if usesRecoveryKey {
                 RecoveryKeyForm(account: account, back: { usesRecoveryKey = false })
             } else {
                 choices
@@ -101,6 +102,11 @@ struct VerificationSheet: View {
                       action: { usesRecoveryKey = true })
         }
         SheetBar {
+            // For someone with neither: rare, and it can't be undone, so not a button.
+            Button("Can’t confirm?") { resetsIdentity = true }
+                .buttonStyle(.link)
+                .help("Reset your identity, if you’ve lost your recovery key and have no other verified device")
+        } trailing: {
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
         }
@@ -207,7 +213,7 @@ struct VerificationSheet: View {
                         title: "Answered on Another Device",
                         message: "Another of your devices took this request.")
         case .failed(let message):
-            SheetHeader(symbol: "exclamationmark.triangle.fill", tint: .orange,
+            SheetHeader(symbol: "exclamationmark.triangle.fill", tint: .orange, isFilled: true,
                         title: "Verification Failed",
                         message: message)
         }
@@ -247,7 +253,7 @@ struct VerificationSheet: View {
 }
 
 /// The symbol, title and explanation at the top of each step, centred.
-private struct SheetHeader: View {
+struct SheetHeader: View {
     let symbol: String?
     var tint: Color = .accentColor
     /// A solid badge with a white mark, for an outcome: verified, or not.
@@ -291,7 +297,7 @@ private struct SheetHeader: View {
 }
 
 /// Along the bottom: what's happening, if anything, then the buttons, trailing.
-private struct SheetBar<Leading: View, Trailing: View>: View {
+struct SheetBar<Leading: View, Trailing: View>: View {
     @ViewBuilder let leading: Leading
     @ViewBuilder let trailing: Trailing
 
@@ -475,7 +481,8 @@ private struct PersonDetails: View {
     }
 }
 
-private extension View {
+extension View {
+    /// The faint rounded box details sit in, as files' tiles have.
     func detailsBackground() -> some View {
         background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {

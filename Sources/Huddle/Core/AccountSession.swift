@@ -86,6 +86,12 @@ final class AccountSession: Identifiable {
     private(set) var verification: VerificationState = .unknown
     /// Emoji verification: of this Mac, and of devices and people asking to verify with it.
     let verificationFlow: VerificationFlow
+    /// Whether the account has a recovery key, and this Mac the keys it unlocks.
+    private(set) var recoveryState: RecoveryState = .unknown
+    /// The room list's suggestion to set up a recovery key, closed.
+    var recoveryNudgeDismissed: Bool {
+        didSet { UserDefaults.standard.set(recoveryNudgeDismissed, forKey: "recoveryNudgeDismissed.\(id)") }
+    }
     private(set) var needsReauth = false
     private(set) var startError: String?
     var selectedRoomID: String? {
@@ -193,6 +199,7 @@ final class AccountSession: Identifiable {
         self.presence = PresenceTracker(client: client)
         self.ownPresence = OwnPresence(client: client)
         self.verificationFlow = VerificationFlow(client: client, userID: userID)
+        self.recoveryNudgeDismissed = UserDefaults.standard.bool(forKey: "recoveryNudgeDismissed.\(id)")
         // The space the room list was narrowed to last time (didSet doesn't run in init).
         selectedSpaceID = UserDefaults.standard.string(forKey: "selectedSpace.\(id)")
         collapsedSections = Set(UserDefaults.standard.stringArray(forKey: "collapsedSections.\(id)") ?? [])
@@ -255,6 +262,10 @@ final class AccountSession: Identifiable {
                 Task { @MainActor in self?.verification = state }
             }))
             verification = client.encryption().verificationState()
+            handles.append(client.encryption().recoveryStateListener(listener: RecoveryListener { [weak self] state in
+                Task { @MainActor in self?.recoveryState = state }
+            }))
+            recoveryState = client.encryption().recoveryState()
 
             Notifier.shared.activate()
             // Lets an image being sent show how far its upload has got.
@@ -1236,6 +1247,8 @@ enum AccountSheet: Identifiable, Equatable {
     case devices
     /// Verifying this Mac, or answering a request to verify from elsewhere.
     case verify
+    /// Setting up the recovery key, or changing it.
+    case recoveryKey
 
     var id: String {
         switch self {
@@ -1249,6 +1262,7 @@ enum AccountSheet: Identifiable, Equatable {
         case .changePassword: "changePassword"
         case .devices: "devices"
         case .verify: "verify"
+        case .recoveryKey: "recoveryKey"
         }
     }
 }

@@ -15,6 +15,7 @@ struct AccountSheetView: View {
         case .changePassword: ChangePasswordSheet(account: account)
         case .devices: DevicesSheet(account: account)
         case .verify: VerificationSheet(account: account)
+        case .recoveryKey: RecoveryKeySheet(account: account)
         case .newSpace: NewSpaceSheet(account: account)
         case .newRoom(let spaceID): NewRoomSheet(account: account, spaceID: spaceID)
         case .addRooms(let spaceID): AddRoomsSheet(account: account, spaceID: spaceID)

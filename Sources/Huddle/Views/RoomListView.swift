@@ -67,6 +67,11 @@ struct RoomListView: View {
                     Banner(icon: "lock.trianglebadge.exclamationmark",
                            text: "This Mac isn’t verified",
                            action: "Verify") { account.sheet = .verify }
+                } else if account.suggestsRecoveryKey, !account.recoveryNudgeDismissed {
+                    Banner(icon: "key.horizontal",
+                           text: "No recovery key yet",
+                           action: "Set Up",
+                           dismiss: { account.recoveryNudgeDismissed = true }) { account.sheet = .recoveryKey }
                 }
                 if let status {
                     Banner(icon: "exclamationmark.triangle", text: status, action: nil) {}
@@ -561,6 +566,8 @@ private struct Banner: View {
     let icon: String
     let text: String
     let action: String?
+    /// Closes it for good, if it can be.
+    var dismiss: (() -> Void)?
     let perform: () -> Void
 
     var body: some View {
@@ -573,6 +580,18 @@ private struct Banner: View {
             if let action {
                 Button(action, action: perform)
                     .controlSize(.small)
+            }
+            if let dismiss {
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Don’t suggest this again")
+                .accessibilityLabel("Close")
             }
         }
         .padding(.horizontal, 12)

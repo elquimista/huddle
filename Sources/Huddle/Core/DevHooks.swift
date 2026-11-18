@@ -14,7 +14,7 @@ import Foundation
 ///   HUDDLE_DEV_SPACE     with HUDDLE_DEV_SELECT: name of a space (one of the account's, or an
 ///                        invitation) to browse at launch; "" for all rooms
 ///   HUDDLE_DEV_SHEET     with HUDDLE_DEV_SPACE: newRoom, newSpace, addRooms or leave, to open that sheet;
-///                        profile, password, devices or verify for the account's own; manage for its OAuth account page
+///                        profile, password, devices, verify or recovery for the account's own; manage for its OAuth account page
 ///   HUDDLE_DEV_NOTIFICATION  with HUDDLE_DEV_SPACE: name of a room to open as clicking its notification
 ///                        does, once the space is showing (without bringing the app forward)
 ///   HUDDLE_DEV_SIGN_OUT  username to sign out at launch (same code path as the Sign Out menu)
@@ -35,6 +35,7 @@ import Foundation
 ///   HUDDLE_DEV_PRESENCE_INTERVAL  seconds between presence checks, instead of 30 and 90
 ///   HUDDLE_DEV_NO_BROWSER  print the OAuth sign-in URL (DEV_OAUTH_URL ...) instead of opening it
 ///   HUDDLE_DEV_PICK_FILE  a picture file to take as chosen, in place of the open panel (Room Info, Edit Profile)
+///   HUDDLE_DEV_SAVE_TO   a file to save the recovery key to, in place of the save panel
 ///   HUDDLE_DEV_UPDATE_FEED  appcast URL to look for updates at (the Dev build otherwise never does);
 ///                        build with HUDDLE_SPARKLE_PUBLIC_KEY set to the key its updates are signed with
 @MainActor
@@ -91,6 +92,7 @@ enum DevHooks {
         case "password": account.sheet = .changePassword
         case "devices": account.sheet = .devices
         case "verify": account.sheet = .verify
+        case "recovery": account.sheet = .recoveryKey
         case "manage": openAccountPage(of: account)
         default: break
         }
@@ -123,6 +125,11 @@ enum DevHooks {
     /// A file to take as chosen wherever a picture is asked for, in place of the open panel.
     static let pickedFile: String? = AppEnvironment.isDev
         ? ProcessInfo.processInfo.environment["HUDDLE_DEV_PICK_FILE"].flatMap { $0.isEmpty ? nil : $0 }
+        : nil
+
+    /// Where Save… puts the recovery key, in place of the save panel.
+    static let savePath: URL? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_SAVE_TO"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
         : nil
 
     /// A folder every file shown in a conversation is downloaded into, as Save File As would,
