@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 /// A room's details in the panel beside it: its picture, name and topic (changeable where this
 /// account may), whether it's encrypted, who is in it (with inviting people and, for admins
-/// and moderators, removing them), and leaving it.
+/// and moderators, changing their roles and removing them), and leaving it.
 struct RoomInfoPanelView: View {
     let account: AccountSession
     let roomID: String
@@ -44,11 +44,19 @@ private struct RoomInfoContent: View {
     @State private var showsAllMembers = false
     /// Someone about to be taken out of the room, or have their invitation withdrawn.
     @State private var removing: RoomDetails.Member?
-    @State private var removalFailure: RemovalFailure?
+    /// A role change that can't be undone, waiting to be confirmed.
+    @State private var roleChange: RoleChange?
+    @State private var actionFailure: ActionFailure?
 
-    private struct RemovalFailure {
+    private struct ActionFailure {
         let title: String
         let message: String
+    }
+
+    private struct RoleChange {
+        let member: RoomDetails.Member
+        let choice: RoomDetails.RoleChoice
+        let isOwnAccount: Bool
     }
 
     private var canEditText: Bool { details.canChangeName || details.canChangeTopic }
@@ -98,9 +106,21 @@ private struct RoomInfoContent: View {
                  ? "They won't be able to join with it."
                  : "They'll stop getting its messages, and will see that you removed them.")
         }
-        .alert(removalFailure?.title ?? "", isPresented: Binding(
-            get: { removalFailure != nil }, set: { if !$0 { removalFailure = nil } }
-        ), presenting: removalFailure) { _ in
+        .confirmationDialog(roleChangeQuestion, isPresented: Binding(
+            get: { roleChange != nil }, set: { if !$0 { roleChange = nil } }
+        ), presenting: roleChange) { change in
+            Button("Make \(change.isOwnAccount ? "Yourself" : change.member.name) \(Self.withArticle(change.choice.title))",
+                   role: change.isOwnAccount ? .destructive : nil) {
+                apply(change.choice, to: change.member)
+            }
+        } message: { change in
+            Text(change.isOwnAccount
+                 ? "You can't undo this. Only someone whose role is above \(change.choice.title) could change it back."
+                 : "\(change.member.name) will have as much power as you, so you won't be able to change their role or remove them later.")
+        }
+        .alert(actionFailure?.title ?? "", isPresented: Binding(
+            get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } }
+        ), presenting: actionFailure) { _ in
             Button("OK") {}
         } message: { failure in
             Text(failure.message)
@@ -275,6 +295,8 @@ private struct RoomInfoContent: View {
                 let shown = showsAllMembers ? details.members : Array(details.members.prefix(50))
                 ForEach(shown) { member in
                     MemberRow(account: account, member: member, noun: noun,
+                              roles: details.roleChoices(for: member),
+                              setRole: { choose($0, for: member) },
                               remove: details.canRemove(member) ? { removing = member } : nil)
                 }
                 if shown.count < details.members.count {
@@ -300,11 +322,46 @@ private struct RoomInfoContent: View {
             do {
                 try await details.remove(member.userID)
             } catch {
-                removalFailure = RemovalFailure(
+                actionFailure = ActionFailure(
                     title: member.isInvited ? "Couldn't Withdraw the Invitation" : "Couldn't Remove \(member.name)",
                     message: error.actionMessage)
             }
         }
+    }
+
+    /// Changes someone's role, first asking about a change that can't be undone: lowering
+    /// this account's own, or raising someone to the same level as this account.
+    private func choose(_ choice: RoomDetails.RoleChoice, for member: RoomDetails.Member) {
+        guard !choice.isCurrent, choice.isAllowed else { return }
+        let isOwnAccount = details.isOwnAccount(member)
+        if isOwnAccount || choice.level == details.ownPowerLevel {
+            roleChange = RoleChange(member: member, choice: choice, isOwnAccount: isOwnAccount)
+        } else {
+            apply(choice, to: member)
+        }
+    }
+
+    private func apply(_ choice: RoomDetails.RoleChoice, to member: RoomDetails.Member) {
+        Task {
+            do {
+                try await details.setPowerLevel(choice.level, for: member.userID)
+            } catch {
+                actionFailure = ActionFailure(
+                    title: details.isOwnAccount(member) ? "Couldn't Change Your Role" : "Couldn't Change \(member.name)'s Role",
+                    message: error.actionMessage)
+            }
+        }
+    }
+
+    private var roleChangeQuestion: String {
+        guard let roleChange else { return "" }
+        let who = roleChange.isOwnAccount ? "Yourself" : roleChange.member.name
+        return "Make \(who) \(Self.withArticle(roleChange.choice.title))?"
+    }
+
+    /// "an Admin", "a Moderator".
+    private static func withArticle(_ role: String) -> String {
+        (role.first.map { "AEIOU".contains($0) } ?? false ? "an " : "a ") + role
     }
 
     /// Does something to the room, showing what went wrong if it fails.
@@ -377,12 +434,16 @@ private struct AvatarPicker: View {
 }
 
 /// Someone in the room: their picture and name, and their role or that they're only invited.
-/// For those this account may remove, a button on hover (and the right-click menu) offers to.
+/// Where this account may change their role or remove them, a button on hover (and the
+/// right-click menu) offers to.
 private struct MemberRow: View {
     let account: AccountSession
     let member: RoomDetails.Member
     /// "Room" or "Chat".
     let noun: String
+    /// The roles they could be given, when this account may change theirs.
+    let roles: [RoomDetails.RoleChoice]?
+    let setRole: (RoomDetails.RoleChoice) -> Void
     /// Set when this account may take them out of the room, or withdraw their invitation.
     let remove: (() -> Void)?
     @State private var isHovering = false
@@ -416,7 +477,7 @@ private struct MemberRow: View {
                     }
                 }
                 .opacity(showsMenuButton ? 0 : 1)
-                if remove != nil {
+                if hasActions {
                     menuButton
                         .opacity(showsMenuButton ? 1 : 0)
                 }
@@ -428,20 +489,32 @@ private struct MemberRow: View {
         .onHover { isHovering = $0 }
         .contextMenu {
             Button("Copy User ID", action: copyUserID)
+            if hasActions { Divider() }
+            if let roles {
+                Menu("Role") {
+                    ForEach(roles) { choice in
+                        Toggle(choice.title, isOn: Binding(get: { choice.isCurrent }, set: { _ in setRole(choice) }))
+                            .disabled(!choice.isAllowed)
+                    }
+                }
+            }
             if let remove {
-                Divider()
                 Button(removeTitle, role: .destructive, action: remove)
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityActions {
+            ForEach(roles?.filter { $0.isAllowed && !$0.isCurrent } ?? []) { choice in
+                Button("Make \(choice.title)") { setRole(choice) }
+            }
             if let remove {
                 Button(member.isInvited ? "Withdraw Invitation" : "Remove from \(noun)", action: remove)
             }
         }
     }
 
-    private var showsMenuButton: Bool { isHovering && remove != nil }
+    private var hasActions: Bool { roles != nil || remove != nil }
+    private var showsMenuButton: Bool { isHovering && hasActions }
 
     private var menuButton: some View {
         Button(action: openMenu) {
@@ -458,11 +531,27 @@ private struct MemberRow: View {
     }
 
     private func openMenu() {
-        guard let view = anchor.view, let remove else { return }
+        guard let view = anchor.view, hasActions else { return }
         let menu = NSMenu()
+        menu.autoenablesItems = false
         menu.addItem(ClosureMenuItem(title: "Copy User ID", handler: copyUserID))
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: removeTitle, handler: remove))
+        if let roles {
+            let submenu = NSMenu()
+            submenu.autoenablesItems = false
+            for choice in roles {
+                let item = ClosureMenuItem(title: choice.title) { setRole(choice) }
+                item.state = choice.isCurrent ? .on : .off
+                item.isEnabled = choice.isAllowed
+                submenu.addItem(item)
+            }
+            let item = NSMenuItem(title: "Role", action: nil, keyEquivalent: "")
+            item.submenu = submenu
+            menu.addItem(item)
+        }
+        if let remove {
+            menu.addItem(ClosureMenuItem(title: removeTitle, handler: remove))
+        }
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
     }
 

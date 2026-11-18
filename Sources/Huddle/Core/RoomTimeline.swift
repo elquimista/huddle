@@ -366,7 +366,7 @@ final class RoomTimeline {
         for item in items {
             let id = item.uniqueId().id
             if let event = item.asEvent() {
-                switch TimelineRow.Kind(event: event, ownUserID: ownUserID) {
+                switch TimelineRow.Kind(event: event, ownUserID: ownUserID, name: displayName(for:)) {
                 case .message(var message):
                     message.isPinned = message.eventID.map(pinned.contains) ?? false
                     if let previous, previous.sender == message.sender,
@@ -531,17 +531,29 @@ final class RoomTimeline {
         if let profile = profiles[userID] {
             return .init(id: userID, name: profile.name, avatarURL: profile.avatarURL, date: receipt.date)
         }
-        if requestedProfiles.insert(userID).inserted {
-            Task { [weak self, room] in
-                let name = try? await room.memberDisplayName(userId: userID)
-                let avatar = try? await room.memberAvatarUrl(userId: userID)
-                guard let self else { return }
-                self.profiles[userID] = (name ?? userID, avatar ?? nil)
-                self.nameVersion += 1
-                self.rebuildRows()
-            }
-        }
+        requestProfile(userID)
         return .init(id: userID, name: userID, avatarURL: nil, date: receipt.date)
+    }
+
+    /// A person's name for a line in the timeline (a role change): known already, or fetched,
+    /// with the rows rebuilt when it arrives and their Matrix ID's local part meanwhile.
+    private func displayName(for userID: String) -> String {
+        if let profile = profiles[userID] { return profile.name }
+        requestProfile(userID)
+        return userID.matrixLocalpart
+    }
+
+    /// Asks the room for someone's name and picture, once, rebuilding the rows when they come.
+    private func requestProfile(_ userID: String) {
+        guard requestedProfiles.insert(userID).inserted else { return }
+        Task { [weak self, room] in
+            let name = try? await room.memberDisplayName(userId: userID)
+            let avatar = try? await room.memberAvatarUrl(userId: userID)
+            guard let self else { return }
+            self.profiles[userID] = (name ?? userID, avatar ?? nil)
+            self.nameVersion += 1
+            self.rebuildRows()
+        }
     }
 
     // MARK: Actions
@@ -871,10 +883,19 @@ final class RoomTimeline {
 // MARK: - Mapping SDK items to rows
 
 extension TimelineRow.Kind {
-    /// Nil for events not worth a row (power levels, join rules and other housekeeping state).
-    init?(event: EventTimelineItem, ownUserID: String) {
+    /// Nil for events not worth a row (join rules and other housekeeping state; of power
+    /// levels, only changes to people's roles get one). `name` gives a person's name by ID.
+    init?(event: EventTimelineItem, ownUserID: String, name: (String) -> String = { $0.matrixLocalpart }) {
         let senderName = event.senderProfile.name(fallback: event.sender)
         guard case .msgLike(let content) = event.content else {
+            if case .state(_, .roomPowerLevels(_, _, let users, let previousUsers, let thresholds, _)) = event.content {
+                guard let text = RoleChangeNotice.text(senderID: event.sender, senderName: senderName, users: users,
+                                                       previousUsers: previousUsers,
+                                                       usersDefault: thresholds.usersDefault, name: name)
+                else { return nil }
+                self = .notice(text)
+                return
+            }
             guard let text = event.content.preview(sender: senderName) else { return nil }
             self = .notice(text)
             return
@@ -1047,6 +1068,41 @@ extension TimelineItemContent {
         case .failedToParseMessageLike, .failedToParseState:
             return nil
         }
+    }
+}
+
+/// The line a change to people's roles reads as: "Alice made Bob a moderator", "Bob stepped
+/// down as admin". Roles go by power level as everywhere else: 100 and up admin, 50 and up
+/// moderator.
+enum RoleChangeNotice {
+    static func text(senderID: String, senderName: String, users: [String: Int64], previousUsers: [String: Int64]?,
+                     usersDefault: Int64, name: (String) -> String) -> String? {
+        // A room's first power levels come with its creation, which has a line of its own.
+        guard let previousUsers else { return nil }
+        let changed = Set(users.keys).union(previousUsers.keys)
+            .filter { (users[$0] ?? usersDefault) != (previousUsers[$0] ?? usersDefault) }
+        // Only what may be done in the room changed, not anyone's role.
+        guard let userID = changed.first else { return nil }
+        if changed.count > 1 {
+            let names = changed.map(name).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            return "\(senderName) changed the roles of \(ListFormatter.localizedString(byJoining: names))"
+        }
+        let old = previousUsers[userID] ?? usersDefault
+        let new = users[userID] ?? usersDefault
+        if userID == senderID {
+            guard new < old else { return "\(senderName) changed their role" }
+            return new >= 50 ? "\(senderName) stepped down to \(role(new))" : "\(senderName) stepped down as \(role(old))"
+        }
+        let target = name(userID)
+        if new >= 50, role(new) != role(old) {
+            return "\(senderName) made \(target) \(role(new) == "admin" ? "an" : "a") \(role(new))"
+        }
+        if new < 50, old >= 50 { return "\(senderName) removed \(target) as \(role(old))" }
+        return "\(senderName) changed \(target)'s role"
+    }
+
+    private static func role(_ level: Int64) -> String {
+        level >= 100 ? "admin" : level >= 50 ? "moderator" : "member"
     }
 }
 

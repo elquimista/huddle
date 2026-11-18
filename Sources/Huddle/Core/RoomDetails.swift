@@ -20,6 +20,17 @@ final class RoomDetails {
         let powerLevel: Int64
     }
 
+    /// A role someone could be given, for the Role menu.
+    struct RoleChoice: Identifiable, Equatable {
+        var id: Int64 { level }
+        /// "Admin", "Moderator", "Member", or "Custom (75)" for a level that is none of them.
+        let title: String
+        let level: Int64
+        let isCurrent: Bool
+        /// False for a role above what this account may give.
+        let isAllowed: Bool
+    }
+
     let roomID: String
     private(set) var name = ""
     private(set) var topic: String?
@@ -32,6 +43,9 @@ final class RoomDetails {
     private(set) var canTurnOnEncryption = false
     private(set) var canInvite = false
     private(set) var canRemoveMembers = false
+    private(set) var canChangeRoles = false
+    /// The power level of those given none: a plain member's.
+    private(set) var usersDefault: Int64 = 0
     private(set) var members: [Member] = []
     private(set) var membersLoaded = false
     private(set) var joinedCount = 0
@@ -41,6 +55,8 @@ final class RoomDetails {
     @ObservationIgnored private let ownUserID: String
     @ObservationIgnored private var handle: TaskHandle?
     @ObservationIgnored private var memberTask: Task<Void, Never>?
+    /// The power levels given to people, last seen: when they change, so do roles.
+    @ObservationIgnored private var userLevels: [String: Int64] = [:]
 
     init(room: Room, ownUserID: String) {
         self.room = room
@@ -62,9 +78,11 @@ final class RoomDetails {
         isEncrypted = info.encryptionState == .encrypted
         isDirect = info.isDirect
         let counts = (Int(info.joinedMembersCount), Int(info.invitedMembersCount))
-        if counts != (joinedCount, invitedCount) {
+        let levels = info.powerLevels?.userPowerLevels() ?? userLevels
+        if counts != (joinedCount, invitedCount) || levels != userLevels {
             (joinedCount, invitedCount) = counts
-            // Someone joined, left or was invited: the list is out of date.
+            userLevels = levels
+            // Someone joined, left, was invited or had their role changed: the list is out of date.
             if membersLoaded { loadMembers() }
         }
         Task { await updatePermissions() }
@@ -79,7 +97,35 @@ final class RoomDetails {
         canTurnOnEncryption = !isEncrypted && levels.canOwnUserSendState(stateEvent: .roomEncryption)
         canInvite = levels.canOwnUserInvite()
         canRemoveMembers = levels.canOwnUserKick()
+        canChangeRoles = levels.canOwnUserSendState(stateEvent: .roomPowerLevels)
+        usersDefault = levels.values().usersDefault
     }
+
+    /// This account's power level here, once the members are known.
+    var ownPowerLevel: Int64? { members.first { $0.userID == ownUserID }?.powerLevel }
+
+    /// The roles someone could be given, or nil if this account can't change theirs. Only those
+    /// below this account can be changed (or the account itself, but only downwards), and to
+    /// no higher than this account's own level. An owner's role can't be changed at all.
+    func roleChoices(for member: Member) -> [RoleChoice]? {
+        guard canChangeRoles, let own = ownPowerLevel, member.powerLevel != .max else { return nil }
+        let isSelf = member.userID == ownUserID
+        guard isSelf || member.powerLevel < own else { return nil }
+        var choices: [RoleChoice] = []
+        for (title, level) in [("Admin", Int64(100)), ("Moderator", 50), ("Member", usersDefault)]
+        where !choices.contains(where: { $0.level == level }) {
+            let isCurrent = member.powerLevel == level
+            choices.append(RoleChoice(title: title, level: level, isCurrent: isCurrent,
+                                      isAllowed: isCurrent || (isSelf ? level < own : level <= own)))
+        }
+        if !choices.contains(where: \.isCurrent) {
+            choices.insert(RoleChoice(title: "Custom (\(member.powerLevel))", level: member.powerLevel,
+                                      isCurrent: true, isAllowed: true), at: 0)
+        }
+        return choices.contains { $0.isAllowed && !$0.isCurrent } ? choices : nil
+    }
+
+    func isOwnAccount(_ member: Member) -> Bool { member.userID == ownUserID }
 
     /// Whether this account may take someone out of the room (or withdraw their invitation):
     /// only those below its own power level, and never itself.
@@ -174,6 +220,11 @@ final class RoomDetails {
 
     func removeAvatar() async throws {
         try await room.removeAvatar()
+    }
+
+    /// Gives someone a role, as its power level.
+    func setPowerLevel(_ level: Int64, for userID: String) async throws {
+        try await room.updatePowerLevelsForUsers(updates: [UserPowerLevelUpdate(userId: userID, powerLevel: level)])
     }
 
     /// Takes someone out of the room, or withdraws their invitation if they haven't joined.
