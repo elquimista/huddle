@@ -63,6 +63,8 @@ extension EnvironmentValues {
     @Entry var messageLayout: MessageLayout = .modern
     /// How emoji-only messages are drawn; read once by the timeline, like the layout.
     @Entry var emojiSize: EmojiSize = .large
+    /// How wide the IRC layout's column of names is; read once by the timeline, like the layout.
+    @Entry var ircNameWidth: CGFloat = IRCNameColumn.defaultWidth
     /// How wide a message's content (text, pictures, players) can be where it is shown.
     /// Pictures and players shrink to fit it instead of spilling out of a narrow column.
     @Entry var messageContentWidth: CGFloat = .infinity
@@ -73,6 +75,48 @@ extension EnvironmentValues {
     /// The account whose room is on screen, for what reaches beyond one timeline: forwarding a
     /// message to another of its rooms, or the room's pinned messages.
     @Entry var accountSession: AccountSession? = nil
+}
+
+/// The IRC layout's column of names: each room's as wide as it was last dragged to there, and
+/// the standard width in a room where it never was.
+enum IRCNameColumn {
+    static let defaultWidth: CGFloat = 88
+    static let widths: ClosedRange<CGFloat> = 40...260
+    /// Where the column starts: after the time.
+    static let leading: CGFloat = 54 + 8
+
+    static func clamped(_ width: CGFloat) -> CGFloat {
+        min(max(width.rounded(), widths.lowerBound), widths.upperBound)
+    }
+}
+
+/// The rooms' names column widths, by room ID, read from the defaults once and kept in memory:
+/// looking one up as a conversation draws costs nothing, and a room open in two places (the
+/// conversation and a thread beside it) follows a change made in either.
+@MainActor @Observable
+final class IRCNameWidths {
+    static let shared = IRCNameWidths()
+    private static let key = "ircNameColumnWidths"
+
+    private var widths: [String: Double]
+
+    private init() {
+        widths = (UserDefaults.standard.dictionary(forKey: Self.key) ?? [:]).compactMapValues { ($0 as? NSNumber)?.doubleValue }
+    }
+
+    func width(for roomID: String) -> CGFloat {
+        IRCNameColumn.clamped(widths[roomID].map { CGFloat($0) } ?? IRCNameColumn.defaultWidth)
+    }
+
+    /// Saved only when it changes, and the standard width not at all: a room set back to it is
+    /// one fewer to remember.
+    func setWidth(_ width: CGFloat, for roomID: String) {
+        let width = IRCNameColumn.clamped(width)
+        let saved: Double? = width == IRCNameColumn.defaultWidth ? nil : Double(width)
+        guard widths[roomID] != saved else { return }
+        widths[roomID] = saved
+        UserDefaults.standard.set(widths, forKey: Self.key)
+    }
 }
 
 /// The Settings window: a tab for each kind of setting, as Mac apps have them. Each tab is as

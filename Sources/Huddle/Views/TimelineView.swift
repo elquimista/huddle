@@ -78,6 +78,8 @@ struct TimelineView: View {
     @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
     @Environment(\.forcedMessageLayout) private var forcedLayout
     @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
+    /// The names' width while it is being dragged; saved for the room when the drag ends.
+    @State private var draggedNameWidth: CGFloat?
     @FocusState private var composerFocused: Bool
 
     /// Whether the newest message is on screen.
@@ -114,6 +116,20 @@ struct TimelineView: View {
     /// row drawn adds to the time it takes to show the room; scrolling up draws more.
     @State private var firstShownID: String?
     private static let rowsAtFirst = 30
+
+    /// The IRC layout's names column: as dragged just now, or as saved for the room.
+    private var nameWidth: CGFloat {
+        draggedNameWidth ?? IRCNameWidths.shared.width(for: timeline.roomID)
+    }
+
+    /// Wide enough for the longest name in the conversation, for a double-click on the edge.
+    private func fittedNameWidth() -> CGFloat {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        let widest = timeline.rows.compactMap(\.message).map(\.senderName).reduce(CGFloat(0)) { widest, name in
+            max(widest, (name as NSString).size(withAttributes: [.font: font]).width)
+        }
+        return IRCNameColumn.clamped(widest > 0 ? ceil(widest) + 2 : IRCNameColumn.defaultWidth)
+    }
 
     /// The rows drawn: from `firstShownID` on, or all of them.
     private var shownRows: ArraySlice<TimelineRow> {
@@ -215,8 +231,20 @@ struct TimelineView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
+                .overlay(alignment: .topLeading) {
+                    if forcedLayout ?? chosenLayout == .irc {
+                        NameColumnHandle(width: nameWidth, dragged: $draggedNameWidth,
+                                         fitted: fittedNameWidth) { width in
+                            IRCNameWidths.shared.setWidth(width, for: timeline.roomID)
+                            // The messages re-wrap for the new width: keep the one being read in place.
+                            messagesWillRewrap(proxy)
+                        }
+                        .offset(x: 16 + IRCNameColumn.leading + nameWidth + 4 - NameColumnHandle.width / 2)
+                    }
+                }
                 .environment(\.messageLayout, forcedLayout ?? chosenLayout)
                 .environment(\.emojiSize, emojiSize)
+                .environment(\.ircNameWidth, nameWidth)
                 // Laid out at the width the timeline is heading for, not at each width it passes
                 // through on the way: as the thread panel opens or closes, the messages re-wrap
                 // once, at the start, instead of again and again as the conversation narrows,
@@ -1113,13 +1141,14 @@ private struct MessageView: View {
     @State private var isMenuOpen = false
     @Environment(\.messageLayout) private var layout
     @Environment(\.emojiSize) private var emojiSize
+    @Environment(\.ircNameWidth) private var nameWidth
     @Environment(\.timelineWidth) private var timelineWidth
 
     /// What is left for the message itself once the margins, the read-receipt gutter and the
     /// avatar (or, in the IRC layout, the time and name columns) have taken theirs.
     private var contentWidth: CGFloat {
         guard timelineWidth > 0 else { return .infinity }
-        let beside: CGFloat = layout == .modern ? 32 + 10 : 54 + 8 + 88 + 8
+        let beside: CGFloat = layout == .modern ? 32 + 10 : IRCNameColumn.leading + nameWidth + 8
         return max(120, timelineWidth - 32 - ReceiptView.gutter - beside)
     }
 
@@ -1305,7 +1334,7 @@ private struct MessageView: View {
                     .foregroundStyle(AvatarView.color(for: message.sender))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(width: 88, alignment: .trailing)
+                    .frame(width: nameWidth, alignment: .trailing)
                     .help(message.sender)
             }
             VStack(alignment: .leading, spacing: 3) { content }
@@ -1729,6 +1758,82 @@ private final class ScrollInputTracker {
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+    }
+}
+
+/// The edge between the IRC layout's names and messages, all the way down the conversation:
+/// dragged, it makes the names' column wider or narrower (this room's, remembered for it);
+/// double-clicked, it fits the column to the longest name. A line marks it while the pointer is
+/// on it, with the resizing pointer.
+private struct NameColumnHandle: View {
+    static let width: CGFloat = 9
+
+    let width: CGFloat
+    @Binding var dragged: CGFloat?
+    let fitted: () -> CGFloat
+    let commit: (CGFloat) -> Void
+    @State private var isHovering = false
+    @State private var dragStart: CGFloat?
+    @State private var cursorShown = false
+
+    private var isActive: Bool { isHovering || dragStart != nil }
+
+    var body: some View {
+        Color.clear
+            .frame(width: Self.width)
+            .frame(maxHeight: .infinity)
+            .overlay {
+                Rectangle()
+                    .fill(Color.accentColor.opacity(dragStart != nil ? 0.8 : 0.5))
+                    .frame(width: 1)
+                    .opacity(isActive ? 1 : 0)
+            }
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                isHovering = hovering
+                updateCursor()
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        let start = dragStart ?? width
+                        dragStart = start
+                        dragged = IRCNameColumn.clamped(start + value.translation.width)
+                        updateCursor()
+                    }
+                    .onEnded { _ in
+                        let final = dragged ?? width
+                        dragStart = nil
+                        dragged = nil
+                        commit(final)
+                        updateCursor()
+                    }
+            )
+            .onTapGesture(count: 2) { commit(fitted()) }
+            .onDisappear {
+                if cursorShown { NSCursor.pop() }
+                cursorShown = false
+            }
+            .help("Drag to resize the names. Double-click to fit the longest name.")
+            // A slider, to VoiceOver: the width, changed in steps.
+            .accessibilityRepresentation {
+                Slider(value: Binding(get: { Double(width) }, set: { commit(IRCNameColumn.clamped(CGFloat($0))) }),
+                       in: Double(IRCNameColumn.widths.lowerBound)...Double(IRCNameColumn.widths.upperBound),
+                       step: 8) {
+                    Text("Names column width")
+                }
+                .accessibilityValue("\(Int(width)) points")
+                .accessibilityAction(named: "Fit to Longest Name") { commit(fitted()) }
+            }
+    }
+
+    /// The resizing pointer while on the edge or dragging it; pushed and popped in pairs so the
+    /// pointer underneath comes back as it was.
+    private func updateCursor() {
+        let wanted = isHovering || dragStart != nil
+        guard wanted != cursorShown else { return }
+        cursorShown = wanted
+        if wanted { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
     }
 }
 

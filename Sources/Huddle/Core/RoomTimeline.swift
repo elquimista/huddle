@@ -202,6 +202,7 @@ extension String {
 @MainActor @Observable
 final class RoomTimeline {
     let room: Room
+    let roomID: String
     /// Set for a thread's timeline: the root message's event ID.
     let threadRoot: String?
     /// True for the timeline of the room's pinned messages, which is only read, never sent to.
@@ -273,6 +274,7 @@ final class RoomTimeline {
 
     init(room: Room, threadRoot: String? = nil, isPinnedList: Bool = false, focusedOn focusedEvent: String? = nil) {
         self.room = room
+        roomID = room.id()
         self.threadRoot = threadRoot
         self.isPinnedList = isPinnedList
         self.focusedEvent = focusedEvent
