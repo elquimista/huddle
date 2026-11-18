@@ -8,6 +8,13 @@ import MatrixRustSDK
 /// event cache. Rooms that reach their start are remembered, so a later launch carries on
 /// with the rest. If the server doesn't search messages itself, unencrypted rooms get the
 /// same treatment afterwards.
+///
+/// The SDK keeps one cache of a room's events, and every timeline on a room shows what it
+/// holds: paging back through a room here would load its whole history into the timelines
+/// Huddle has on it too, each redrawing as it grows, and keep it all in memory. So a room open
+/// (or open recently) waits until it isn't, and one opened part way through is left for later;
+/// a room in view in the list has its reactions probe stopped while it's gone through. The
+/// timeline used here builds no items: it only drives the paging.
 @MainActor @Observable
 final class HistoryIndexer {
     /// Settings ▸ Privacy can turn it off; on unless it has been.
@@ -83,41 +90,76 @@ final class HistoryIndexer {
         roomsTotal = roomIDs.count
         roomsDone = roomIDs.filter(completed.contains).count
         isRunning = roomsDone < roomsTotal
-        for roomID in roomIDs where !completed.contains(roomID) {
-            guard !Task.isCancelled, Self.isEnabled else { return }
-            if await indexWholeHistory(of: roomID) {
-                #if DEBUG
-                print("DEV_HISTORY_INDEXED \(account?.userID ?? "") \(roomID)")
-                fflush(stdout)
-                #endif
-                completed.insert(roomID)
-                self.completed = completed
-                roomsDone += 1
+        var pending = roomIDs.filter { !completed.contains($0) }
+        while !pending.isEmpty, !Task.isCancelled, Self.isEnabled {
+            var later: [String] = []
+            for roomID in pending {
+                guard !Task.isCancelled, Self.isEnabled else { return }
+                if account?.hasOpenTimelines(for: roomID) == true {
+                    later.append(roomID)
+                    continue
+                }
+                account?.roomBeingIndexed = roomID
+                let outcome = await indexWholeHistory(of: roomID)
+                account?.roomBeingIndexed = nil
+                switch outcome {
+                case .done:
+                    #if DEBUG
+                    print("DEV_HISTORY_INDEXED \(account?.userID ?? "") \(roomID)")
+                    fflush(stdout)
+                    #endif
+                    completed.insert(roomID)
+                    self.completed = completed
+                    roomsDone += 1
+                case .onScreen:
+                    later.append(roomID)
+                case .stopped:
+                    break   // next launch
+                }
+                // A breath between rooms too, as between pages.
+                try? await Task.sleep(for: Self.pause)
             }
-            // A breath between rooms too, as between pages.
-            try? await Task.sleep(for: Self.pause)
+            pending = later
+            // Rooms on screen: again in a while, once they may not be.
+            if !pending.isEmpty { try? await Task.sleep(for: .seconds(60)) }
         }
         isRunning = false
     }
 
-    /// Pages back through a room to its first message. False if it stopped short (an error,
-    /// or turned off), to be carried on with next time.
-    private func indexWholeHistory(of roomID: String) async -> Bool {
+    private enum Outcome {
+        /// Back to its first message.
+        case done
+        /// Opened meanwhile: carried on with once it isn't open.
+        case onScreen
+        /// An error, or turned off: carried on with next launch.
+        case stopped
+    }
+
+    /// Pages back through a room to its first message.
+    private func indexWholeHistory(of roomID: String) async -> Outcome {
         guard let room = account?.room(id: roomID),
-              let timeline = try? await room.timeline() else { return false }
+              let timeline = try? await room.timelineWithConfiguration(configuration: TimelineConfiguration(
+                  focus: .live(hideThreadedEvents: false),
+                  // No items: events still go through the event cache, and into the index.
+                  filter: .eventFilter(filter: .include([])),
+                  internalIdPrefix: nil,
+                  dateDividerMode: .daily,
+                  trackReadReceipts: .disabled,
+                  reportUtds: false)) else { return .stopped }
         while !Task.isCancelled, Self.isEnabled {
             // Waits out a lost connection rather than counting it as the end.
             while account?.syncState != .running {
                 try? await Task.sleep(for: .seconds(5))
-                if Task.isCancelled { return false }
+                if Task.isCancelled { return .stopped }
             }
+            if account?.hasOpenTimelines(for: roomID) == true { return .onScreen }
             do {
-                if try await timeline.paginateBackwards(numEvents: Self.pageSize) { return true }
+                if try await timeline.paginateBackwards(numEvents: Self.pageSize) { return .done }
             } catch {
-                return false
+                return .stopped
             }
             try? await Task.sleep(for: Self.pause)
         }
-        return false
+        return .stopped
     }
 }

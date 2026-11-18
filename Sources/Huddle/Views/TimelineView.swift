@@ -87,6 +87,8 @@ struct TimelineView: View {
     /// Only the user scrolling away ends it.
     @State private var followsNewest = true
     @State private var input = ScrollInputTracker()
+    /// Notices the view scrolling itself over and over, for the log.
+    @State private var jumps = JumpCounter()
     /// Whether the top of the loaded history is on screen, which is when to fetch more.
     @State private var historyEdgeVisible = false
     private static let bottomID = "timeline-bottom"
@@ -344,10 +346,10 @@ struct TimelineView: View {
                 // there; otherwise stay on the message being read, wherever it is in the view.
                 if followsNewest {
                     // Out of sight above the newest ones (the SDK fetches history on its own):
-                    // not drawn until scrolled to, so the room doesn't grow and slow down for them.
-                    let rows = timeline.rows
-                    if timeline.focusedEvent == nil, shownRows.count > Self.rowsAtFirst * 2 {
-                        firstShownID = rows[rows.count - Self.rowsAtFirst].id
+                    // not drawn until scrolled to, so the room doesn't grow and slow down for
+                    // them. Only the rows that just arrived; those drawn stay drawn.
+                    if timeline.focusedEvent == nil, firstShownID == nil, let previousFirst = timeline.prependAnchorID {
+                        firstShownID = previousFirst
                     }
                     scrollToBottom(proxy)
                 } else if let until = centersFocusUntil, Date() < until, !input.isRecent,
@@ -510,6 +512,7 @@ struct TimelineView: View {
     /// scroll that animates trails the content it is meant to hold in place, and the
     /// conversation bobs.
     private func jump(_ proxy: ScrollViewProxy, to id: some Hashable, anchor: UnitPoint) {
+        jumps.count(rowsDrawn: shownRows.count, follows: followsNewest, atBottom: isAtBottom)
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { proxy.scrollTo(id, anchor: anchor) }
@@ -1726,6 +1729,23 @@ private final class ScrollInputTracker {
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+    }
+}
+
+/// Counts the view's own scrolls. Many in a moment means something keeps moving the content
+/// and the view keeps going after it: noted in the log (once a minute at most), with what it
+/// was doing, as that keeps the whole app busy.
+private final class JumpCounter {
+    private var times: [CFTimeInterval] = []
+    private var lastNoted: CFTimeInterval = 0
+
+    func count(rowsDrawn: Int, follows: Bool, atBottom: Bool) {
+        let now = CACurrentMediaTime()
+        times.append(now)
+        times.removeAll { now - $0 > 2 }
+        guard times.count > 20, now - lastNoted > 60 else { return }
+        lastNoted = now
+        TimelineLog.log.notice("Scrolled itself \(self.times.count, privacy: .public) times in 2 s: \(rowsDrawn, privacy: .public) rows drawn, following newest \(follows, privacy: .public), newest on screen \(atBottom, privacy: .public)")
     }
 }
 

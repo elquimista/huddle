@@ -828,6 +828,25 @@ final class AccountSession: Identifiable {
         roomHandles[id] ?? (try? client.getRoom(roomId: id))
     }
 
+    /// Whether a room is open, or was open recently: Huddle has timelines on it, which paging
+    /// through its history elsewhere would load all of it into.
+    func hasOpenTimelines(for roomID: String) -> Bool {
+        selectedRoomID == roomID || timelines[roomID] != nil || bannerPinTimelines[roomID] != nil
+    }
+
+    /// The room the history indexer is paging through. A room in view in the list has a probe
+    /// (for its reactions) that would take in all of that history: it stops meanwhile, and the
+    /// rooms in view get theirs back after.
+    var roomBeingIndexed: String? {
+        didSet {
+            guard roomBeingIndexed != oldValue else { return }
+            if let roomBeingIndexed, let probe = probes.removeValue(forKey: roomBeingIndexed) {
+                probe.stop()
+            }
+            if roomBeingIndexed == nil { updateSubscriptions(now: true) }
+        }
+    }
+
     /// The live timeline for a room, kept warm for the most recently opened rooms.
     func timeline(for roomID: String) -> RoomTimeline? {
         if let existing = timelines[roomID] {
@@ -1007,7 +1026,7 @@ final class AccountSession: Identifiable {
             probe.stop()
             probes[roomID] = nil
         }
-        for roomID in onScreen where probes[roomID] == nil && timelines[roomID] == nil {
+        for roomID in onScreen where probes[roomID] == nil && timelines[roomID] == nil && roomID != roomBeingIndexed {
             guard let room = room(id: roomID) else { continue }
             probes[roomID] = RoomPreviewProbe(room: room) { [weak self] preview in
                 guard let self, self.timelines[roomID] == nil else { return }
