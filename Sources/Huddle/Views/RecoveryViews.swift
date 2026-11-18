@@ -231,9 +231,11 @@ struct ResetIdentityFlow: View {
     /// Where the server's sign-in page approves the reset, if that's how it confirms it.
     @State private var approvalURL: URL?
     @State private var password = ""
-    /// Whether the server wants the password, as far as is known: until it says, guessed from
-    /// how the account signs in.
-    @State private var wantsPassword: Bool
+    /// Whether the server wants the password, rather than approval on its sign-in page: nil
+    /// until known. A server that hands sign-in to its own service (Matrix Authentication
+    /// Service) wants approval there, even from an account signed in with a password through
+    /// its compatibility layer.
+    @State private var wantsPassword: Bool?
     @State private var isBusy = false
     @State private var error: String?
     @FocusState private var isFocused: Bool
@@ -241,7 +243,7 @@ struct ResetIdentityFlow: View {
     init(account: AccountSession, back: @escaping () -> Void) {
         self.account = account
         self.back = back
-        _wantsPassword = State(initialValue: !account.signsInWithOAuth)
+        _wantsPassword = State(initialValue: account.signsInWithOAuth ? false : nil)
     }
 
     var body: some View {
@@ -266,7 +268,10 @@ struct ResetIdentityFlow: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .detailsBackground()
-        if wantsPassword {
+        .task {
+            if wantsPassword == nil { wantsPassword = await account.accountPageURL() == nil }
+        }
+        if wantsPassword == true {
             SecureField("Password for \(account.userID)", text: $password)
                 .textFieldStyle(.roundedBorder)
                 .focused($isFocused)
@@ -287,8 +292,8 @@ struct ResetIdentityFlow: View {
             Button("Cancel", action: cancel)
                 .keyboardShortcut(.cancelAction)
             // Destructive: never on Return.
-            Button(wantsPassword ? "Reset Identity" : "Continue in Browser…", role: .destructive, action: reset)
-                .disabled(isBusy || (wantsPassword && password.isEmpty))
+            Button(wantsPassword == false ? "Continue in Browser…" : "Reset Identity", role: .destructive, action: reset)
+                .disabled(isBusy || wantsPassword == nil || (wantsPassword == true && password.isEmpty))
         }
     }
 
@@ -350,7 +355,7 @@ struct ResetIdentityFlow: View {
                     switch started.authType() {
                     case .uiaa(let info):
                         session = info.session
-                        if !wantsPassword || password.isEmpty {
+                        if wantsPassword != true || password.isEmpty {
                             // The server wants the password after all.
                             wantsPassword = true
                             return
