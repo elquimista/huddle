@@ -43,7 +43,9 @@ Not built yet: sending files other than images, and emoji verification.
 
 ## Building
 
-Element publishes the Matrix SDK prebuilt for iOS only, so the first step compiles it for macOS. This takes 10–20 minutes and is needed once, and again whenever the SDK commit pinned in `Scripts/build-sdk.sh` changes. Its output lands in `Vendor/MatrixRustSDK` and is not kept in git.
+Element publishes the Matrix SDK prebuilt for iOS only, so the first step compiles it for macOS. This takes 10–20 minutes and is needed once, and again whenever the SDK commit pinned in `Scripts/build-sdk.sh` or a patch in `Scripts/sdk-patches` changes. Its output lands in `Vendor/MatrixRustSDK` and is not kept in git.
+
+`Scripts/sdk-patches` holds fixes to the SDK's dependencies, applied as the SDK is built. `ruma-html-deep-nesting.patch` frees a message's parsed HTML one node at a time: freed recursively, as ruma does, HTML nested a few thousand levels deep (which fits in one message) overflows the stack and crashes the app, at every launch while that message is in a room. When the SDK commit is bumped, check whether ruma has fixed this itself, and drop the patch if so.
 
 ```bash
 Scripts/build-sdk.sh

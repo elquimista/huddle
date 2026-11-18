@@ -53,7 +53,8 @@ jobs:
           path: |
             Vendor/MatrixRustSDK/MatrixSDKFFI.xcframework
             Vendor/MatrixRustSDK/Sources
-          key: matrix-sdk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Scripts/build-sdk.sh') }}
+          # A new SDK commit or a changed patch to its dependencies makes a new build.
+          key: matrix-sdk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Scripts/build-sdk.sh', 'Scripts/sdk-patches/**') }}
 
       - name: Build the Matrix SDK
         if: steps.sdk.outputs.cache-hit != 'true'

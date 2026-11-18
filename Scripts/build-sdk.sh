@@ -15,7 +15,30 @@ mkdir -p "$SRC"
 git -C "$SRC" init -q
 git -C "$SRC" remote add origin https://github.com/matrix-org/matrix-rust-sdk 2>/dev/null || true
 git -C "$SRC" fetch -q --depth 1 origin "$SDK_COMMIT"
-git -C "$SRC" checkout -q FETCH_HEAD
+# Forced, so a Cargo.lock rewritten by the last patched build goes back to the SDK's own.
+git -C "$SRC" checkout -q -f FETCH_HEAD
+
+# Patches to the SDK's dependencies, each explained in its file in Scripts/sdk-patches. ruma's
+# are applied to a copy of ruma at the commit the SDK uses, and every ruma crate the SDK uses is
+# built from that copy instead (all of them, so there is one of each). The [patch] table goes in
+# .build/.cargo/config.toml, which cargo reads from a parent of the SDK's folder, leaving the
+# SDK's own files alone. CI caches the result keyed on this script and the patches.
+RUMA_COMMIT="$(grep -o -m1 'git+https://github.com/ruma/ruma?rev=[0-9a-f]*' "$SRC/Cargo.lock" | sed 's/.*rev=//')"
+RUMA=".build/ruma"
+mkdir -p "$RUMA" .build/.cargo
+git -C "$RUMA" init -q
+git -C "$RUMA" remote add origin https://github.com/ruma/ruma 2>/dev/null || true
+git -C "$RUMA" fetch -q --depth 1 origin "$RUMA_COMMIT"
+git -C "$RUMA" checkout -q -f FETCH_HEAD
+git -C "$RUMA" clean -q -fd crates   # files an earlier run's patches added
+for patch in Scripts/sdk-patches/ruma-*.patch; do
+  git -C "$RUMA" apply "$PWD/$patch"
+done
+{
+  echo '[patch."https://github.com/ruma/ruma"]'
+  grep -B2 'source = "git+https://github.com/ruma/ruma' "$SRC/Cargo.lock" | sed -n 's/^name = "\(.*\)"$/\1/p' | sort -u |
+    while read -r crate; do echo "$crate = { path = \"$PWD/$RUMA/crates/$crate\" }"; done
+} > .build/.cargo/config.toml
 
 (cd "$SRC" && cargo xtask swift build-framework --release \
     --target aarch64-apple-darwin --macos-deployment-target 14.0)
