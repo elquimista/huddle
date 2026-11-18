@@ -108,6 +108,80 @@ def find_exact_message(token, room, text):
         page = call("GET", path + "&from=" + urllib.parse.quote(page["end"]), token)
     sys.exit(f"No message reading {text!r}")
 
+def create_space(token, name, invite=(), public=False, topic=None):
+    body = {"preset": "public_chat" if public else "private_chat", "name": name,
+            "invite": [f"@{u}:localhost" for u in invite],
+            "creation_content": {"type": "m.space"},
+            "power_level_content_override": {"events_default": 100}}
+    if topic:
+        body["topic"] = topic
+    return call("POST", "/_matrix/client/v3/createRoom", token, body)["room_id"]
+
+def add_child(token, space, room, suggested=False):
+    """Puts a room in a space, and points the room back at the space (if allowed to)."""
+    call("PUT", f"/_matrix/client/v3/rooms/{space}/state/m.space.child/{room}", token,
+         {"via": ["localhost"], "suggested": suggested})
+    try:
+        call("PUT", f"/_matrix/client/v3/rooms/{room}/state/m.space.parent/{space}", token,
+             {"via": ["localhost"], "canonical": True})
+    except urllib.error.HTTPError:
+        pass  # not allowed in that room; the space's side is enough
+
+def seed_spaces():
+    alice, bob, carol = login("alice"), login("bob"), login("carol")
+    joined = call("GET", "/_matrix/client/v3/joined_rooms", alice)["joined_rooms"]
+    names = {}
+    for room in joined:
+        try:
+            names[call("GET", f"/_matrix/client/v3/rooms/{room}/state/m.room.name", alice).get("name")] = room
+        except urllib.error.HTTPError:
+            pass
+    if "Work" in names:
+        print("Spaces already seeded.")
+        return
+
+    # Work: Alice's own. Rooms she is in, a public one she isn't, and a subspace.
+    work = create_space(alice, "Work", invite=["bob", "carol"], topic="Everything about the day job")
+    join(bob, work); join(carol, work)
+    engineering = create(alice, "Engineering", invite=["bob"], topic="Builds, bugs and releases")
+    join(bob, engineering)
+    send(bob, engineering, "Release branch is cut")
+    add_child(alice, work, engineering, suggested=True)
+    add_child(alice, work, names["Design"])
+    random = create(bob, "Random", preset="public_chat", topic="Anything goes")
+    send(bob, random, "Anyone up for lunch?")
+    add_child(alice, work, random)
+    mobile = create_space(alice, "Mobile", invite=["bob"], topic="The apps")
+    join(bob, mobile)
+    add_child(alice, work, mobile)
+    ios = create(alice, "iOS", topic="The iPhone app")
+    send(alice, ios, "TestFlight build 42 is out")
+    add_child(alice, mobile, ios)
+    android = create(alice, "Android", room_version="10", initial_state=[{
+        "type": "m.room.join_rules", "state_key": "",
+        "content": {"join_rule": "restricted",
+                    "allow": [{"type": "m.room_membership", "room_id": mobile}]}}])
+    send(alice, android, "Android build is green")
+    add_child(alice, mobile, android)
+    # Bob stays in it (a restricted room needs a member inside to let others in); Alice leaves,
+    # so it shows as a room she can join.
+    join(bob, android)
+    call("POST", f"/_matrix/client/v3/rooms/{android}/leave", alice, {})
+
+    # Open Source: Bob's, with Alice a member. General in it as well, and a room Alice isn't in.
+    oss = create_space(bob, "Open Source", invite=["alice"], public=True, topic="Projects we hack on")
+    join(alice, oss)
+    add_child(bob, oss, names["General"])
+    sdk = create(bob, "Matrix SDK", preset="public_chat", topic="Rust SDK discussion")
+    send(bob, sdk, "New release candidate tagged")
+    add_child(bob, oss, sdk, suggested=True)
+
+    # Book Club: Carol's, Alice only invited.
+    club = create_space(carol, "Book Club", invite=["alice"], topic="One book a month")
+    reading = create(carol, "This Month", preset="public_chat")
+    add_child(carol, club, reading)
+    print("Seeded spaces: Work (with Mobile), Open Source, and an invitation to Book Club.")
+
 def seed_threads():
     alice, bob, carol = login("alice"), login("bob"), login("carol")
     general = find_room(alice, "General")
@@ -240,6 +314,9 @@ def main():
                 pinned.append(event)
         call("PUT", f"/_matrix/client/v3/rooms/{room}/state/m.room.pinned_events", token, {"pinned": pinned})
         print("\n".join(pinned))
+        return
+    if command == "spaces":   # seed.py spaces: Work (with a subspace), Open Source, an invited space
+        seed_spaces()
         return
     if command == "threads":  # seed.py threads: three threads in General
         seed_threads()

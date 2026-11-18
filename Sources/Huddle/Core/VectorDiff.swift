@@ -176,3 +176,63 @@ final class ThreadEntriesListener: ThreadListEntriesListener, @unchecked Sendabl
     init(_ handler: @escaping ([ThreadListUpdate]) -> Void) { self.handler = handler }
     func onUpdate(diff: [ThreadListUpdate]) { handler(diff) }
 }
+
+extension SpaceListUpdate {
+    var diff: VectorDiff<SpaceRoom> {
+        switch self {
+        case .append(let values): .append(values)
+        case .clear: .clear
+        case .pushFront(let value): .pushFront(value)
+        case .pushBack(let value): .pushBack(value)
+        case .popFront: .popFront
+        case .popBack: .popBack
+        case .insert(let index, let value): .insert(Int(index), value)
+        case .set(let index, let value): .set(Int(index), value)
+        case .remove(let index): .remove(Int(index))
+        case .truncate(let length): .truncate(Int(length))
+        case .reset(let values): .reset(values)
+        }
+    }
+}
+
+extension SpaceFilterUpdate {
+    var diff: VectorDiff<SpaceFilter> {
+        switch self {
+        case .append(let values): .append(values)
+        case .clear: .clear
+        case .pushFront(let value): .pushFront(value)
+        case .pushBack(let value): .pushBack(value)
+        case .popFront: .popFront
+        case .popBack: .popBack
+        case .insert(let index, let value): .insert(Int(index), value)
+        case .set(let index, let value): .set(Int(index), value)
+        case .remove(let index): .remove(Int(index))
+        case .truncate(let length): .truncate(Int(length))
+        case .reset(let values): .reset(values)
+        }
+    }
+}
+
+final class SpaceListListener: SpaceServiceJoinedSpacesListener, @unchecked Sendable {
+    private let handler: ([SpaceListUpdate]) -> Void
+    init(_ handler: @escaping ([SpaceListUpdate]) -> Void) { self.handler = handler }
+    func onUpdate(roomUpdates: [SpaceListUpdate]) { handler(roomUpdates) }
+}
+
+final class SpaceFiltersListener: SpaceServiceSpaceFiltersListener, @unchecked Sendable {
+    private let handler: ([SpaceFilterUpdate]) -> Void
+    init(_ handler: @escaping ([SpaceFilterUpdate]) -> Void) { self.handler = handler }
+    func onUpdate(filterUpdates: [SpaceFilterUpdate]) { handler(filterUpdates) }
+}
+
+final class SpaceRoomsListener: SpaceRoomListEntriesListener, @unchecked Sendable {
+    private let handler: ([SpaceListUpdate]) -> Void
+    init(_ handler: @escaping ([SpaceListUpdate]) -> Void) { self.handler = handler }
+    func onUpdate(rooms: [SpaceListUpdate]) { handler(rooms) }
+}
+
+final class SpacePaginationListener: SpaceRoomListPaginationStateListener, @unchecked Sendable {
+    private let handler: (SpaceRoomListPaginationState) -> Void
+    init(_ handler: @escaping (SpaceRoomListPaginationState) -> Void) { self.handler = handler }
+    func onUpdate(paginationState: SpaceRoomListPaginationState) { handler(paginationState) }
+}

@@ -19,8 +19,19 @@ struct RoomListView: View {
                                 Button("Mark as Unread") { account.setRoom(room.id, unread: true) }
                             }
                             Divider()
-                            Button("Mark All as Read") { account.markAllRead() }
-                                .disabled(!account.hasUnreadRooms)
+                            if let space = account.selectedSpaceID {
+                                Button("Mark All as Read") { account.markAllRead(inSpace: space) }
+                                    .disabled(!account.hasUnreadRooms(inSpace: space))
+                                if account.editableSpaceIDs.contains(space), account.isDirectChild(room.id, of: space) {
+                                    Divider()
+                                    Button("Remove from \(account.spaceName(space))") {
+                                        Task { try? await account.removeRoom(room.id, fromSpace: space) }
+                                    }
+                                }
+                            } else {
+                                Button("Mark All as Read") { account.markAllRead() }
+                                    .disabled(!account.hasUnreadRooms)
+                            }
                         }
                     }
                     .onAppear {
@@ -36,6 +47,8 @@ struct RoomListView: View {
             if account.rooms.isEmpty {
                 if !account.searchText.isEmpty {
                     ContentUnavailableView.search(text: account.searchText)
+                } else if let space = account.selectedSpaceID, account.hasLoadedRooms {
+                    SpaceEmptyList(account: account, spaceID: space)
                 } else if account.hasLoadedRooms {
                     ContentUnavailableView("No Rooms Yet",
                                            systemImage: "tray",
@@ -43,6 +56,11 @@ struct RoomListView: View {
                 } else if account.syncState == .running || account.syncState == .idle {
                     ProgressView()
                 }
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let space = account.selectedSpaceID {
+                SpaceListHeader(account: account, spaceID: space)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -70,6 +88,36 @@ struct RoomListView: View {
         case .offline: return "Offline. Reconnecting…"
         case .error, .terminated: return "Connection lost. Reconnecting…"
         default: return nil
+        }
+    }
+}
+
+/// The room list of a space with nothing in it to show: a space with no rooms yet, or
+/// whose rooms the account hasn't joined.
+private struct SpaceEmptyList: View {
+    let account: AccountSession
+    let spaceID: String
+
+    var body: some View {
+        let isEmpty = (account.spaces.first { $0.roomId == spaceID }?.childrenCount ?? 0) == 0
+        let canEdit = account.editableSpaceIDs.contains(spaceID)
+        let name = account.spaceName(spaceID)
+        ContentUnavailableView {
+            Label(isEmpty ? "No Rooms Yet" : "No Rooms Joined", systemImage: "square.stack")
+        } description: {
+            if isEmpty {
+                Text(canEdit ? "Make a room in \(name), or add one you're in." : "Nobody has added a room to \(name) yet.")
+            } else {
+                Text("You haven't joined any of the rooms in \(name) yet.")
+            }
+        } actions: {
+            if isEmpty {
+                if canEdit {
+                    Button("New Room…") { account.sheet = .newRoom(inSpace: spaceID) }
+                }
+            } else if account.browsingSpaceID != spaceID {
+                Button("Browse Rooms") { account.browse(space: spaceID) }
+            }
         }
     }
 }

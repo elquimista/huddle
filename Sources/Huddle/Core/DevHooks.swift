@@ -9,6 +9,9 @@ import Foundation
 ///   HUDDLE_DEV_PASSWORD  their shared test password
 ///   HUDDLE_DEV_SELECT    "username" or "username/Room Name" to open at launch
 ///   HUDDLE_DEV_THREAD    with HUDDLE_DEV_SELECT: "list", or text of a message whose thread to open
+///   HUDDLE_DEV_SPACE     with HUDDLE_DEV_SELECT: name of a space (one of the account's, or an
+///                        invitation) to browse at launch; "" for all rooms
+///   HUDDLE_DEV_SHEET     with HUDDLE_DEV_SPACE: newRoom, newSpace, addRooms or leave, to open that sheet
 ///   HUDDLE_DEV_SIGN_OUT  username to sign out at launch (same code path as the Sign Out menu)
 ///   HUDDLE_DEV_FRESH     start with no accounts loaded (stored ones are left alone), to see first run
 ///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance
@@ -31,6 +34,37 @@ enum DevHooks {
         switch ProcessInfo.processInfo.environment["HUDDLE_DEV_APPEARANCE"] {
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: break
+        }
+    }
+
+    /// Browses a space by name and, if asked, opens one of its sheets.
+    private static func openSpace(_ name: String, sheet: String?, in account: AccountSession) async {
+        for _ in 0..<100 {
+            if name.isEmpty {
+                account.show(space: nil)
+                break
+            }
+            if let space = account.spaces.first(where: { $0.displayName == name }) {
+                account.browse(space: space.roomId)
+                break
+            }
+            if let invite = account.invitedSpaces.first(where: { $0.name == name }) {
+                account.selectedRoomID = nil
+                account.browsingSpaceID = invite.id
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        guard let sheet else { return }
+        // Editable spaces are known a moment after the spaces themselves.
+        try? await Task.sleep(for: .seconds(1))
+        let spaceID = account.selectedSpaceID ?? ""
+        switch sheet {
+        case "newRoom": account.sheet = .newRoom(inSpace: account.selectedSpaceID)
+        case "newSpace": account.sheet = .newSpace
+        case "addRooms": account.sheet = .addRooms(toSpace: spaceID)
+        case "leave": account.sheet = .leaveSpace(spaceID)
         default: break
         }
     }
@@ -126,10 +160,18 @@ enum DevHooks {
             let parts = selection.split(separator: "/", maxSplits: 1).map(String.init)
             guard let account = store.accounts.first(where: { $0.userID.hasPrefix("@\(parts[0]):") }) else { return }
             store.selectedID = account.id
+            if let space = env["HUDDLE_DEV_SPACE"] {
+                await openSpace(space, sheet: env["HUDDLE_DEV_SHEET"], in: account)
+                return
+            }
             guard parts.count > 1 else { return }
             // The room list fills in asynchronously after sync starts.
             for _ in 0..<100 {
-                if let room = account.rooms.first(where: { $0.name == parts[1] }) {
+                if let room = account.allRooms.first(where: { $0.name == parts[1] && !$0.isSpace }) {
+                    // Show it in the list too, which a space selected last time might hide.
+                    if let space = account.selectedSpaceID, !account.roomIDs(inSpace: space).contains(room.id) {
+                        account.selectedSpaceID = nil
+                    }
                     account.selectedRoomID = room.id
                     await openThread(env["HUDDLE_DEV_THREAD"], in: room.id, of: account)
                     return

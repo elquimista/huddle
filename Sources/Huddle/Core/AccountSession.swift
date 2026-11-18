@@ -15,6 +15,8 @@ struct RoomSummary: Identifiable, Equatable {
     var hasUnread = false
     /// Marked unread by the user (here or in another client), as a reminder to come back.
     var isMarkedUnread = false
+    /// A space rather than a room (only in the full index; the room list leaves spaces out).
+    var isSpace = false
     /// False when the room's details could not be read, so the counts above mean nothing.
     var hasCounts = false
     var lastMessage: String?
@@ -44,6 +46,12 @@ final class AccountSession: Identifiable {
     private(set) var startError: String?
     var selectedRoomID: String? {
         didSet {
+            // A room opened takes the main area from a space being browsed, and is where to
+            // come back to in the space it was opened in.
+            if let selectedRoomID {
+                browsingSpaceID = nil
+                lastRoomBySpace[selectedSpaceID ?? ""] = selectedRoomID
+            }
             guard selectedRoomID != oldValue else { return }
             PerfLog.began("room selected")
             updatePresenceWatch()
@@ -68,6 +76,36 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var syncService: SyncService?
     @ObservationIgnored private var roomListService: RoomListService?
     @ObservationIgnored private var roomList: RoomList?
+    // MARK: Spaces
+
+    /// The account's top-level joined spaces, as the rail shows them.
+    private(set) var spaces: [SpaceRoom] = []
+    /// Every room and space the account is in or invited to, with its unread state. The room
+    /// list shows only some (a space, a search); the badges count them all.
+    private(set) var allRooms: [RoomSummary] = []
+    /// For each space and the spaces in it, the rooms it holds.
+    private(set) var spaceFilters: [SpaceFilter] = []
+    /// The spaces this account may add rooms to and remove them from.
+    private(set) var editableSpaceIDs: Set<String> = []
+    /// The space the room list is narrowed to; nil for every room.
+    var selectedSpaceID: String? {
+        didSet {
+            guard selectedSpaceID != oldValue else { return }
+            UserDefaults.standard.set(selectedSpaceID, forKey: "selectedSpace.\(id)")
+            applyFilter()
+        }
+    }
+    /// The space whose rooms are being browsed in the main area, in place of a room.
+    var browsingSpaceID: String?
+    /// A window to show over the main one: creating a room or space, adding rooms, leaving.
+    var sheet: AccountSheet?
+    /// The room last open with each space selected ("" for all rooms), to go back to.
+    @ObservationIgnored private var lastRoomBySpace: [String: String] = [:]
+    @ObservationIgnored private(set) var spaceService: SpaceService?
+    @ObservationIgnored private var allEntries: RoomListEntriesWithDynamicAdaptersResult?
+    @ObservationIgnored private var allController: RoomListDynamicEntriesController?
+    @ObservationIgnored private var allRoomsTask: Task<Void, Never>?
+
     @ObservationIgnored private var entries: RoomListEntriesWithDynamicAdaptersResult?
     @ObservationIgnored private var controller: RoomListDynamicEntriesController?
     @ObservationIgnored private var handles: [TaskHandle] = []
@@ -95,6 +133,8 @@ final class AccountSession: Identifiable {
         self.media = MediaLoader(client: client)
         self.presence = PresenceTracker(client: client)
         self.ownPresence = OwnPresence(client: client)
+        // The space the room list was narrowed to last time (didSet doesn't run in init).
+        selectedSpaceID = UserDefaults.standard.string(forKey: "selectedSpace.\(id)")
     }
 
     // MARK: Lifecycle
@@ -121,6 +161,8 @@ final class AccountSession: Identifiable {
             let roomList = try await roomListService.allRooms()
             self.roomList = roomList
             observeRooms(in: roomList)
+            observeAllRooms(in: roomList)
+            await startSpaces()
             let loading = try roomList.loadingState(listener: RoomListLoadingListener { [weak self] state in
                 Task { @MainActor in self?.hasLoadedRooms = state != .notLoaded }
             })
@@ -259,11 +301,6 @@ final class AccountSession: Identifiable {
                 clearNotificationsIfStillRead(roomID: room.id)
             }
         }
-        // A search narrows `rooms`, so only count while the list is unfiltered.
-        if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-            badgeCount = rooms.reduce(0) { $0 + ($1.isHighlighted ? 1 : 0) }
-            urgentCount = rooms.reduce(0) { $0 + ($1.isUrgent ? 1 : 0) }
-        }
     }
 
     /// Unread counts can dip to zero for a moment while the SDK rebuilds a room's history after
@@ -285,11 +322,299 @@ final class AccountSession: Identifiable {
 
     private func applyFilter() {
         var filters: [RoomListEntriesDynamicFilterKind] = [.nonLeft, .nonSpace, .deduplicateVersions]
+        if let space = selectedSpaceID {
+            filters.append(.identifiers(identifiers: Array(roomIDs(inSpace: space))))
+        }
         let query = searchText.trimmingCharacters(in: .whitespaces)
         if !query.isEmpty {
             filters.append(.normalizedMatchRoomName(pattern: query))
         }
         _ = controller?.setFilter(kind: .all(filters: filters))
+    }
+
+    /// Keeps `allRooms` up to date: every room and space, whatever the room list is narrowed to.
+    private func observeAllRooms(in roomList: RoomList) {
+        let (stream, continuation) = AsyncStream.makeStream(of: [RoomListEntriesUpdate].self)
+        let entries = roomList.entriesWithDynamicAdapters(pageSize: 10_000,
+                                                          listener: RoomEntriesListener { continuation.yield($0) })
+        allEntries = entries
+        allController = entries.controller()
+        _ = allController?.setFilter(kind: .all(filters: [.nonLeft, .deduplicateVersions]))
+        handles.append(entries.entriesStream())
+        allRoomsTask = Task.detached { [weak self] in
+            for await updates in stream {
+                var diffs: [VectorDiff<RoomSummary>] = []
+                for update in updates {
+                    diffs.append(await update.diff.map { await RoomSummary.make(from: $0, withPreview: false) })
+                }
+                await self?.applyAll(diffs)
+            }
+        }
+    }
+
+    private func applyAll(_ diffs: [VectorDiff<RoomSummary>]) {
+        var all = allRooms
+        for diff in diffs { all.apply(diff) }
+        allRooms = all
+        updateBadges()
+    }
+
+    /// The account's badges count rooms needing attention, and invitations to spaces.
+    private func updateBadges() {
+        let counted = allRooms.filter { !$0.isSpace || $0.isInvite }
+        badgeCount = counted.reduce(0) { $0 + ($1.isHighlighted ? 1 : 0) }
+        urgentCount = counted.reduce(0) { $0 + ($1.isUrgent ? 1 : 0) }
+    }
+
+    private func startSpaces() async {
+        let service = await client.spaceService()
+        spaceService = service
+        spaces = await service.topLevelJoinedSpaces()
+        spaceFilters = await service.spaceFilters()
+        handles.append(await service.subscribeToTopLevelJoinedSpaces(listener: SpaceListListener { [weak self] updates in
+            Task { @MainActor in self?.applySpaceUpdates(updates) }
+        }))
+        handles.append(await service.subscribeToSpaceFilters(listener: SpaceFiltersListener { [weak self] updates in
+            Task { @MainActor in self?.applyFilterUpdates(updates) }
+        }))
+        await refreshEditableSpaces()
+        // The space selected last time may have been left since, here or elsewhere.
+        if let selected = selectedSpaceID, !spaces.contains(where: { $0.roomId == selected }) {
+            selectedSpaceID = nil
+        }
+        if selectedSpaceID != nil { applyFilter() }
+    }
+
+    private func applySpaceUpdates(_ updates: [SpaceListUpdate]) {
+        var spaces = spaces
+        let before = Set(spaces.map(\.roomId))
+        for update in updates { spaces.apply(update.diff) }
+        self.spaces = spaces
+        // A space left (here or elsewhere) can't stay selected. One just joined may be selected
+        // before it arrives here, so only a space that was here and went counts.
+        if let selected = selectedSpaceID, before.contains(selected),
+           !spaces.contains(where: { $0.roomId == selected }) {
+            selectedSpaceID = nil
+            if browsingSpaceID == selected { browsingSpaceID = nil }
+        }
+        Task { await refreshEditableSpaces() }
+    }
+
+    private func applyFilterUpdates(_ updates: [SpaceFilterUpdate]) {
+        var filters = spaceFilters
+        for update in updates { filters.apply(update.diff) }
+        spaceFilters = filters
+        if selectedSpaceID != nil { applyFilter() }
+    }
+
+    private func refreshEditableSpaces() async {
+        guard let spaceService else { return }
+        editableSpaceIDs = Set(await spaceService.editableSpaces().map(\.roomId))
+    }
+
+    /// Narrows the room list to a space (nil for every room) and shows the room last open
+    /// there, if it is still in it, or else the space itself.
+    func show(space spaceID: String?) {
+        selectedSpaceID = spaceID
+        let inSpace = spaceID.map(roomIDs(inSpace:))
+        if let last = lastRoomBySpace[spaceID ?? ""], inSpace?.contains(last) ?? true {
+            selectedRoomID = last
+        } else if let inSpace, let current = selectedRoomID, inSpace.contains(current) {
+            browsingSpaceID = nil
+        } else if let spaceID {
+            selectedRoomID = nil
+            browsingSpaceID = spaceID
+        } else {
+            browsingSpaceID = nil
+        }
+    }
+
+    /// Shows a space's rooms in the main area, joined or not, with the list narrowed to the
+    /// account's space that holds it.
+    func browse(space spaceID: String) {
+        if let top = topLevelSpace(containing: spaceID) { selectedSpaceID = top }
+        selectedRoomID = nil
+        browsingSpaceID = spaceID
+    }
+
+    /// Joins a space the account was invited to, and goes on showing it, now as one of the
+    /// account's own.
+    func acceptSpaceInvite(_ spaceID: String) async throws {
+        try await acceptInvite(roomID: spaceID)
+        selectedSpaceID = spaceID
+        if selectedRoomID == nil { browsingSpaceID = spaceID }
+    }
+
+    func declineSpaceInvite(_ spaceID: String) async throws {
+        try await leave(roomID: spaceID)
+        if browsingSpaceID == spaceID { browsingSpaceID = nil }
+    }
+
+    /// Every room in a space, including those in the spaces within it.
+    func roomIDs(inSpace spaceID: String) -> Set<String> {
+        let filters = Dictionary(spaceFilters.map { ($0.spaceRoom.roomId, $0) }, uniquingKeysWith: { first, _ in first })
+        var result: Set<String> = []
+        var seen: Set<String> = []
+        var queue = [spaceID]
+        while let id = queue.popLast() {
+            guard seen.insert(id).inserted, let filter = filters[id] else { continue }
+            for child in filter.descendants {
+                result.insert(child)
+                if filters[child] != nil { queue.append(child) }
+            }
+        }
+        return result
+    }
+
+    /// How a space's rooms stand, counted as the account's badge counts them: how many have
+    /// notifications, how many of those need attention now, and whether any has anything unread.
+    func attention(inSpace spaceID: String) -> (count: Int, urgent: Int, hasUnread: Bool) {
+        let ids = roomIDs(inSpace: spaceID)
+        var count = 0
+        var urgent = 0
+        var hasUnread = false
+        for room in allRooms where !room.isSpace && ids.contains(room.id) {
+            if room.isHighlighted { count += 1 }
+            if room.isUrgent { urgent += 1 }
+            if room.hasUnread { hasUnread = true }
+        }
+        return (count, urgent, hasUnread)
+    }
+
+    /// Marks every room in a space read.
+    func markAllRead(inSpace spaceID: String) {
+        let ids = roomIDs(inSpace: spaceID)
+        for room in allRooms where ids.contains(room.id) && Self.isUnread(room) {
+            setRoom(room.id, unread: false)
+        }
+    }
+
+    func hasUnreadRooms(inSpace spaceID: String) -> Bool {
+        let ids = roomIDs(inSpace: spaceID)
+        return allRooms.contains { ids.contains($0.id) && Self.isUnread($0) }
+    }
+
+    /// Whether a room sits in a space itself, rather than in a space within it: only then can
+    /// it be taken out of that space.
+    func isDirectChild(_ roomID: String, of spaceID: String) -> Bool {
+        spaceFilters.first { $0.spaceRoom.roomId == spaceID && $0.level == 0 }?.descendants.contains(roomID) ?? false
+    }
+
+    /// The account's own space that holds a space or room, itself included.
+    func topLevelSpace(containing id: String) -> String? {
+        if spaces.contains(where: { $0.roomId == id }) { return id }
+        return spaces.first { roomIDs(inSpace: $0.roomId).contains(id) }?.roomId
+    }
+
+    /// Spaces the account has been invited to.
+    var invitedSpaces: [RoomSummary] {
+        allRooms.filter { $0.isSpace && $0.isInvite }
+    }
+
+    /// What is known of a space: one of the account's own, or one it has been invited to.
+    func spaceName(_ spaceID: String) -> String {
+        spaces.first { $0.roomId == spaceID }?.displayName
+            ?? allRooms.first { $0.id == spaceID }?.name
+            ?? "Space"
+    }
+
+    // MARK: Space actions
+
+    /// Joins a room found in a space. `via` are servers that can introduce this one to it.
+    func join(roomID: String, via: [String]) async throws {
+        _ = try await client.joinRoomByIdOrAlias(roomIdOrAlias: roomID, serverNames: via)
+    }
+
+    /// Who can join a room being created.
+    enum RoomAccess: Hashable {
+        /// Only people invited to it.
+        case invited
+        /// Anyone in the given space.
+        case spaceMembers(String)
+        /// Anyone at all.
+        case anyone
+    }
+
+    /// Creates a room and, given a space, puts it there. Returns the new room's ID.
+    func createRoom(name: String, topic: String?, access: RoomAccess, encrypted: Bool,
+                    inSpace spaceID: String?) async throws -> String {
+        var joinRule: JoinRule?
+        if case .spaceMembers(let space) = access {
+            joinRule = .restricted(rules: [.roomMembership(roomId: space)])
+        }
+        let parameters = CreateRoomParameters(
+            name: name, topic: topic?.isEmpty == true ? nil : topic, isEncrypted: encrypted,
+            visibility: access == .anyone ? .public : .private,
+            preset: access == .anyone ? .publicChat : .privateChat,
+            joinRuleOverride: joinRule)
+        let roomID = try await client.createRoom(request: parameters)
+        if let spaceID {
+            do {
+                try await addNewRoom(roomID, toSpace: spaceID)
+            } catch {
+                throw RoomNotAddedToSpace(roomID: roomID, underlying: error)
+            }
+        }
+        return roomID
+    }
+
+    /// Puts a room just made into a space. The SDK links the two only once the new room's
+    /// power levels and members have come back from the server in a sync, which can be a
+    /// moment after the room exists.
+    func addNewRoom(_ roomID: String, toSpace spaceID: String) async throws {
+        let room = try await client.awaitRoomRemoteEcho(roomId: roomID)
+        for _ in 0..<40 {
+            if (try? await room.getPowerLevels()) != nil { break }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        try await spaceService?.addChildToSpace(childId: roomID, spaceId: spaceID)
+    }
+
+    /// Creates a space. Returns its ID.
+    func createSpace(name: String, topic: String?, isPublic: Bool) async throws -> String {
+        let parameters = CreateRoomParameters(
+            name: name, topic: topic?.isEmpty == true ? nil : topic, isEncrypted: false,
+            visibility: isPublic ? .public : .private,
+            preset: isPublic ? .publicChat : .privateChat,
+            isSpace: true)
+        return try await client.createRoom(request: parameters)
+    }
+
+    func addRooms(_ roomIDs: [String], toSpace spaceID: String) async throws {
+        guard let spaceService else { return }
+        for roomID in roomIDs {
+            try await spaceService.addChildToSpace(childId: roomID, spaceId: spaceID)
+        }
+    }
+
+    func removeRoom(_ roomID: String, fromSpace spaceID: String) async throws {
+        try await spaceService?.removeChildFromSpace(childId: roomID, spaceId: spaceID)
+    }
+
+    /// The spaces a room is directly in, among the account's.
+    func parentSpaceIDs(of roomID: String) async -> [String] {
+        (try? await spaceService?.joinedParentIdsOfChild(childId: roomID)) ?? []
+    }
+
+    /// Starts leaving a space: the handle lists the space's rooms the account is in, any of
+    /// which can be left with it.
+    func leaveSpaceHandle(_ spaceID: String) async throws -> LeaveSpaceHandle? {
+        try await spaceService?.leaveSpace(spaceId: spaceID)
+    }
+
+    /// Leaves a space and whichever of its rooms were chosen.
+    func leave(space spaceID: String, with handle: LeaveSpaceHandle, alsoLeaving roomIDs: Set<String>) async throws {
+        let leaving = roomIDs.union([spaceID])
+        // The handle lists the rooms innermost first, so each space goes after what it holds.
+        let ordered = handle.rooms().map(\.spaceRoom.roomId).filter(leaving.contains)
+        try await handle.leave(roomIds: ordered.isEmpty ? [spaceID] : ordered)
+        for roomID in leaving {
+            timelines.removeValue(forKey: roomID)?.stop()
+            dropBannerPins(for: roomID)
+        }
+        if let selected = selectedRoomID, leaving.contains(selected) { selectedRoomID = nil }
+        // Back to every room, and the one last open there.
+        if selectedSpaceID == spaceID || browsingSpaceID == spaceID { show(space: nil) }
     }
 
     func loadMoreRooms() {
@@ -331,22 +656,31 @@ final class AccountSession: Identifiable {
 
     /// Whether a room has anything unread, as the room list shows it.
     func isUnread(_ roomID: String) -> Bool {
-        guard let room = rooms.first(where: { $0.id == roomID }) else { return false }
-        return room.hasUnread || room.notifications > 0 || room.mentions > 0
+        guard let room = rooms.first(where: { $0.id == roomID }) ?? allRooms.first(where: { $0.id == roomID })
+        else { return false }
+        return Self.isUnread(room)
+    }
+
+    private static func isUnread(_ room: RoomSummary) -> Bool {
+        !room.isInvite && !room.isSpace && (room.hasUnread || room.notifications > 0 || room.mentions > 0)
     }
 
     /// Marks a room read up to its newest message, or unread, as the user asks. Shown in the
     /// list at once; the server's own record follows as it syncs.
     func setRoom(_ roomID: String, unread: Bool) {
         guard let room = room(id: roomID) else { return }
-        if let index = rooms.firstIndex(where: { $0.id == roomID }) {
-            rooms[index].hasUnread = unread
-            rooms[index].isMarkedUnread = unread
+        for list in [\AccountSession.rooms, \AccountSession.allRooms] {
+            guard let index = self[keyPath: list].firstIndex(where: { $0.id == roomID }) else { continue }
+            var room = self[keyPath: list][index]
+            room.hasUnread = unread
+            room.isMarkedUnread = unread
             if !unread {
-                rooms[index].notifications = 0
-                rooms[index].mentions = 0
+                room.notifications = 0
+                room.mentions = 0
             }
+            if list == \AccountSession.rooms { rooms[index] = room } else { allRooms[index] = room }
         }
+        updateBadges()
         // The room on screen stays unread until it is opened again, rather than being read
         // again the moment a message arrives or the room is left.
         timelines[roomID]?.holdsUnread = unread
@@ -362,14 +696,14 @@ final class AccountSession: Identifiable {
         }
     }
 
-    /// Whether any room in the list has anything unread.
+    /// Whether any of the account's rooms has anything unread, in any space or none.
     var hasUnreadRooms: Bool {
-        rooms.contains { !$0.isInvite && ($0.hasUnread || $0.notifications > 0 || $0.mentions > 0) }
+        allRooms.contains(where: Self.isUnread)
     }
 
-    /// Marks every room in the list read.
+    /// Marks every one of the account's rooms read.
     func markAllRead() {
-        for room in rooms where !room.isInvite && (room.hasUnread || room.notifications > 0 || room.mentions > 0) {
+        for room in allRooms where Self.isUnread(room) {
             setRoom(room.id, unread: false)
         }
     }
@@ -529,7 +863,8 @@ final class AccountSession: Identifiable {
 }
 
 extension RoomSummary {
-    static func make(from room: Room) async -> RoomSummary {
+    /// - Parameter withPreview: false for the full index, which needs only names and counts.
+    static func make(from room: Room, withPreview: Bool = true) async -> RoomSummary {
         var summary = RoomSummary(id: room.id(), name: room.displayName() ?? room.id())
         if let info = try? await room.roomInfo() {
             summary.name = info.displayName ?? info.canonicalAlias ?? "Empty room"
@@ -541,6 +876,7 @@ extension RoomSummary {
             summary.mentions = Int(info.numUnreadMentions)
             summary.hasUnread = info.numUnreadMessages > 0 || info.isMarkedUnread
             summary.isMarkedUnread = info.isMarkedUnread
+            summary.isSpace = info.isSpace
             if info.isDirect, info.heroes.count == 1 {
                 summary.directUserID = info.heroes[0].userId
                 if summary.avatarURL == nil { summary.avatarURL = info.heroes[0].avatarUrl }
@@ -583,5 +919,22 @@ extension ProfileDetails {
 
     func name(fallback userID: String) -> String {
         displayName ?? userID
+    }
+}
+
+/// A window shown over the main one for something to do with rooms and spaces.
+enum AccountSheet: Identifiable, Equatable {
+    case newRoom(inSpace: String?)
+    case newSpace
+    case addRooms(toSpace: String)
+    case leaveSpace(String)
+
+    var id: String {
+        switch self {
+        case .newRoom(let space): "newRoom-\(space ?? "")"
+        case .newSpace: "newSpace"
+        case .addRooms(let space): "addRooms-\(space)"
+        case .leaveSpace(let space): "leaveSpace-\(space)"
+        }
     }
 }

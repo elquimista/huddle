@@ -17,6 +17,17 @@ struct HuddleApp: App {
         .defaultSize(width: 1040, height: 680)
         .commands {
             CommandGroup(replacing: .newItem) {
+                let account = store.selected
+                Button("New Room…") {
+                    // In the space whose rooms are showing, where that's allowed.
+                    let space = account?.browsingSpaceID ?? account?.selectedSpaceID
+                    account?.sheet = .newRoom(inSpace: space)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(account == nil || account?.sheet != nil)
+                Button("New Space…") { account?.sheet = .newSpace }
+                    .disabled(account == nil || account?.sheet != nil)
+                Divider()
                 Button("Add Account…") { store.isAddingAccount = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
             }
@@ -93,7 +104,10 @@ struct MainView: View {
             }
             .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)
         } detail: {
-            if let roomID = account.selectedRoomID {
+            if let spaceID = account.browsingSpaceID {
+                SpaceBrowserView(account: account, spaceID: spaceID)
+                    .id(spaceID)
+            } else if let roomID = account.selectedRoomID {
                 RoomView(account: account, roomID: roomID)
                     .id(roomID)
             } else {
@@ -101,6 +115,9 @@ struct MainView: View {
                                        systemImage: "bubble.left.and.bubble.right",
                                        description: Text("Pick a conversation from the list."))
             }
+        }
+        .sheet(item: $account.sheet) { sheet in
+            AccountSheetView(account: account, sheet: sheet)
         }
     }
 }

@@ -34,6 +34,9 @@ struct AccountRail: View {
                 }
                 .buttonStyle(.plain)
                 .help("Add account")
+                if let account = store.selected {
+                    SpaceRailSection(account: account)
+                }
             }
             .padding(.vertical, 3)
         }
@@ -66,53 +69,12 @@ private struct AccountButton: View {
             .overlay {
                 Circle().strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
             }
-            // Punch a gap out of the avatar and ring so the badge never touches them.
-            .overlay(alignment: .topTrailing) {
-                if let badge {
-                    // Grown evenly on every side, then shifted back out so it stays centred on the badge.
-                    badge.shape
-                        .padding(Self.badgeGap)
-                        .background(.black, in: Capsule())
-                        .blendMode(.destinationOut)
-                        .offset(x: badge.offset.width + Self.badgeGap,
-                                y: badge.offset.height - Self.badgeGap)
-                }
-            }
-            .compositingGroup()
-            .overlay(alignment: .topTrailing) {
-                if let badge {
-                    badge.shape.offset(badge.offset)
-                }
-            }
+            .railBadge(RailBadge.count(urgent: account.urgentCount, other: account.badgeCount))
             .contentShape(Circle())
             // Room for the badge inside this view's bounds: the context menu attached to it
             // clips anything drawn outside them.
-            .padding(Self.badgeOverhang)
+            .padding(RailBadge.overhang)
             .help(helpText)
-    }
-
-    private static let badgeOverhang: CGFloat = 4
-    /// Width of the clear ring between a badge and the avatar behind it.
-    private static let badgeGap: CGFloat = 2
-
-    private struct Badge {
-        let shape: AnyView
-        let offset: CGSize
-    }
-
-    /// Red for direct messages, mentions and invitations; otherwise blue for other rooms with
-    /// notifications. Both count rooms. Red wins when an account has both.
-    private var badge: Badge? {
-        let count = account.urgentCount > 0 ? account.urgentCount : account.badgeCount
-        guard count > 0 else { return nil }
-        let label = Text("\(min(count, 99))")
-            .font(.system(size: 10, weight: .bold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(.white)
-            .padding(.horizontal, 4)
-            .frame(minWidth: 16, minHeight: 16)
-            .background(account.urgentCount > 0 ? Color.red : Color.accentColor, in: Capsule())
-        return Badge(shape: AnyView(label), offset: CGSize(width: 2, height: -2))
     }
 
     private var helpText: String {
@@ -127,5 +89,63 @@ private struct AccountButton: View {
             lines.append("\(other) room\(other == 1 ? "" : "s") with new messages")
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// A badge on an account or space in the rail, at the top trailing corner of its avatar.
+struct RailBadge {
+    let shape: AnyView
+    let offset: CGSize
+
+    /// Room around an avatar for its badge, inside the view's own bounds: a context menu
+    /// attached to it clips anything drawn outside them.
+    static let overhang: CGFloat = 4
+    /// Width of the clear ring between a badge and the avatar behind it.
+    static let gap: CGFloat = 2
+
+    /// Red for direct messages, mentions and invitations; otherwise blue for other rooms with
+    /// notifications. Both count rooms. Red wins when there are both.
+    static func count(urgent: Int, other: Int) -> RailBadge? {
+        let count = urgent > 0 ? urgent : other
+        guard count > 0 else { return nil }
+        let label = Text("\(min(count, 99))")
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .frame(minWidth: 16, minHeight: 16)
+            .background(urgent > 0 ? Color.red : Color.accentColor, in: Capsule())
+        return RailBadge(shape: AnyView(label), offset: CGSize(width: 2, height: -2))
+    }
+
+    /// A small dot: something unread, or an invitation (in red).
+    static func dot(_ color: Color, size: CGFloat = 8) -> RailBadge {
+        RailBadge(shape: AnyView(Circle().fill(color).frame(width: size, height: size)),
+                  offset: CGSize(width: 0, height: 0))
+    }
+}
+
+extension View {
+    /// Puts a badge on the view's top trailing corner, with a gap punched out of what is
+    /// behind it so the two never touch.
+    func railBadge(_ badge: RailBadge?) -> some View {
+        self
+            .overlay(alignment: .topTrailing) {
+                if let badge {
+                    // Grown evenly on every side, then shifted back out so it stays centred on the badge.
+                    badge.shape
+                        .padding(RailBadge.gap)
+                        .background(.black, in: Capsule())
+                        .blendMode(.destinationOut)
+                        .offset(x: badge.offset.width + RailBadge.gap,
+                                y: badge.offset.height - RailBadge.gap)
+                }
+            }
+            .compositingGroup()
+            .overlay(alignment: .topTrailing) {
+                if let badge {
+                    badge.shape.offset(badge.offset)
+                }
+            }
     }
 }

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Round avatar that falls back to a coloured initial.
+/// Round avatar that falls back to a coloured initial. Spaces' are rounded squares, so they
+/// read apart from people and rooms at a glance.
 struct AvatarView: View {
     let media: MediaLoader
     let url: String?
@@ -8,6 +9,8 @@ struct AvatarView: View {
     /// Stable identifier (user or room ID) that picks the fallback colour.
     let seed: String
     var size: CGFloat = 32
+    /// A space's: a rounded square rather than a circle.
+    var isSquare = false
 
     @State private var image: NSImage?
 
@@ -25,7 +28,8 @@ struct AvatarView: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(Circle())
+        .clipShape(isSquare ? AnyShape(RoundedRectangle(cornerRadius: size * 0.27, style: .continuous))
+                            : AnyShape(Circle()))
         .task(id: url) {
             guard let url else {
                 image = nil

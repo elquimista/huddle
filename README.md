@@ -5,6 +5,7 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Native:** SwiftUI, no Electron or web view. The app is about 50 MB and idles around 65 MB of memory.
 - **Sliding sync:** the room list loads instantly whatever the account's size. The rooms on screen in the list are kept subscribed, so their previews (reactions included) stay current and opening one shows its latest messages at once; rooms further down get only their newest event until they scroll into view. Homeservers without native sliding sync (MSC4186) are not supported.
 - **Multiple accounts:** an avatar rail switches accounts (⌘1–9); each has its own unread badge and its own encrypted local store. Settings ▸ Accounts lists them with whether this Mac is verified for each, and has Verify, Copy User ID, Sign Out and Add Account.
+- **Spaces:** an account's spaces sit in the rail below the accounts, each with a badge for its rooms that need attention. Choosing one narrows the room list to its rooms, including those in the spaces within it; All Rooms shows everything. Browsing a space lists every room and space in it, joined or not, to join or go into, and an invitation to a space shows who sent it and what is inside before you accept. Make a space, or a room (File ▸ New Room…, ⌘N) that its members, only people invited, or anyone can join; add rooms you're in to a space or take them out; and leave a space along with any of its rooms.
 - **Settings (⌘,):** tabs for Notifications, Appearance (message layout and emoji size, with a live preview of a short conversation), Privacy and Accounts.
 - **Sign-in:** username and password in the app wherever the homeserver accepts them, with OAuth in your browser as the alternative (needed for single sign-on, passkeys and two-step verification) or where it is the only way.
 - **Chat:** searchable room list with previews and unread badges, invites, a timeline with history paging, images, reactions with a searchable emoji picker, formatted messages with mention pills, and a markdown composer that suggests people as you type "@". Settings (⌘,) switches between the modern message layout and a compact IRC-style one.
@@ -23,7 +24,7 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 - **Notifications:** macOS alerts for new messages, mentions and invitations, following your account's notification rules (muted rooms stay silent; direct messages and mentions play a sound). Clicking one opens that account, room and thread, and reading a room clears its alerts. Settings (⌘,) turns alerts or their sound off; they start off in the Dev build.
 - **Encryption:** end-to-end encrypted rooms work, and a new session is verified with your recovery key.
 
-Not built yet: sending files other than images, edits, spaces, and emoji verification.
+Not built yet: sending files other than images, and emoji verification.
 
 ## Requirements
 
@@ -82,6 +83,7 @@ dev/synapse/seed.py say bob General "hello"   # send one live message
 dev/synapse/seed.py read bob General           # Bob reads General up to its newest message
 dev/synapse/seed.py threads   # three threads in General, one with 40 replies
 dev/synapse/seed.py pin alice General "History message 3"   # pin messages, however far back
+dev/synapse/seed.py spaces    # Work (with a Mobile space inside), Open Source, and an invitation to Book Club
 dev/synapse/seed.py audio     # voice messages and audio files in General
 dev/synapse/seed.py images    # pictures of every shape in Design, an animation, and a missing one
 dev/synapse/seed.py reply bob General "team lunch" "hi"   # reply in the thread containing that text
@@ -104,7 +106,7 @@ To wipe either one, run `docker compose down && rm -rf data` in its folder.
 Scripts/run-dev.sh alice/General
 ```
 
-The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_THREAD`, `HUDDLE_DEV_SIGN_OUT`, `HUDDLE_DEV_HOVER`, `HUDDLE_DEV_MUTE_AUDIO` (set by `run-dev.sh`, so test runs make no sound), `HUDDLE_DEV_SLOW_ANIMATIONS` (a factor such as `20`, to watch an animation frame by frame), `HUDDLE_DEV_PERF` (prints how long each room takes to appear), `HUDDLE_DEV_AX_ACTIONS` (gives messages their actions as accessibility actions even without VoiceOver, for scripted tests), and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
+The Dev build reads a few environment variables at launch (see `Sources/Huddle/Core/DevHooks.swift`): `HUDDLE_DEV_ACCOUNTS`, `HUDDLE_DEV_SELECT`, `HUDDLE_DEV_THREAD`, `HUDDLE_DEV_SPACE` (a space to browse at launch) and `HUDDLE_DEV_SHEET` (`newRoom`, `newSpace`, `addRooms` or `leave`, to open that sheet for it), `HUDDLE_DEV_SIGN_OUT`, `HUDDLE_DEV_HOVER`, `HUDDLE_DEV_MUTE_AUDIO` (set by `run-dev.sh`, so test runs make no sound), `HUDDLE_DEV_SLOW_ANIMATIONS` (a factor such as `20`, to watch an animation frame by frame), `HUDDLE_DEV_PERF` (prints how long each room takes to appear), `HUDDLE_DEV_AX_ACTIONS` (gives messages their actions as accessibility actions even without VoiceOver, for scripted tests), and `HUDDLE_DEV_NO_BROWSER`, which prints the OAuth sign-in URL instead of opening the browser. The release app ignores them.
 
 ## Releases
 

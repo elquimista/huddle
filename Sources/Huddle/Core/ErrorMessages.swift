@@ -43,4 +43,21 @@ extension Error {
             return localizedDescription
         }
     }
+
+    /// As `userMessage`, for something done in a room or space rather than signing in: a
+    /// refusal is the server's own reason ("You are not invited to this room"), not a password
+    /// problem.
+    var actionMessage: String {
+        if let error = self as? ClientError, case .MatrixApi(.forbidden, _, let message, _) = error {
+            return message.isEmpty ? "You don't have permission to do that." : message
+        }
+        if let error = self as? RoomNotAddedToSpace { return error.underlying.actionMessage }
+        return userMessage
+    }
+}
+
+/// A room was made, but couldn't be put in the space it was made for.
+struct RoomNotAddedToSpace: Error {
+    let roomID: String
+    let underlying: Error
 }
