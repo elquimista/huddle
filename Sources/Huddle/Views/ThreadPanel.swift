@@ -244,8 +244,11 @@ private struct ThreadListView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 0) {
+                            let new = Set(account.openTimeline(for: roomID)?.newThreads.map(\.id) ?? [])
                             ForEach(list.entries) { entry in
-                                ThreadListRow(entry: entry, media: account.media) { open(entry.id) }
+                                ThreadListRow(entry: entry, isNew: new.contains(entry.id), media: account.media) {
+                                    open(entry.id)
+                                }
                                 Divider().padding(.leading, 50)
                             }
                             if list.hasMore {
@@ -273,6 +276,8 @@ private struct ThreadListView: View {
 
 private struct ThreadListRow: View {
     let entry: ThreadListEntry
+    /// Someone else has replied since you last read it, as the mark under its root says.
+    let isNew: Bool
     let media: MediaLoader
     let action: () -> Void
     @State private var isHovering = false
@@ -302,6 +307,16 @@ private struct ThreadListRow: View {
                         Text(entry.replyCount == 1 ? "1 reply" : "\(entry.replyCount) replies")
                             .fontWeight(.semibold)
                             .foregroundStyle(Color.accentColor)
+                            .fixedSize()
+                        if isNew {
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 7, height: 7)
+                                .padding(.leading, 2)
+                            Text("New replies")
+                                .fontWeight(.semibold)
+                                .fixedSize()
+                        }
                         if let name = entry.latestReplierName {
                             Text("· latest from \(name)")
                                 .foregroundStyle(.secondary)

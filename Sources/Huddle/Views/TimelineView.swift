@@ -281,6 +281,11 @@ struct TimelineView: View {
             // one sits under the header; a long one is then scrolled to its newest reply.
             .defaultScrollAnchor(timeline.threadRoot == nil && timeline.focusedEvent == nil ? .bottom : .top)
             .modifier(NewestMessageHold(isOn: followsNewest))
+            // Under the banners, over the part of the conversation in view: with a panel beside
+            // it, the conversation runs on under the panel.
+            .overlay(alignment: .topLeading) {
+                newThreadReplies.frame(width: messagesWidth)
+            }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     if let room, room.isMarkedUnread {
@@ -1106,6 +1111,32 @@ struct TimelineView: View {
             return
         }
         forwarding = ForwardRequest(preview: preview, content: content)
+    }
+
+    // MARK: New thread replies
+
+    /// Replies to threads you haven't seen. A reply to an old thread shows only under its root
+    /// message, which may be far back or not loaded at all; this says there is one, and opens
+    /// it (or the list of threads, for several).
+    @ViewBuilder private var newThreadReplies: some View {
+        if let room, timeline.threadRoot == nil {
+            let threads = room.live.newThreads
+            ZStack {
+                if !threads.isEmpty {
+                    NewThreadRepliesPill(threads: threads) {
+                        if threads.count == 1, let open = onOpenThread {
+                            open(threads[0].id)
+                        } else {
+                            room.showThreads?()
+                        }
+                    }
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.snappy(duration: 0.25), value: threads.isEmpty)
+        }
     }
 
     // MARK: Pinned messages
@@ -2728,6 +2759,48 @@ struct RoomContext {
     let markRead: () -> Void
     /// Opens the room's details beside it.
     var showInfo: (() -> Void)?
+    /// Opens the list of the room's threads beside it.
+    var showThreads: (() -> Void)?
+}
+
+/// Over the top of the conversation while threads have replies you haven't seen: who replied
+/// and to what, or how many threads, for several. Styled as Jump to Latest is.
+private struct NewThreadRepliesPill: View {
+    let threads: [ThreadListEntry]
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 6) {
+                Image(systemName: "bubble.left.and.text.bubble.right")
+                    .foregroundStyle(Color.accentColor)
+                Text(title)
+                    .layoutPriority(1)
+                if threads.count == 1 {
+                    Text(threads[0].preview)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 240, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(.regularMaterial, in: Capsule())
+            .overlay { Capsule().strokeBorder(.separator) }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(threads.count == 1 ? "Open the thread" : "Show the room’s threads")
+        .accessibilityLabel(threads.count == 1 ? "\(title): \(threads[0].preview)" : title)
+    }
+
+    private var title: String {
+        guard threads.count == 1 else { return "New replies in \(threads.count) threads" }
+        return "\(threads[0].latestReplierName ?? "Someone") replied in a thread"
+    }
 }
 
 /// Along the top of a room the user has marked unread while in it: what that means, and the

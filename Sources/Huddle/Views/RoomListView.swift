@@ -349,6 +349,7 @@ private struct RoomListRow: View {
 
     var body: some View {
         RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id],
+                threadReply: account.threadReplyDates[room.id],
                 presence: room.directUserID.flatMap { account.presence.people[$0] })
             .tag(room.id)
             .draggable(room.id) {
@@ -477,6 +478,8 @@ private struct RoomRow: View {
     let room: RoomSummary
     let media: MediaLoader
     var reaction: ReactionPreview?
+    /// The date of the room's newest reply in a thread, when known.
+    var threadReply: Date?
     /// The other person's, in a direct chat.
     var presence: PresenceInfo?
 
@@ -488,7 +491,9 @@ private struct RoomRow: View {
 
     private var preview: String {
         if room.isInvite { return room.lastMessage ?? "Invitation" }
-        return latestReaction?.text ?? room.lastMessage ?? " "
+        // The newest message is that reply: say it's in a thread.
+        let inThread = threadReply != nil && threadReply == room.timestamp ? room.lastMessageInThread : nil
+        return latestReaction?.text ?? inThread ?? room.lastMessage ?? " "
     }
 
     var body: some View {

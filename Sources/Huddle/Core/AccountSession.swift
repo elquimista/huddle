@@ -23,6 +23,9 @@ struct RoomSummary: Identifiable, Equatable {
     /// False when the room's details could not be read, so the counts above mean nothing.
     var hasCounts = false
     var lastMessage: String?
+    /// The same said as a reply in a thread ("Bob in a thread: …"), for when the newest message
+    /// turns out to be one: the SDK's latest event doesn't say (see `threadReplyDates`).
+    var lastMessageInThread: String?
     var timestamp: Date?
     /// The room's own notification setting; nil when it follows the account's default
     /// (RoomNotifications.swift).
@@ -118,6 +121,10 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private let ownPresence: OwnPresence
     /// For rooms opened this session: a reaction that came after the room's newest message.
     private(set) var reactionPreviews: [String: ReactionPreview] = [:]
+    /// Rooms whose newest message is a reply in a thread, by the reply's date, as the room's probe
+    /// or open timeline saw it. The room list says "in a thread" when it is the room's latest
+    /// message, so a reply to an old thread isn't looked for at the end of the room.
+    private(set) var threadReplyDates: [String: Date] = [:]
     /// What the panel beside each room's timeline shows, so it is still there on coming back.
     var sidePanels: [String: ThreadPanel.Content] = [:]
     var searchText = "" {
@@ -990,6 +997,9 @@ final class AccountSession: Identifiable {
         }
     }
 
+    /// A room's live timeline if it's open already, without opening it or counting a visit.
+    func openTimeline(for roomID: String) -> RoomTimeline? { timelines[roomID] }
+
     /// The live timeline for a room, kept warm for the most recently opened rooms.
     func timeline(for roomID: String) -> RoomTimeline? {
         if let existing = timelines[roomID] {
@@ -999,6 +1009,7 @@ final class AccountSession: Identifiable {
         guard let room = room(id: roomID) else { return nil }
         let timeline = prepared(RoomTimeline(room: room))
         timeline.onLatestReaction = { [weak self] preview in self?.reactionPreviews[roomID] = preview }
+        timeline.onLatestThreadReply = { [weak self] date in self?.setThreadReplyDate(date, for: roomID) }
         timeline.onIdentityChanges = { [weak self] changes in self?.applyIdentityChanges(changes) }
         timeline.setTypingUserIDs(typingUserIDs[roomID] ?? [])
         timelines[roomID] = timeline
@@ -1231,8 +1242,15 @@ final class AccountSession: Identifiable {
             probes[roomID] = RoomPreviewProbe(room: room) { [weak self] preview in
                 guard let self, self.timelines[roomID] == nil else { return }
                 self.reactionPreviews[roomID] = preview
+            } reportThreadReply: { [weak self] date in
+                guard let self, self.timelines[roomID] == nil else { return }
+                self.setThreadReplyDate(date, for: roomID)
             }
         }
+    }
+
+    private func setThreadReplyDate(_ date: Date?, for roomID: String) {
+        if threadReplyDates[roomID] != date { threadReplyDates[roomID] = date }
     }
 
     /// Called when a room is left for another. A room whose loaded history has grown long (from
@@ -1310,14 +1328,25 @@ extension RoomSummary {
             summary.timestamp = Date(matrixTimestamp: timestamp)
             let prefix = isOwn ? "You" : (summary.isDirect ? nil : profile.name(fallback: sender))
             summary.lastMessage = content.preview(sender: prefix)
+            summary.lastMessageInThread = Self.inThread(prefix, content).flatMap { content.preview(sender: $0) }
         case .local(let timestamp, _, _, let content, _):
             summary.timestamp = Date(matrixTimestamp: timestamp)
             summary.lastMessage = content.preview(sender: "You")
+            summary.lastMessageInThread = Self.inThread("You", content).flatMap { content.preview(sender: $0) }
         case .remoteInvite(let timestamp, let inviter, let profile):
             summary.timestamp = Date(matrixTimestamp: timestamp)
             summary.lastMessage = inviter.map { "Invited by \(profile.name(fallback: $0))" } ?? "Invitation"
         }
         return summary
+    }
+
+    /// Who a message is from, said as a reply in a thread, as notifications say it: "Bob in a
+    /// thread", or "In a thread" in a direct chat. Nil for an emote, worded around its sender,
+    /// and for anything but a message.
+    private static func inThread(_ sender: String?, _ content: TimelineItemContent) -> String? {
+        guard case .msgLike(let message) = content else { return nil }
+        if case .message(let body) = message.kind, case .emote = body.msgType { return nil }
+        return sender.map { "\($0) in a thread" } ?? "In a thread"
     }
 }
 

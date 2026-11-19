@@ -268,6 +268,15 @@ final class RoomTimeline {
     @ObservationIgnored private var unreadHorizon: Date?
     /// Room timeline only. When each thread was last read here, by root event ID.
     @ObservationIgnored private var threadSeen: [String: Date] = [:]
+    /// Live room timeline only. The room's threads, most recently active first, followed so a
+    /// reply to one whose root is far back, or not loaded at all, is known about.
+    @ObservationIgnored private var threadActivity: RoomThreadList?
+    /// Live room timeline only. Threads someone else has replied to since you last read the
+    /// room or the thread, most recently active first.
+    private(set) var newThreads: [ThreadListEntry] = []
+    /// Live room timeline only. Told the date of the newest reply in any thread, so the room
+    /// list can say when the room's newest message is one.
+    @ObservationIgnored var onLatestThreadReply: ((Date?) -> Void)?
     /// Thread timeline only. Tells the room's timeline that this thread has been read.
     /// Everyone else in the room, for mention suggestions. Empty until `loadMembers()`.
     private(set) var members: [MentionCandidate] = []
@@ -330,6 +339,7 @@ final class RoomTimeline {
         identityTask?.cancel()
         identityHandle?.cancel()
         typingKeeper?.cancel()
+        threadActivity?.stop()
     }
 
     /// Follows the members whose identity changed since it was first seen, or since they were
@@ -458,7 +468,10 @@ final class RoomTimeline {
             self.timeline = timeline
             let (stream, continuation) = AsyncStream.makeStream(of: [TimelineDiff].self)
             listenerHandle = await timeline.addListener(listener: TimelineDiffListener { continuation.yield($0) })
-            if isLive { unreadHorizon = await lastReadTime() }
+            if isLive {
+                unreadHorizon = await lastReadTime()
+                followThreads()
+            }
             let isDirect = await room.isDirect()
             isOneToOne = isDirect && room.activeMembersCount() <= 2
             isLoading = false
@@ -550,8 +563,8 @@ final class RoomTimeline {
             for index in rows.indices {
                 guard case .message(var message) = rows[index].kind, var thread = message.thread,
                       let root = message.eventID, let latest = thread.latestDate else { continue }
-                let seen = max(unreadHorizon ?? .distantPast, threadSeen[root] ?? .distantPast)
-                thread.hasNewReplies = latest > seen && thread.latestSender != ownUserID
+                thread.hasNewReplies = isNew(thread: root, latestReply: latest,
+                                             fromOthers: thread.latestSender != ownUserID)
                 message.thread = thread
                 rows[index].kind = .message(message)
             }
@@ -1072,6 +1085,26 @@ final class RoomTimeline {
     func markThreadSeen(_ root: String) {
         threadSeen[root] = .now
         rebuildRows()
+        refreshNewThreads()
+    }
+
+    /// Whether a thread has a reply from someone else since you last read the room or it.
+    private func isNew(thread root: String, latestReply: Date, fromOthers: Bool) -> Bool {
+        fromOthers && latestReply > max(unreadHorizon ?? .distantPast, threadSeen[root] ?? .distantPast)
+    }
+
+    private func followThreads() {
+        let list = RoomThreadList(room: room, datesBack: unreadHorizon)
+        list.onChange = { [weak self] in self?.refreshNewThreads() }
+        threadActivity = list
+        refreshNewThreads()
+    }
+
+    private func refreshNewThreads() {
+        let threads = (threadActivity?.entries ?? []).filter { $0.replyCount > 0 && $0.latestDateIsKnown }
+        let new = threads.filter { isNew(thread: $0.id, latestReply: $0.latestDate, fromOthers: $0.latestIsOthers) }
+        if new != newThreads { newThreads = new }
+        onLatestThreadReply?(threads.map(\.latestDate).max())
     }
 }
 

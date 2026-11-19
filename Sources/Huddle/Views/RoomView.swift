@@ -56,7 +56,8 @@ struct RoomView: View {
                                                            returnToLive: returnToLive,
                                                            isMarkedUnread: summary?.isMarkedUnread == true,
                                                            markRead: { account.setRoom(roomID, unread: false) },
-                                                           showInfo: { panel = .info }))
+                                                           showInfo: { panel = .info },
+                                                           showThreads: { panel = .threadList }))
                             // A fresh view for each timeline it shows: where it is scrolled to
                             // belongs to that timeline.
                             .id(focused.map(ObjectIdentifier.init))
@@ -113,12 +114,29 @@ struct RoomView: View {
                         .help("Details, members and settings (⌘I)")
                     }
                     ToolbarItem(placement: .primaryAction) {
+                        let newThreads = timeline.newThreads.count
                         Button {
                             panel = panel == .threadList ? nil : .threadList
                         } label: {
-                            Label("Threads", systemImage: "bubble.left.and.text.bubble.right")
+                            Label {
+                                Text("Threads")
+                            } icon: {
+                                // A dot while a thread has replies you haven't seen.
+                                Image(systemName: "bubble.left.and.text.bubble.right")
+                                    .overlay(alignment: .topTrailing) {
+                                        if newThreads > 0 {
+                                            Circle()
+                                                .fill(Color.accentColor)
+                                                .frame(width: 7, height: 7)
+                                                .offset(x: 3, y: -2)
+                                        }
+                                    }
+                            }
                         }
-                        .help("Threads in this room")
+                        .help(newThreads == 0 ? "Threads in this room"
+                              : newThreads == 1 ? "Threads in this room: new replies in 1"
+                              : "Threads in this room: new replies in \(newThreads)")
+                        .accessibilityValue(newThreads == 0 ? "" : "New replies")
                     }
                 }
             } else {
