@@ -94,6 +94,9 @@ struct TimelineView: View {
 
     /// Whether the newest message is on screen.
     @State private var isAtBottom = true
+    /// All the way at the end, not only near it (`isAtBottom` allows a few points' slack, so
+    /// that the reader nudging the view doesn't stop it following the newest message).
+    @State private var isAtEnd = true
     /// The intent to stay on the newest message. Unlike `isAtBottom` it survives a batch of
     /// messages, a reload or a resize pushing the newest one out of view, so the view can follow.
     /// Only the user scrolling away ends it.
@@ -231,14 +234,25 @@ struct TimelineView: View {
                     Color.clear
                         .frame(height: 1)
                         .id(Self.bottomID)
-                        .onGeometryChange(for: Bool.self, of: Self.isOnScreen) { visible in
+                        .onGeometryChange(for: EndPlace.self, of: Self.endPlace) { end in
+                            let visible = end != .away
                             isAtBottom = visible
+                            isAtEnd = end == .atEnd
                             if visible {
                                 // Not while the messages re-wrap around a held reading place:
                                 // rows above it shrinking can bring the end into view for a
                                 // moment, but the reader hasn't gone there. (Once it has
                                 // settled, `messagesWillRewrap` follows again if it is still in view.)
                                 if place.heldRow == nil, timeline.focusedEvent == nil { followsNewest = true }
+                                // Near the end but short of it, with the reader not scrolling: a
+                                // jump that landed short as rows changed height. All the way, or
+                                // the newest message sits on the composer's edge until something
+                                // else moves.
+                                if end == .nearEnd, followsNewest, !input.isRecent, place.heldRow == nil {
+                                    DispatchQueue.main.async {
+                                        if followsNewest, !isAtEnd { jump(proxy, to: Self.bottomID, anchor: .bottom) }
+                                    }
+                                }
                             } else if input.isRecent {
                                 // The user scrolled away.
                                 if followsNewest {
@@ -574,6 +588,17 @@ struct TimelineView: View {
     }
 
     /// Whether a view inside the scroll view is within, or just outside, the visible area.
+    /// Where the end of the conversation is: in view, within a few points of it (the reader's
+    /// nudge, or a jump that landed short), or out of sight.
+    private enum EndPlace: Equatable { case atEnd, nearEnd, away }
+
+    private static func endPlace(_ geometry: GeometryProxy) -> EndPlace {
+        guard let visible = geometry.bounds(of: .scrollView) else { return .away }
+        let marker = geometry.frame(in: .local)
+        if visible.maxY >= marker.maxY - 0.5, visible.intersects(marker.insetBy(dx: 0, dy: -0.5)) { return .atEnd }
+        return isOnScreen(geometry) ? .nearEnd : .away
+    }
+
     private static func isOnScreen(_ geometry: GeometryProxy) -> Bool {
         guard let visible = geometry.bounds(of: .scrollView) else { return false }
         return visible.insetBy(dx: 0, dy: -24).intersects(geometry.frame(in: .local))
@@ -624,7 +649,7 @@ struct TimelineView: View {
     private func settleOnNewest(_ proxy: ScrollViewProxy, retry: Bool = false) {
         place.settleCheck?.cancel()
         let check = DispatchWorkItem {
-            guard followsNewest, !isAtBottom, place.heldRow == nil, timeline.focusedEvent == nil else { return }
+            guard followsNewest, !isAtEnd, place.heldRow == nil, timeline.focusedEvent == nil else { return }
             TimelineLog.log.notice("The newest message was out of view while following it, \(shownRows.count, privacy: .public) rows drawn: going back to it\(retry ? " again" : "", privacy: .public)")
             jump(proxy, to: Self.bottomID, anchor: .bottom)
             if !retry { settleOnNewest(proxy, retry: true) }
