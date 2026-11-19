@@ -1,0 +1,18 @@
+diff --git a/crates/matrix-sdk-ui/src/timeline/controller/mod.rs b/crates/matrix-sdk-ui/src/timeline/controller/mod.rs
+index aa89640..9d04ec4 100644
+--- a/crates/matrix-sdk-ui/src/timeline/controller/mod.rs
++++ b/crates/matrix-sdk-ui/src/timeline/controller/mod.rs
+@@ -352,6 +352,13 @@ pub fn default_event_filter(event: &AnySyncTimelineEvent, rules: &RoomVersionRul
+                         // event will be updated to reflect the decline.
+                         AnyMessageLikeEventContent::RtcDecline(_) => false,
+ 
++                        // How a one-to-one call went (answered, declined, ended),
++                        // as items of their own (`MsgLikeKind::Other`), so the
++                        // app can say so by the call's invite.
++                        AnyMessageLikeEventContent::CallAnswer(_)
++                        | AnyMessageLikeEventContent::CallReject(_)
++                        | AnyMessageLikeEventContent::CallHangup(_) => true,
++
+                         _ => false,
+                     }
+                 }

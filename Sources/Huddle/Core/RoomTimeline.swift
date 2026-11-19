@@ -292,6 +292,10 @@ final class RoomTimeline {
     @ObservationIgnored private var lastRoomReceipt: String?
     /// A two-person direct chat shows ticks on your messages; other rooms show who has read.
     @ObservationIgnored private(set) var isOneToOne = false
+    /// Just two people in the room, direct chat or not: a call there is one person calling the other.
+    @ObservationIgnored private var hasTwoPeople = false
+    /// One-to-one calls' events met so far, by event ID: read once each from the event itself.
+    @ObservationIgnored private var callEvents: [String: CallEvent] = [:]
     /// Names and avatars for read receipts, learned from messages and fetched for the rest.
     @ObservationIgnored private var profiles: [String: (name: String, avatarURL: String?)] = [:]
     @ObservationIgnored private var requestedProfiles: Set<String> = []
@@ -474,6 +478,7 @@ final class RoomTimeline {
             }
             let isDirect = await room.isDirect()
             isOneToOne = isDirect && room.activeMembersCount() <= 2
+            hasTwoPeople = room.activeMembersCount() <= 2
             isLoading = false
             for await diffs in stream {
                 for diff in diffs { items.apply(diff.diff) }
@@ -496,15 +501,51 @@ final class RoomTimeline {
         return latest > 0 ? Date(matrixTimestamp: latest) : .now
     }
 
+    /// A call event, read from the event the first time it's met.
+    private func callEvent(_ kind: CallEvent.Kind, _ event: EventTimelineItem) -> CallEvent {
+        guard case .eventId(let eventID) = event.eventOrTransactionId else { return CallEvent(kind: kind, event: event) }
+        if let known = callEvents[eventID] { return known }
+        let callEvent = CallEvent(kind: kind, event: event)
+        callEvents[eventID] = callEvent
+        return callEvent
+    }
+
     private func rebuildRows() {
         var rows: [TimelineRow] = []
         rows.reserveCapacity(items.count)
         var previous: MessageRow?
         var lastMessageDate: Date?
         let pinned = Set(pinnedEventIDs)
+        // How each one-to-one call went, for its line: from its answer, decline and end, which
+        // aren't shown themselves.
+        // Rows of this account's own doing, which a read marker isn't about.
+        var ownRows: Set<String> = []
+        let callOutcomes = CallHistory.outcomes(of: items.compactMap { item in
+            guard let event = item.asEvent(), let kind = CallEvent.kind(of: event.content), kind != .invite else { return nil }
+            return callEvent(kind, event)
+        })
         for item in items {
             let id = item.uniqueId().id
             if let event = item.asEvent() {
+                if event.isOwn { ownRows.insert(id) }
+                if let kind = CallEvent.kind(of: event.content) {
+                    guard kind == .invite else { continue }
+                    let invite = callEvent(.invite, event)
+                    previous = nil
+                    rows.append(TimelineRow(id: id, kind: .notice(CallHistory.line(
+                        for: invite, outcome: invite.callID.flatMap { callOutcomes[$0] },
+                        callerName: event.senderProfile.name(fallback: event.sender), isOwn: event.isOwn,
+                        ownUserID: ownUserID))))
+                    continue
+                }
+                if case .rtcNotification(_, let declinedBy, let activeMembers, _, _) = event.content {
+                    previous = nil
+                    rows.append(TimelineRow(id: id, kind: .notice(CallHistory.line(
+                        callerName: event.senderProfile.name(fallback: event.sender), isOwn: event.isOwn,
+                        isOneToOne: hasTwoPeople, declinedBy: declinedBy, activeMembers: activeMembers,
+                        ownUserID: ownUserID))))
+                    continue
+                }
                 switch TimelineRow.Kind(event: event, ownUserID: ownUserID, name: displayName(for:)) {
                 case .message(var message):
                     message.isPinned = message.eventID.map(pinned.contains) ?? false
@@ -552,11 +593,24 @@ final class RoomTimeline {
            case .message(let message) = first.kind, message.eventID == threadRoot {
             hasMoreHistory = false
         }
-        // A read marker with no message under it is noise. What followed it may be hidden here
-        // (thread replies, reactions), leaving only date dividers or nothing at all.
+        // A read marker with nothing new under it is noise. What followed it may be hidden here
+        // (thread replies, reactions, a call's end), leaving only date dividers, nothing at all,
+        // or only what this account did itself.
         if let marker = rows.lastIndex(where: { if case .readMarker = $0.kind { true } else { false } }),
-           !rows[(marker + 1)...].contains(where: { if case .dateDivider = $0.kind { false } else { true } }) {
+           !rows[(marker + 1)...].contains(where: { row in
+               if case .dateDivider = row.kind { return false }
+               return !ownRows.contains(row.id)
+           }) {
             rows.remove(at: marker)
+        }
+        // A date with nothing under it, every event of that day being one not shown (a call's
+        // end just after midnight, say).
+        rows = rows.indices.compactMap { index in
+            guard case .dateDivider = rows[index].kind else { return rows[index] }
+            let next = rows[(index + 1)...].first { if case .readMarker = $0.kind { false } else { true } }
+            guard let next else { return nil }
+            if case .dateDivider = next.kind { return nil }
+            return rows[index]
         }
 
         if threadRoot == nil, !isPinnedList {
@@ -1114,6 +1168,8 @@ extension TimelineRow.Kind {
     /// Nil for events not worth a row (join rules and other housekeeping state; of power
     /// levels, only changes to people's roles get one). `name` gives a person's name by ID.
     init?(event: EventTimelineItem, ownUserID: String, name: (String) -> String = { $0.matrixLocalpart }) {
+        // A call's answer, decline and end are told on its invite's line (`CallHistory`).
+        if let kind = CallEvent.kind(of: event.content), kind != .invite { return nil }
         let senderName = event.senderProfile.name(fallback: event.sender)
         guard case .msgLike(let content) = event.content else {
             if case .state(_, .roomPowerLevels(_, _, let users, let previousUsers, let thresholds, _)) = event.content {
@@ -1379,8 +1435,11 @@ extension TimelineItemContent {
             }
             let line = text.replacingOccurrences(of: "\n", with: " ")
             return sender.map { "\($0): \(line)" } ?? line
-        case .callInvite, .rtcNotification:
-            // In a direct chat, as its messages are, without the name the chat already has.
+        case .callInvite:
+            // A one-to-one call, over by the time anyone reads this. In a direct chat, as its
+            // messages are, without the name the chat already has.
+            return sender.map { "\($0) called" } ?? "Called you"
+        case .rtcNotification:
             return sender.map { "\($0) started a call" } ?? "Started a call"
         case .roomMembership(let userID, let displayName, let change, _):
             let target = displayName ?? userID
