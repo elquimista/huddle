@@ -58,6 +58,8 @@ struct TimelineView: View {
     @State private var editTarget: EditTarget?
     /// What was in the composer when editing began, put back when it ends.
     @State private var stashedDraft = StashedDraft()
+    /// Text just put back in the composer, rather than typed: it doesn't say you're typing.
+    @State private var restoredDraft: String?
     /// Whether the newest message was being followed when editing began, to go back to it after.
     @State private var followedBeforeEdit = false
     /// Set when editing ends to bring the conversation back to its newest message.
@@ -204,6 +206,12 @@ struct TimelineView: View {
                         if row.id == threadRootRowID {
                             RepliesDivider(count: replyCount)
                         }
+                    }
+                    // Under the newest message, like the next one on its way. Only for someone
+                    // who shares their own typing, as in most messaging apps.
+                    if account?.sharesTyping ?? true, !timeline.typists.isEmpty {
+                        TypingRow(typists: timeline.typists)
+                            .padding(.top, 6)
                     }
                     // The very last thing in the scroll view, with nothing below it: scrolling to it
                     // is scrolling to the end. The gap under the newest message sits above it.
@@ -528,6 +536,7 @@ struct TimelineView: View {
             pasteInterceptor.stop()
             typeToCompose.stop()
             AudioPlayback.shared.stop(owner: timeline)
+            timeline.setTyping(false)
             let timeline = timeline
             Task { await timeline.leave() }
         }
@@ -734,6 +743,7 @@ struct TimelineView: View {
                             suggestionIndex = 0
                             if mentionQuery != dismissedQuery { dismissedQuery = nil }
                             if mentionQuery != nil { Task { await timeline.loadMembers() } }
+                            noteTyping()
                         }
                 }
                 .padding(.horizontal, 10)
@@ -773,6 +783,15 @@ struct TimelineView: View {
                 }
             }
         }
+    }
+
+    /// Tells the room whether you're writing: while there's text you typed in the composer
+    /// (sending clears it), and not while editing an earlier message.
+    private func noteTyping() {
+        defer { restoredDraft = nil }
+        let isWriting = editTarget == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if isWriting, draft == restoredDraft { return }
+        timeline.setTyping(isWriting)
     }
 
     private var canSend: Bool {
@@ -1031,6 +1050,7 @@ struct TimelineView: View {
         if followedBeforeEdit { returnsToNewest = true }
         followedBeforeEdit = false
         draft = stash.text
+        restoredDraft = stash.text
         composedMentions = stash.mentions
         replyTarget = stash.reply
         stagedImages = stash.images

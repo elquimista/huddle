@@ -185,6 +185,20 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var roomHandles: [String: Room] = [:]
     @ObservationIgnored private var timelines: [String: RoomTimeline] = [:]
     @ObservationIgnored private var probes: [String: RoomPreviewProbe] = [:]
+    /// Who else is typing in each room. Followed in every room from the start, not only open
+    /// ones: the server says only when the typists change, so a room opened while someone is
+    /// typing would otherwise not know until they stopped.
+    @ObservationIgnored private var typingUserIDs: [String: [String]] = [:]
+    /// Whether people see when this account is typing, and it sees when they are. Element's
+    /// setting, kept in the account's data; changed with `setSharesTyping`, which saves it there.
+    var sharesTyping = true
+    @ObservationIgnored var typingSettingTask: Task<Void, Never>?
+    @ObservationIgnored var typingSettingObserver: NSObjectProtocol?
+    /// The setting as just changed here, until the account's copy of its data catches up.
+    @ObservationIgnored var typingSettingSaved: (value: Bool, date: Date)?
+    @ObservationIgnored private var typingHandles: [String: TaskHandle] = [:]
+    @ObservationIgnored private var typingUpdates: AsyncStream<(roomID: String, userIDs: [String])>.Continuation?
+    @ObservationIgnored private var typingTask: Task<Void, Never>?
     @ObservationIgnored private var visibleRooms: Set<String> = []
     @ObservationIgnored private var subscribedRooms: Set<String> = []
     @ObservationIgnored private var subscriptionTask: Task<Void, Never>?
@@ -290,6 +304,7 @@ final class AccountSession: Identifiable {
             startError = nil
             ownPresence.start()
             presence.start()
+            followTypingSetting()
         } catch {
             startError = error.actionMessage
         }
@@ -340,6 +355,11 @@ final class AccountSession: Identifiable {
         verificationFlow.disconnect()
         historyIndexer.stop()
         subscriptionTask?.cancel()
+        typingHandles.values.forEach { $0.cancel() }
+        typingHandles.removeAll()
+        typingUpdates?.finish()
+        typingTask?.cancel()
+        stopFollowingTypingSetting()
         presence.stop()
         ownPresence.stop()
         probes.values.forEach { $0.stop() }
@@ -475,6 +495,7 @@ final class AccountSession: Identifiable {
         stampNotificationModes(on: &all)
         let previous = allRooms
         allRooms = all
+        followTyping(in: all)
         updateBadges()
         rebuildSections()
         reopenLastRoom()
@@ -929,9 +950,10 @@ final class AccountSession: Identifiable {
             return existing
         }
         guard let room = room(id: roomID) else { return nil }
-        let timeline = RoomTimeline(room: room)
+        let timeline = prepared(RoomTimeline(room: room))
         timeline.onLatestReaction = { [weak self] preview in self?.reactionPreviews[roomID] = preview }
         timeline.onIdentityChanges = { [weak self] changes in self?.applyIdentityChanges(changes) }
+        timeline.setTypingUserIDs(typingUserIDs[roomID] ?? [])
         timelines[roomID] = timeline
         // The open room reports its own reactions now; its probe has nothing to add.
         probes.removeValue(forKey: roomID)?.stop()
@@ -940,10 +962,48 @@ final class AccountSession: Identifiable {
         return timeline
     }
 
+    /// Follows who is typing in each of these rooms, and stops for rooms no longer listed. Every
+    /// room's news comes down one stream, so it's taken in the order it came.
+    private func followTyping(in rooms: [RoomSummary]) {
+        if typingUpdates == nil {
+            let (stream, continuation) = AsyncStream.makeStream(of: (roomID: String, userIDs: [String]).self)
+            typingUpdates = continuation
+            typingTask = Task { [weak self] in
+                for await update in stream { self?.setTyping(update.userIDs, in: update.roomID) }
+            }
+        }
+        let listed = Set(rooms.map(\.id))
+        for (roomID, handle) in typingHandles where !listed.contains(roomID) {
+            handle.cancel()
+            typingHandles[roomID] = nil
+            if typingUserIDs.removeValue(forKey: roomID) != nil { timelines[roomID]?.setTypingUserIDs([]) }
+        }
+        guard let updates = typingUpdates else { return }
+        for roomID in listed where typingHandles[roomID] == nil {
+            guard let room = roomHandles[roomID] else { continue }
+            typingHandles[roomID] = room.subscribeToTypingNotifications(listener: TypingObserver { userIDs in
+                updates.yield((roomID, userIDs))
+            })
+        }
+    }
+
+    private func setTyping(_ userIDs: [String], in roomID: String) {
+        let others = userIDs.filter { $0 != userID }
+        guard others != typingUserIDs[roomID] ?? [] else { return }
+        typingUserIDs[roomID] = others.isEmpty ? nil : others
+        timelines[roomID]?.setTypingUserIDs(others)
+    }
+
+    /// What every timeline of this account's needs to know of the account.
+    private func prepared(_ timeline: RoomTimeline) -> RoomTimeline {
+        timeline.sharesTyping = { [weak self] in self?.sharesTyping ?? false }
+        return timeline
+    }
+
     /// A fresh timeline for one thread. The caller owns it and stops it when done.
     func threadTimeline(roomID: String, root: String) -> RoomTimeline? {
         guard let room = room(id: roomID) else { return nil }
-        let thread = RoomTimeline(room: room, threadRoot: root)
+        let thread = prepared(RoomTimeline(room: room, threadRoot: root))
         thread.onRead = { [weak self] in self?.timelines[roomID]?.markThreadSeen(root) }
         return thread
     }
@@ -1022,12 +1082,12 @@ final class AccountSession: Identifiable {
     /// A fresh timeline around one message, for showing it without loading the whole room's
     /// history up to it. The caller owns it and stops it when done.
     func focusedTimeline(roomID: String, eventID: String) -> RoomTimeline? {
-        room(id: roomID).map { RoomTimeline(room: $0, focusedOn: eventID) }
+        room(id: roomID).map { prepared(RoomTimeline(room: $0, focusedOn: eventID)) }
     }
 
     /// A fresh timeline of a room's pinned messages. The caller owns it and stops it when done.
     func pinnedTimeline(roomID: String) -> RoomTimeline? {
-        room(id: roomID).map { RoomTimeline(room: $0, isPinnedList: true) }
+        room(id: roomID).map { prepared(RoomTimeline(room: $0, isPinnedList: true)) }
     }
 
     /// The pinned messages for a room's banner, kept as long as the room's own timeline is

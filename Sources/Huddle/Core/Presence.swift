@@ -54,6 +54,10 @@ struct PresenceInfo: Equatable {
 ///
 /// Sliding sync doesn't carry presence, so it is asked for, person by person, and only while
 /// the app is in front: about every 90 seconds for the room list, every 30 for the open chat.
+///
+/// Only while the user shares their own, as in most messaging apps: someone who doesn't share
+/// whether they're online doesn't see whether others are. Nothing is asked for then, and what was
+/// known is forgotten.
 @MainActor @Observable
 final class PresenceTracker {
     private(set) var people: [String: PresenceInfo] = [:]
@@ -67,6 +71,7 @@ final class PresenceTracker {
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     /// Set when the server says it doesn't do presence; nothing more is asked then.
     @ObservationIgnored private var isUnsupported = false
+    @ObservationIgnored private var isShown = OwnPresence.isSharing
 
     private static let listInterval: TimeInterval = DevHooks.presenceInterval ?? 90
     private static let focusedInterval: TimeInterval = DevHooks.presenceInterval ?? 30
@@ -102,7 +107,23 @@ final class PresenceTracker {
                     self?.poll()
                 }
             },
+            center.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.sharingMayHaveChanged() }
+            },
         ]
+        isShown = OwnPresence.isSharing
+    }
+
+    /// Sharing turned off: everyone's status goes. Turned on: it's asked for again, now.
+    private func sharingMayHaveChanged() {
+        guard OwnPresence.isSharing != isShown else { return }
+        isShown = OwnPresence.isSharing
+        if isShown {
+            fetchedAt.removeAll()
+            poll()
+        } else {
+            people = [:]
+        }
     }
 
     func stop() {
@@ -113,7 +134,7 @@ final class PresenceTracker {
     }
 
     private func poll() {
-        guard !isUnsupported, NSApp.isActive || DevHooks.assumesActive else { return }
+        guard !isUnsupported, isShown, NSApp.isActive || DevHooks.assumesActive else { return }
         let now = Date()
         let due = watched.filter { user in
             guard !inFlight.contains(user) else { return false }
@@ -134,7 +155,7 @@ final class PresenceTracker {
                 self.inFlight.remove(user)
                 self.fetchedAt[user] = Date()
                 switch result {
-                case .info(let info): if self.people[user] != info { self.people[user] = info }
+                case .info(let info): if self.isShown, self.people[user] != info { self.people[user] = info }
                 case .unsupported: self.isUnsupported = true
                 case .failed: break
                 }

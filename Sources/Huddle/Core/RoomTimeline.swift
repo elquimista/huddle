@@ -289,6 +289,17 @@ final class RoomTimeline {
     @ObservationIgnored private var identityTask: Task<Void, Never>?
     /// Told of each change to a member's identity, so what is known of who is verified follows.
     @ObservationIgnored var onIdentityChanges: (([IdentityStatusChange]) -> Void)?
+    /// Room timeline only: who else is writing a message here now, as the account hears it.
+    private(set) var typists: [Typist] = []
+    @ObservationIgnored private var typingUserIDs: [String] = []
+    /// While this account is said to be typing here: when the user last typed.
+    @ObservationIgnored private var lastKeystroke: Date?
+    /// Keeps saying this account is typing, until the user stops.
+    @ObservationIgnored private var typingKeeper: Task<Void, Never>?
+    /// Whether the account shares when it's typing. Nothing is said until the account says so.
+    @ObservationIgnored var sharesTyping: () -> Bool = { false }
+    /// The typing notices sent so far, each after the one before, so the room hears them in order.
+    @ObservationIgnored private var typingNotice: Task<Void, Never>?
 
     init(room: Room, threadRoot: String? = nil, isPinnedList: Bool = false, focusedOn focusedEvent: String? = nil) {
         self.room = room
@@ -312,6 +323,7 @@ final class RoomTimeline {
         infoHandle?.cancel()
         identityTask?.cancel()
         identityHandle?.cancel()
+        typingKeeper?.cancel()
     }
 
     /// Follows the members whose identity changed since it was first seen, or since they were
@@ -339,6 +351,57 @@ final class RoomTimeline {
         }
         // The ones that undo a verification first, then by name.
         .sorted { ($0.wasVerified ? 0 : 1, $0.name) < ($1.wasVerified ? 0 : 1, $1.name) }
+    }
+
+    /// Who else is typing here, from the account, which follows every room.
+    func setTypingUserIDs(_ userIDs: [String]) {
+        typingUserIDs = userIDs
+        updateTypists()
+    }
+
+    private func updateTypists() {
+        let typists = typingUserIDs.map { userID in
+            Typist(userID: userID, name: displayName(for: userID), avatarURL: profiles[userID]?.avatarURL)
+        }
+        if typists != self.typists { self.typists = typists }
+    }
+
+    /// Tells the room whether this account is writing a message (for each keystroke, or when
+    /// the message is sent or cleared), if the user shares that.
+    func setTyping(_ isTyping: Bool) {
+        if isTyping {
+            guard sharesTyping(), !isPinnedList else { return }
+            lastKeystroke = .now
+            if typingKeeper == nil { typingKeeper = Task { [weak self] in await self?.keepTyping() } }
+        } else if let keeper = typingKeeper {
+            keeper.cancel()
+            typingKeeper = nil
+            lastKeystroke = nil
+            sendTypingNotice(false)
+        }
+    }
+
+    /// The room forgets that someone is typing after four seconds, and the SDK says it again
+    /// only once three have passed: so it's said every 3.4 seconds, without gaps, until the user
+    /// has stopped for a few seconds; then that they stopped.
+    private func keepTyping() async {
+        while !Task.isCancelled, sharesTyping(),
+              let last = lastKeystroke, Date.now.timeIntervalSince(last) < 4 {
+            sendTypingNotice(true)
+            try? await Task.sleep(for: .seconds(3.4))
+        }
+        guard !Task.isCancelled else { return }
+        typingKeeper = nil
+        lastKeystroke = nil
+        sendTypingNotice(false)
+    }
+
+    private func sendTypingNotice(_ isTyping: Bool) {
+        let previous = typingNotice
+        typingNotice = Task { [room] in
+            await previous?.value
+            try? await room.typingNotice(isTyping: isTyping)
+        }
     }
 
     /// Keeps the pinned messages and this account's permissions up to date.
@@ -610,6 +673,7 @@ final class RoomTimeline {
             self.nameVersion += 1
             self.rebuildRows()
             if self.identityStates[userID] != nil { self.updateIdentityWarnings() }
+            if self.typingUserIDs.contains(userID) { self.updateTypists() }
         }
     }
 

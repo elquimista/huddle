@@ -383,8 +383,9 @@ private struct PrivacySettingsTab: View {
                     Text("Show when I’m online")
                     Text("People in your direct chats see when you’re online or away.")
                 }
+                TypingSharingRows(accounts: store.accounts)
             } footer: {
-                SectionNote(text: "Some servers don’t share anyone’s online status.")
+                SectionNote(text: "Sharing goes both ways: turn one off and you won’t see it from others either. Some servers don’t share anyone’s online status.")
             }
             Section {
                 Toggle(isOn: $indexesFullHistory) {
@@ -420,6 +421,67 @@ private struct PrivacySettingsTab: View {
         .onChange(of: indexesFullHistory) { _, on in
             for account in store.accounts {
                 if on { account.historyIndexer.start(for: account) } else { account.historyIndexer.stop() }
+            }
+        }
+    }
+}
+
+/// Element's own setting, kept with each account on the server: one switch for one account, or
+/// one for each.
+private struct TypingSharingRows: View {
+    let accounts: [AccountSession]
+
+    var body: some View {
+        if accounts.count == 1, let account = accounts.first {
+            TypingSharingToggle(account: account) {
+                Text("Show when I’m typing")
+                Text("People in a room see when you’re writing a message there. Saved to your account, so Element follows it too.")
+            }
+        } else if !accounts.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Show when I’m typing")
+                Text("People in a room see when you’re writing a message there. Saved to each account, so Element follows it too.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(accounts) { account in
+                TypingSharingToggle(account: account) {
+                    HStack(spacing: 8) {
+                        AvatarView(media: account.media, url: account.avatarURL,
+                                   name: account.displayName ?? account.userID, seed: account.userID, size: 20)
+                        Text(account.displayName ?? account.userID.matrixLocalpart)
+                        Text(account.userID)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct TypingSharingToggle<Label: View>: View {
+    let account: AccountSession
+    @ViewBuilder let label: Label
+    @State private var failure: String?
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { account.sharesTyping }, set: save)) {
+            label
+            if let failure {
+                Text(failure).foregroundStyle(.red)
+            }
+        }
+    }
+
+    private func save(_ shares: Bool) {
+        failure = nil
+        Task {
+            do {
+                try await account.setSharesTyping(shares)
+            } catch {
+                failure = "Couldn’t save: \(error.actionMessage)"
             }
         }
     }
