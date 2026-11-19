@@ -103,12 +103,12 @@ private struct RoomInfoContent: View {
             Button("Turn On") { run { try await details.turnOnEncryption() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("From now on, only the people in this \(noun.lowercased()) can read its messages. Encryption can't be turned off again.")
+            Text("From now on, only the people in this \(noun.lowercased()) can read its messages. Encryption can’t be turned off again.")
         }
         .confirmationDialog("Leave “\(details.name)”?", isPresented: $asksToLeave) {
             Button("Leave", role: .destructive) { run { try await account.leave(roomID: details.roomID) } }
         } message: {
-            Text("You'll stop getting its messages, and may need an invitation to come back.")
+            Text("You’ll stop getting its messages, and may need an invitation to come back.")
         }
         .confirmationDialog(removalQuestion, isPresented: Binding(
             get: { removing != nil }, set: { if !$0 { removing = nil } }
@@ -116,8 +116,8 @@ private struct RoomInfoContent: View {
             Button(member.isInvited ? "Withdraw Invitation" : "Remove", role: .destructive) { remove(member) }
         } message: { member in
             Text(member.isInvited
-                 ? "They won't be able to join with it."
-                 : "They'll stop getting its messages, and will see that you removed them.")
+                 ? "They won’t be able to join with it."
+                 : "They’ll stop getting its messages, and will see that you removed them.")
         }
         .confirmationDialog(roleChangeQuestion, isPresented: Binding(
             get: { roleChange != nil }, set: { if !$0 { roleChange = nil } }
@@ -128,8 +128,8 @@ private struct RoomInfoContent: View {
             }
         } message: { change in
             Text(change.isOwnAccount
-                 ? "You can't undo this. Only someone whose role is above \(change.choice.title) could change it back."
-                 : "\(change.member.name) will have as much power as you, so you won't be able to change their role or remove them later.")
+                 ? "You can’t undo this. Only someone whose role is above \(change.choice.title) could change it back."
+                 : "\(change.member.name) will have as much power as you, so you won’t be able to change their role or remove them later.")
         }
         .alert(actionFailure?.title ?? "", isPresented: Binding(
             get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } }
@@ -266,7 +266,7 @@ private struct RoomInfoContent: View {
                 Text(details.isEncrypted ? "Encrypted" : "Not encrypted")
                 Text(details.isEncrypted
                      ? "Only the people in this \(noun.lowercased()) can read its messages."
-                     : "Your server can read this \(noun.lowercased())'s messages.")
+                     : "Your server can read this \(noun.lowercased())’s messages.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -292,7 +292,7 @@ private struct RoomInfoContent: View {
                 do {
                     try await account.setNotificationMode(mode, for: details.roomID)
                 } catch {
-                    actionFailure = ActionFailure(title: "Couldn't Change Notifications", message: error.actionMessage)
+                    actionFailure = ActionFailure(title: "Couldn’t Change Notifications", message: error.actionMessage)
                 }
             }
         }
@@ -355,7 +355,7 @@ private struct RoomInfoContent: View {
     private var removalQuestion: String {
         guard let removing else { return "" }
         return removing.isInvited
-            ? "Withdraw \(removing.name)'s invitation?"
+            ? "Withdraw \(removing.name)’s invitation?"
             : "Remove \(removing.name) from “\(details.name)”?"
     }
 
@@ -365,7 +365,7 @@ private struct RoomInfoContent: View {
                 try await details.remove(member.userID)
             } catch {
                 actionFailure = ActionFailure(
-                    title: member.isInvited ? "Couldn't Withdraw the Invitation" : "Couldn't Remove \(member.name)",
+                    title: member.isInvited ? "Couldn’t Withdraw the Invitation" : "Couldn’t Remove \(member.name)",
                     message: error.actionMessage)
             }
         }
@@ -389,7 +389,7 @@ private struct RoomInfoContent: View {
                 try await details.setPowerLevel(choice.level, for: member.userID)
             } catch {
                 actionFailure = ActionFailure(
-                    title: details.isOwnAccount(member) ? "Couldn't Change Your Role" : "Couldn't Change \(member.name)'s Role",
+                    title: details.isOwnAccount(member) ? "Couldn’t Change Your Role" : "Couldn’t Change \(member.name)’s Role",
                     message: error.actionMessage)
             }
         }

@@ -59,7 +59,7 @@ enum AvatarImageError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unreadable: "That picture couldn't be read. Try a JPEG, PNG or HEIC image."
+        case .unreadable: "That picture couldn’t be read. Try a JPEG, PNG or HEIC image."
         }
     }
 }

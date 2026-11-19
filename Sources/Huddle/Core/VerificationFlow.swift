@@ -331,7 +331,7 @@ final class VerificationFlow {
             }
         case .failed:
             guard step.isActive else { return }
-            step = .ended(.failed("The devices couldn't agree on how to verify. Try again."))
+            step = .ended(.failed("The devices couldn’t agree on how to verify. Try again."))
         case .cancelled:
             guard step.isActive else { return }
             let info = (sasStarted ? controller?.sasCancelInfo() : nil) ?? controller?.requestCancelInfo()

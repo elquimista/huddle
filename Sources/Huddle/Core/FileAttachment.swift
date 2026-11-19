@@ -97,7 +97,7 @@ enum FilePreparationError: Error, Equatable {
 
     var message: String {
         switch self {
-        case .unreadable(let name): "“\(name)” couldn't be read."
+        case .unreadable(let name): "“\(name)” couldn’t be read."
         case .folder(let name): "“\(name)” is a folder. Compress it first to send it as one file."
         case .empty(let name): "“\(name)” is empty."
         case .tooLarge(let name, let limit):

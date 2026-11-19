@@ -84,7 +84,7 @@ enum RecoveryKeyKeeper {
                 done(url)
             } else {
                 let alert = NSAlert()
-                alert.messageText = "The recovery key couldn't be saved."
+                alert.messageText = "The recovery key couldn’t be saved."
                 alert.informativeText = "Choose another place, or copy it instead."
                 alert.runModal()
                 done(nil)

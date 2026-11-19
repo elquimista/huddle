@@ -137,7 +137,7 @@ struct RoomListView: View {
               },
               delete: { deleting = $0 },
               setNotifications: { roomID, mode in
-                  run(failing: "Couldn't Change Notifications") { try await account.setNotificationMode(mode, for: roomID) }
+                  run(failing: "Couldn’t Change Notifications") { try await account.setNotificationMode(mode, for: roomID) }
               })
     }
 
@@ -151,7 +151,7 @@ struct RoomListView: View {
         }
     }
 
-    private func run(failing title: String = "Couldn't Change the Sections", _ work: @escaping () async throws -> Void) {
+    private func run(failing title: String = "Couldn’t Change the Sections", _ work: @escaping () async throws -> Void) {
         Task {
             do { try await work() } catch { failure = Failure(title: title, message: error.actionMessage) }
         }
@@ -214,7 +214,7 @@ private struct RoomListSection: View {
             }
             .dropDestination(for: String.self) { roomIDs, _ in drop(roomIDs) }
             if section.rooms.isEmpty {
-                Text("Drag rooms here, or use a room's Move To menu.")
+                Text("Drag rooms here, or use a room’s Move To menu.")
                     .font(.callout)
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, 6)
@@ -397,10 +397,10 @@ private struct RoomRowMenu: View {
         if room.isInvite {
             // An invitation's own choices, rather than an empty menu.
             Button("Accept Invitation") {
-                FailureAlert.run("Couldn't Join “\(room.name)”") { try await account.acceptInvite(roomID: room.id) }
+                FailureAlert.run("Couldn’t Join “\(room.name)”") { try await account.acceptInvite(roomID: room.id) }
             }
             Button("Decline Invitation") {
-                FailureAlert.run("Couldn't Decline the Invitation") { try await account.leave(roomID: room.id) }
+                FailureAlert.run("Couldn’t Decline the Invitation") { try await account.leave(roomID: room.id) }
             }
         } else {
             if account.isUnread(room.id) {
@@ -431,7 +431,7 @@ private struct RoomRowMenu: View {
                 if account.editableSpaceIDs.contains(space), account.isDirectChild(room.id, of: space) {
                     Divider()
                     Button("Remove from \(account.spaceName(space))") {
-                        FailureAlert.run("Couldn't Remove the Room") { try await account.removeRoom(room.id, fromSpace: space) }
+                        FailureAlert.run("Couldn’t Remove the Room") { try await account.removeRoom(room.id, fromSpace: space) }
                     }
                 }
             } else {
@@ -457,9 +457,9 @@ private struct SpaceEmptyList: View {
             Label(isEmpty ? "No Rooms Yet" : "No Rooms Joined", systemImage: "square.stack")
         } description: {
             if isEmpty {
-                Text(canEdit ? "Make a room in \(name), or add one you're in." : "Nobody has added a room to \(name) yet.")
+                Text(canEdit ? "Make a room in \(name), or add one you’re in." : "Nobody has added a room to \(name) yet.")
             } else {
-                Text("You haven't joined any of the rooms in \(name) yet.")
+                Text("You haven’t joined any of the rooms in \(name) yet.")
             }
         } actions: {
             if isEmpty {

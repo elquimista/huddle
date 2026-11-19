@@ -116,9 +116,9 @@ extension RoomNotificationMode {
     /// What it does, in a sentence.
     var explanation: String {
         switch self {
-        case .allMessages: "You're notified of every new message."
-        case .mentionsAndKeywordsOnly: "You're notified only when you're mentioned or a keyword of yours comes up."
-        case .mute: "You're never notified, and new messages don't show as unread."
+        case .allMessages: "You’re notified of every new message."
+        case .mentionsAndKeywordsOnly: "You’re notified only when you’re mentioned or a keyword of yours comes up."
+        case .mute: "You’re never notified, and new messages don’t show as unread."
         }
     }
 

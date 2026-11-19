@@ -84,7 +84,7 @@ struct AudioMessageView: View {
 
             if phase == .loading, let output = playback.slowOutput {
                 // The audio is ready; it is the Mac's sound output that hasn't started.
-                Text(output.isEmpty ? "Waiting for your Mac's sound output…" : "Waiting for the sound output “\(output)”…")
+                Text(output.isEmpty ? "Waiting for your Mac’s sound output…" : "Waiting for the sound output “\(output)”…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 4)
@@ -155,7 +155,7 @@ struct AudioMessageView: View {
         case .paused: return "Resume"
         case nil:
             if failure == .download { return "Try again" }
-            if failure != nil { return "Can't be played" }
+            if failure != nil { return "Can’t be played" }
             return audio.isVoice ? "Play voice message" : "Play \(audio.filename)"
         }
     }
@@ -344,8 +344,8 @@ enum AttachmentSaver {
                     try await media.download(source, mimetype: file.mimetype, to: url)
                 } catch {
                     let alert = NSAlert()
-                    alert.messageText = "The file couldn't be saved."
-                    alert.informativeText = "It couldn't be downloaded. Check your connection and try again."
+                    alert.messageText = "The file couldn’t be saved."
+                    alert.informativeText = "It couldn’t be downloaded. Check your connection and try again."
                     alert.runModal()
                 }
             }
@@ -387,9 +387,9 @@ enum AttachmentSaver {
                     try? url.setResourceValues(values)
                 } catch {
                     let alert = NSAlert()
-                    alert.messageText = "The \(kind) couldn't be saved."
+                    alert.messageText = "The \(kind) couldn’t be saved."
                     alert.informativeText = (error as? AudioLoadError) == .download
-                        ? "It couldn't be downloaded. Check your connection and try again."
+                        ? "It couldn’t be downloaded. Check your connection and try again."
                         : error.localizedDescription
                     alert.runModal()
                 }

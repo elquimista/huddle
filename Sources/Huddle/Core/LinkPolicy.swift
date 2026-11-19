@@ -92,7 +92,7 @@ enum LinkPolicy {
     @MainActor
     private static func refuse(_ url: URL) {
         let alert = NSAlert()
-        alert.messageText = "Huddle Doesn't Open This Kind of Link"
+        alert.messageText = "Huddle Doesn’t Open This Kind of Link"
         alert.informativeText = "It would open another app:\n\n\(url.absoluteString)\n\n"
             + "Links in messages open only web pages and email."
         alert.addButton(withTitle: "OK")

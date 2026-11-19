@@ -144,13 +144,13 @@ enum PasswordChangeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .wrongPassword:
-            "That password isn't right."
+            "That password isn’t right."
         case .needsMoreThanPassword:
-            "Your server asks for more than your password for this. Do it on your server's website instead."
+            "Your server asks for more than your password for this. Do it on your server’s website instead."
         case .noAccountPage:
-            "Your server doesn't have an account page."
+            "Your server doesn’t have an account page."
         case .refused(let message):
-            message.map { "Your server didn't accept it: \($0)" } ?? "Your password couldn't be changed."
+            message.map { "Your server didn’t accept it: \($0)" } ?? "Your password couldn’t be changed."
         }
     }
 }

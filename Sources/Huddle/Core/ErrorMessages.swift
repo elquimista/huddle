@@ -12,7 +12,7 @@ extension Error {
                 case .forbidden: return "Incorrect username or password."
                 case .limitExceeded: return "Too many attempts. Wait a moment and try again."
                 case .unknownToken: return "Your session has expired. Sign in again."
-                case .connectionFailed, .connectionTimeout: return "Couldn't reach the server. Check your connection."
+                case .connectionFailed, .connectionTimeout: return "Couldn’t reach the server. Check your connection."
                 default: return message
                 }
             case .Generic(let message, _): return message
@@ -20,18 +20,18 @@ extension Error {
             }
         case let error as ClientBuildError:
             switch error {
-            case .InvalidServerName: return "That doesn't look like a valid server name."
+            case .InvalidServerName: return "That doesn’t look like a valid server name."
             case .ServerUnreachable, .WellKnownLookupFailed, .WellKnownDeserializationError:
-                return "Couldn't find a Matrix homeserver at that address."
+                return "Couldn’t find a Matrix homeserver at that address."
             case .SlidingSync, .SlidingSyncVersion: return LoginError.slidingSyncUnsupported.localizedDescription
             case .WellKnownLookupDisabled(let message), .Sdk(let message),
                  .EventCache(let message), .Generic(let message): return message
             }
         case let error as RecoveryError:
             switch error {
-            case .SecretStorage: return "That recovery key isn't right. Check it and try again."
+            case .SecretStorage: return "That recovery key isn’t right. Check it and try again."
             case .Client(let source): return source.userMessage
-            case .BackupExistsOnServer, .Import: return "Couldn't restore your encryption keys. Try again."
+            case .BackupExistsOnServer, .Import: return "Couldn’t restore your encryption keys. Try again."
             }
         case let error as OAuthError:
             switch error {
@@ -49,7 +49,7 @@ extension Error {
     /// problem.
     var actionMessage: String {
         if let error = self as? ClientError, case .MatrixApi(.forbidden, _, let message, _) = error {
-            return message.isEmpty ? "You don't have permission to do that." : message
+            return message.isEmpty ? "You don’t have permission to do that." : message
         }
         if let error = self as? RoomNotAddedToSpace { return error.underlying.actionMessage }
         return userMessage

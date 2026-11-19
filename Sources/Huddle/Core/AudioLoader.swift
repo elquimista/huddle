@@ -57,8 +57,8 @@ enum AudioLoadError: Error {
 
     var message: String {
         switch self {
-        case .download: "Couldn't load this audio. Click to try again."
-        case .unsupported: "Huddle can't play this audio format."
+        case .download: "Couldn’t load this audio. Click to try again."
+        case .unsupported: "Huddle can’t play this audio format."
         case .tooLong: "This recording is too long to play in Huddle."
         }
     }

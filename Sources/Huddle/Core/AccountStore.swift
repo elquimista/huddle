@@ -116,7 +116,7 @@ enum LoginError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .slidingSyncUnsupported:
-            "This homeserver doesn't support native sliding sync (MSC4186), which Huddle requires."
+            "This homeserver doesn’t support native sliding sync (MSC4186), which Huddle requires."
         case .alreadyLoggedIn(let userID):
             "\(userID) is already signed in."
         case .noSupportedLoginMethod:

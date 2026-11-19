@@ -186,8 +186,8 @@ struct NewMessageSheet: View {
                     Toggle("End-to-end encryption", isOn: $isEncrypted)
                         .toggleStyle(.checkbox)
                         .help(isEncrypted
-                              ? "Only the people in the chat can read its messages. This can't be turned off later."
-                              : "Your server will be able to read this chat's messages. Encryption can be turned on later, but not off.")
+                              ? "Only the people in the chat can read its messages. This can’t be turned off later."
+                              : "Your server will be able to read this chat’s messages. Encryption can be turned on later, but not off.")
                 }
                 if let failure {
                     Label(failure, systemImage: "exclamationmark.triangle.fill")
@@ -342,7 +342,7 @@ struct NewMessageSheet: View {
                     Label("Nobody Found", systemImage: "person.crop.circle.badge.questionmark")
                 } description: {
                     Text(searchFailed
-                         ? "Your server's directory can't be searched right now. Type their full Matrix ID instead."
+                         ? "Your server’s directory can’t be searched right now. Type their full Matrix ID instead."
                          : "Your server only finds people you share a room with. Type their full Matrix ID, like @name:matrix.org.")
                 }
             }
@@ -452,7 +452,7 @@ struct NewMessageSheet: View {
                 dismiss()
                 account.showRoom(roomID)
             } catch {
-                failure = "Couldn't start the chat: \(error.actionMessage)"
+                failure = "Couldn’t start the chat: \(error.actionMessage)"
             }
         }
     }
@@ -474,8 +474,8 @@ struct NewMessageSheet: View {
             withAnimation(.snappy(duration: 0.15)) { chosen.removeAll { !failed.contains($0.userID) } }
             let name = people.first { $0.userID == first.userID }?.name ?? first.userID
             failure = failures.count == 1
-                ? "Couldn't invite \(name): \(first.error.actionMessage)"
-                : "Couldn't invite \(failures.count) people: \(first.error.actionMessage)"
+                ? "Couldn’t invite \(name): \(first.error.actionMessage)"
+                : "Couldn’t invite \(failures.count) people: \(first.error.actionMessage)"
         }
     }
 

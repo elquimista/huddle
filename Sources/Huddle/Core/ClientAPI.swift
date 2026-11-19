@@ -38,8 +38,8 @@ enum ClientAPIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .badAddress: "Your server's address isn't right."
-        case .refused(_, let message): message ?? "Your server didn't accept the change."
+        case .badAddress: "Your server’s address isn’t right."
+        case .refused(_, let message): message ?? "Your server didn’t accept the change."
         }
     }
 }

@@ -500,7 +500,7 @@ struct TimelineView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("It will be removed for everyone in the room. This can't be undone.")
+            Text("It will be removed for everyone in the room. This can’t be undone.")
         }
         .sheet(item: $forwarding) { request in
             if let account {
@@ -858,7 +858,7 @@ struct TimelineView: View {
                 switch result {
                 case .success(let image): stagedImages.append(image)
                 case .failure(let error):
-                    imageNotice = (error as? ImagePreparationError)?.message ?? "That image couldn't be read."
+                    imageNotice = (error as? ImagePreparationError)?.message ?? "That image couldn’t be read."
                 }
             }
             composerFocused = true
@@ -902,7 +902,7 @@ struct TimelineView: View {
                 do {
                     stagedFiles.append(try await FilePreparer.prepare(url, uploadLimit: limit))
                 } catch {
-                    imageNotice = (error as? FilePreparationError)?.message ?? "“\(url.lastPathComponent)” couldn't be read."
+                    imageNotice = (error as? FilePreparationError)?.message ?? "“\(url.lastPathComponent)” couldn’t be read."
                 }
             }
             composerFocused = true

@@ -161,6 +161,6 @@ extension ReplyPreview {
 
     /// What to say in place of the message while it loads, or if it can't be had.
     var placeholder: String {
-        state == .loading ? "Loading message…" : "The original message isn't available"
+        state == .loading ? "Loading message…" : "The original message isn’t available"
     }
 }

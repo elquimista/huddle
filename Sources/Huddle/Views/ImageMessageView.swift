@@ -167,7 +167,7 @@ struct ImageMessageView: View {
         VStack(spacing: 4) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 16))
-            Text("Couldn't load image")
+            Text("Couldn’t load image")
                 .font(.caption.weight(.medium))
             Text("Click to try again")
                 .font(.caption2)

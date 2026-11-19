@@ -169,8 +169,8 @@ private struct RailSpaceButton: View {
             Divider()
             Button("Leave Space…") { account.sheet = .leaveSpace(space.roomId) }
         case .invite(let invite):
-            Button("Accept Invitation") { FailureAlert.run("Couldn't Join the Space") { try await account.acceptSpaceInvite(invite.id) } }
-            Button("Decline Invitation") { FailureAlert.run("Couldn't Decline the Invitation") { try await account.declineSpaceInvite(invite.id) } }
+            Button("Accept Invitation") { FailureAlert.run("Couldn’t Join the Space") { try await account.acceptSpaceInvite(invite.id) } }
+            Button("Decline Invitation") { FailureAlert.run("Couldn’t Decline the Invitation") { try await account.declineSpaceInvite(invite.id) } }
         }
     }
 }
@@ -212,7 +212,7 @@ struct SpaceListHeader: View {
             .buttonStyle(.plain)
             .onHover { isHovering = $0 }
             .help("Browse every room in this space")
-            .accessibilityHint("Shows every room in this space, including ones you haven't joined")
+            .accessibilityHint("Shows every room in this space, including ones you haven’t joined")
             Menu {
                 Button("Browse Rooms") { account.browse(space: spaceID) }
                 if account.editableSpaceIDs.contains(spaceID) {
@@ -533,13 +533,13 @@ private struct SpaceLevelView: View {
                     .frame(maxWidth: .infinity)
                     .padding(40)
             } else if let error = directory.error {
-                ContentUnavailableView("Can't Show This Space", systemImage: "exclamationmark.triangle",
+                ContentUnavailableView("Can’t Show This Space", systemImage: "exclamationmark.triangle",
                                        description: Text(error))
                     .padding(.top, 30)
             } else {
                 ContentUnavailableView("No Rooms Yet", systemImage: "square.stack",
                                        description: Text(account.editableSpaceIDs.contains(spaceID)
-                                                         ? "Create a room here, or add rooms you're already in."
+                                                         ? "Create a room here, or add rooms you’re already in."
                                                          : "Nobody has added a room to this space yet."))
                     .padding(.top, 30)
             }
@@ -585,7 +585,7 @@ private struct SpaceLevelView: View {
                     account.selectedRoomID = room.roomId
                 }
             } catch {
-                failure = "Couldn't join \(room.displayName): \(error.actionMessage)"
+                failure = "Couldn’t join \(room.displayName): \(error.actionMessage)"
             }
         }
     }

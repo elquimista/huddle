@@ -219,7 +219,7 @@ private struct NotificationSettingsTab: View {
                 }
                 .disabled(!notificationsEnabled)
             } footer: {
-                SectionNote(text: "Your Matrix account's notification rules decide which rooms notify.")
+                SectionNote(text: "Your Matrix account’s notification rules decide which rooms notify.")
             }
         }
     }
@@ -380,16 +380,16 @@ private struct PrivacySettingsTab: View {
         SettingsForm {
             Section {
                 Toggle(isOn: $sharesPresence) {
-                    Text("Show when I'm online")
-                    Text("People in your direct chats see when you're online or away.")
+                    Text("Show when I’m online")
+                    Text("People in your direct chats see when you’re online or away.")
                 }
             } footer: {
-                SectionNote(text: "Some servers don't share anyone's online status.")
+                SectionNote(text: "Some servers don’t share anyone’s online status.")
             }
             Section {
                 Toggle(isOn: $indexesFullHistory) {
                     Text("Search the full history of encrypted rooms")
-                    Text("Downloads each room's history once, to index it on this Mac.")
+                    Text("Downloads each room’s history once, to index it on this Mac.")
                 }
                 if indexesFullHistory, let progress {
                     SettingRow(title: "Indexing older messages",
@@ -580,7 +580,7 @@ private struct AccountSettingsRow: View {
             }
         case .unverified:
             HStack(spacing: 6) {
-                Label("This Mac isn't verified", systemImage: "exclamationmark.triangle.fill")
+                Label("This Mac isn’t verified", systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .labelStyle(TintedIconLabel(tint: .orange))
@@ -620,7 +620,7 @@ private struct UpdateSettingsTab: View {
                 }
             } footer: {
                 if !updater.isAvailable {
-                    SectionNote(text: "The Dev build doesn't update itself.")
+                    SectionNote(text: "The Dev build doesn’t update itself.")
                 }
             }
             Section {
@@ -638,7 +638,7 @@ private struct UpdateSettingsTab: View {
                 .disabled(!updater.checksAutomatically)
                 Toggle(isOn: $updater.includesBetas) {
                     Text("Include beta versions")
-                    Text("New features sooner, before they're finished.")
+                    Text("New features sooner, before they’re finished.")
                 }
             }
             .disabled(!updater.isAvailable)

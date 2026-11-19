@@ -30,7 +30,7 @@ struct LoginView: View {
                                     removal: .opacity))
 
             ForEach(store.restoreErrors, id: \.self) { error in
-                Text("Couldn't restore \(error)")
+                Text("Couldn’t restore \(error)")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 8)
@@ -112,7 +112,7 @@ struct LoginView: View {
             }
             PrimaryButton(title: "Continue", isBusy: flow.isBusy, action: continueWithServer)
                 .disabled(flow.server.trimmingCharacters(in: .whitespaces).isEmpty)
-            Text("Use your server's name or address,\nlike matrix.org or chat.example.com.")
+            Text("Use your server’s name or address,\nlike matrix.org or chat.example.com.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

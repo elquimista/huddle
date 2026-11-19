@@ -1275,7 +1275,7 @@ extension TimelineItemContent {
             case .unbanned: return "\(who) unbanned \(target)"
             case .kicked: return "\(who) removed \(target)"
             case .invitationRejected: return "\(target) declined the invitation"
-            case .invitationRevoked: return "\(who) withdrew \(target)'s invitation"
+            case .invitationRevoked: return "\(who) withdrew \(target)’s invitation"
             case .knocked: return "\(target) asked to join"
             default: return nil
             }
@@ -1332,7 +1332,7 @@ enum RoleChangeNotice {
             return "\(senderName) made \(target) \(role(new) == "admin" ? "an" : "a") \(role(new))"
         }
         if new < 50, old >= 50 { return "\(senderName) removed \(target) as \(role(old))" }
-        return "\(senderName) changed \(target)'s role"
+        return "\(senderName) changed \(target)’s role"
     }
 
     private static func role(_ level: Int64) -> String {

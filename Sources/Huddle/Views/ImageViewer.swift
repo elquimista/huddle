@@ -219,7 +219,7 @@ struct ImageViewer: View {
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 26))
-                    Text("This image couldn't be loaded.")
+                    Text("This image couldn’t be loaded.")
                     Button("Try Again") { attempt += 1 }
                         .controlSize(.large)
                 }

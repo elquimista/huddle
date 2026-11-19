@@ -133,7 +133,7 @@ struct FileMessageView: View {
             do {
                 try await media.open(file)
             } catch {
-                failure = "It couldn't be downloaded. Check your connection and try again."
+                failure = "It couldn’t be downloaded. Check your connection and try again."
             }
         }
     }

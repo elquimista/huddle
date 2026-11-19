@@ -61,7 +61,7 @@ struct ProfileSheet: View {
                         .textSelection(.enabled)
                 }
             }
-            Text("Your name and picture show in every room you're in.")
+            Text("Your name and picture show in every room you’re in.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -121,7 +121,7 @@ struct ProfileSheet: View {
                 }
                 dismiss()
             } catch {
-                failure = "Couldn't save your profile: \(error.actionMessage)"
+                failure = "Couldn’t save your profile: \(error.actionMessage)"
             }
         }
     }
@@ -195,7 +195,7 @@ struct ChangePasswordSheet: View {
                 if currentIsWrong {
                     GridRow {
                         Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-                        Label("That password isn't right. Try again.", systemImage: "exclamationmark.circle.fill")
+                        Label("That password isn’t right. Try again.", systemImage: "exclamationmark.circle.fill")
                             .font(.callout)
                             .foregroundStyle(.red)
                             // As wide as the field, on more lines if need be.
@@ -228,13 +228,13 @@ struct ChangePasswordSheet: View {
                 Toggle("Sign out of your other devices", isOn: $signsOutOtherDevices)
                     .toggleStyle(.checkbox)
                     .disabled(canChange != true || isChanging)
-                Text("They'll need the new password to sign in again. This Mac stays signed in.")
+                Text("They’ll need the new password to sign in again. This Mac stays signed in.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 20)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let message = mismatch ? "The new passwords don't match." : failure {
+            if let message = mismatch ? "The new passwords don’t match." : failure {
                 Text(message)
                     .font(.callout)
                     .foregroundStyle(.red)
@@ -256,8 +256,8 @@ struct ChangePasswordSheet: View {
     private var managedElsewhere: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(accountPage == nil
-                 ? "Your server doesn't allow changing your password from an app."
-                 : "Your password is managed by your server's sign-in service. Change it on your account page there.")
+                 ? "Your server doesn’t allow changing your password from an app."
+                 : "Your password is managed by your server’s sign-in service. Change it on your account page there.")
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
@@ -337,7 +337,7 @@ func openAccountPage(of account: AccountSession) {
             try await account.openAccountPage()
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Couldn't Open Your Account Page"
+            alert.messageText = "Couldn’t Open Your Account Page"
             alert.informativeText = error.actionMessage
             alert.runModal()
         }

@@ -204,7 +204,7 @@ struct NewRoomSheet: View {
     private var accessNote: String {
         switch access {
         case .spaceMembers: "Anyone in \(account.spaceName(spaceID ?? "")) can find this room and join it. Others need an invitation."
-        case .invited: "People join when they're invited."
+        case .invited: "People join when they’re invited."
         case .anyone: "Anyone can find this room and join it."
         }
     }
@@ -243,8 +243,8 @@ struct NewRoomSheet: View {
                 Section {
                     Toggle("End-to-end encryption", isOn: $isEncrypted)
                 } footer: {
-                    Text(isEncrypted ? "Only the people in the room can read its messages. This can't be turned off later."
-                                     : "The server can read the room's messages. Encryption can be turned on later.")
+                    Text(isEncrypted ? "Only the people in the room can read its messages. This can’t be turned off later."
+                                     : "The server can read the room’s messages. Encryption can be turned on later.")
                         .sheetFootnote()
                 }
             }
@@ -288,7 +288,7 @@ struct NewRoomSheet: View {
                 account.selectedRoomID = roomID
             } catch let error as RoomNotAddedToSpace {
                 createdRoomID = error.roomID
-                failure = "The room was made, but couldn't be put in \(account.spaceName(spaceID ?? "")): \(error.actionMessage)"
+                failure = "The room was made, but couldn’t be put in \(account.spaceName(spaceID ?? "")): \(error.actionMessage)"
             } catch {
                 failure = error.actionMessage
             }
@@ -335,7 +335,7 @@ struct AddRoomsSheet: View {
                 if candidates.rooms.isEmpty && candidates.spaces.isEmpty {
                     if query.isEmpty {
                         ContentUnavailableView("Nothing to Add", systemImage: "square.stack",
-                                               description: Text("Every room you're in is already in this space."))
+                                               description: Text("Every room you’re in is already in this space."))
                     } else {
                         ContentUnavailableView.search(text: query)
                     }
@@ -423,9 +423,9 @@ struct LeaveSpaceSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             SheetTitle(title: "Leave \(name)?",
                        detail: rooms.isEmpty ? "It will no longer be one of your spaces."
-                                             : "It will no longer be one of your spaces. Its rooms you're in stay in your room list unless you leave them too.")
+                                             : "It will no longer be one of your spaces. Its rooms you’re in stay in your room list unless you leave them too.")
             if isLastOwner {
-                Label("You're the only owner of \(name). Once you leave, nobody can change it or add rooms to it.",
+                Label("You’re the only owner of \(name). Once you leave, nobody can change it or add rooms to it.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
                     .foregroundStyle(.orange)
@@ -485,7 +485,7 @@ struct LeaveSpaceSheet: View {
                     Text(room.spaceRoom.displayName)
                         .lineLimit(1)
                     if room.isLastOwner {
-                        Text("You're its only owner")
+                        Text("You’re its only owner")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }

@@ -46,7 +46,7 @@ struct DevicesSheet: View {
                 } else if let loadFailure {
                     Section {
                         VStack(spacing: 10) {
-                            Label("Couldn't Get Your Devices", systemImage: "exclamationmark.triangle")
+                            Label("Couldn’t Get Your Devices", systemImage: "exclamationmark.triangle")
                                 .font(.headline)
                             Text(loadFailure)
                                 .foregroundStyle(.secondary)
@@ -87,7 +87,7 @@ struct DevicesSheet: View {
                                 .disabled(isWorking)
                             }
                             Text(managedByService
-                                 ? "Your server's sign-in service manages your devices: signing one out opens its page."
+                                 ? "Your server’s sign-in service manages your devices: signing one out opens its page."
                                  : "A device signed out needs your password to sign in again, and loses the encryption keys it held. Verified devices were confirmed from one of your trusted devices.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
@@ -119,9 +119,9 @@ struct DevicesSheet: View {
                 .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("Only you see your devices' names.")
+            Text("Only you see your devices’ names.")
         }
-        .alert("Couldn't Rename the Device", isPresented: Binding(get: { renameFailure != nil },
+        .alert("Couldn’t Rename the Device", isPresented: Binding(get: { renameFailure != nil },
                                                                   set: { if !$0 { renameFailure = nil } })) {
             Button("OK") {}
         } message: {
@@ -266,7 +266,7 @@ private struct SignOutSheet: View {
                 // Enabled again before the field takes the cursor back.
                 isWorking = false
                 if case PasswordChangeError.wrongPassword = error {
-                    failure = "That password isn't right. Try again."
+                    failure = "That password isn’t right. Try again."
                     password = ""
                     window?.shake()
                 } else {

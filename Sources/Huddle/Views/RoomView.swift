@@ -266,7 +266,7 @@ private struct InviteView: View {
             Image(systemName: "envelope.open")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text("You're invited to \(name)")
+            Text("You’re invited to \(name)")
                 .font(.title3.weight(.semibold))
             if let error {
                 Text(error).foregroundStyle(.red)

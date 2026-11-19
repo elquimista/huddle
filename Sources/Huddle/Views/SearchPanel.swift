@@ -45,14 +45,14 @@ struct SearchPanelView: View {
             ContentUnavailableView {
                 Label("Search Messages", systemImage: "magnifyingglass")
             } description: {
-                Text("Find messages by the words in them, in encrypted rooms too: they're searched right here on this Mac.")
+                Text("Find messages by the words in them, in encrypted rooms too: they’re searched right here on this Mac.")
             }
         } else if shown.isEmpty {
             if search.isPending || search.isLoading || !search.endReached && search.failure == nil {
                 ProgressView()
                     .controlSize(.small)
             } else if let failure = search.failure {
-                ContentUnavailableView("Can't Search", systemImage: "exclamationmark.triangle",
+                ContentUnavailableView("Can’t Search", systemImage: "exclamationmark.triangle",
                                        description: Text(failure))
             } else {
                 ContentUnavailableView.search(text: search.trimmedQuery)

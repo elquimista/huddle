@@ -157,7 +157,7 @@ enum ImagePreparationError: Error, Equatable {
     var message: String {
         switch self {
         case .notAnImage(let name):
-            return "“\(name)” isn't an image Huddle can send."
+            return "“\(name)” isn’t an image Huddle can send."
         case .tooLarge(let name, let limit):
             let megabytes = ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)
             return "“\(name)” is larger than this server accepts (\(megabytes))."

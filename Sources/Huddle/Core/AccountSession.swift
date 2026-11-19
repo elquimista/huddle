@@ -1058,7 +1058,7 @@ final class AccountSession: Identifiable {
 
     enum RoomError: LocalizedError {
         case unavailable
-        var errorDescription: String? { "That room isn't available." }
+        var errorDescription: String? { "That room isn’t available." }
     }
 
     func threadList(roomID: String) -> RoomThreadList? {
