@@ -90,8 +90,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             UserDefaults.standard.set(Array(notifiedInvites), forKey: "notifiedInvites")
         }
 
-        // Nothing to announce when the conversation is already in front of the user.
-        if NSApp.isActive, store?.selected?.id == account.id, account.selectedRoomID == roomID {
+        // Nothing to announce when the conversation is already in front of the user, or a click
+        // away: Settings in front of it, say, or a picture open over it. But with Huddle's window
+        // out of sight (in the Dock, on another desktop), the alert is all there is to see.
+        if NSApp.isActive, MainWindow.isOnScreen, store?.selected?.id == account.id, account.selectedRoomID == roomID {
             if let threadRoot {
                 if account.sidePanels[roomID] == .thread(threadRoot) { return }
             } else {
@@ -127,10 +129,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center?.add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
     }
 
-    /// A request to verify, when Huddle isn't in front or the account isn't the one showing.
-    /// Clicked, it opens the request.
+    /// A request to verify, when Huddle isn't in front, its window is out of sight, or the
+    /// account isn't the one showing. Clicked, it opens the request.
     func announceVerificationRequest(for account: AccountSession) {
-        if NSApp.isActive, store?.selected?.id == account.id { return }
+        if NSApp.isActive, MainWindow.isOnScreen, store?.selected?.id == account.id { return }
         NSApp.requestUserAttention(.informationalRequest)
         guard let summary = account.verificationFlow.requestSummary else { return }
         let content = UNMutableNotificationContent()

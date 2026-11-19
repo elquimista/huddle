@@ -31,6 +31,14 @@ enum MainWindow {
     static func isShowing(_ window: NSWindow) -> Bool {
         window.identifier?.rawValue.hasPrefix(id) == true && (window.isVisible || window.isMiniaturized)
     }
+
+    /// Whether some of Huddle's window can be seen: not closed, in the Dock, on another desktop
+    /// or wholly covered by other windows.
+    static var isOnScreen: Bool {
+        NSApp.windows.contains { window in
+            window.identifier?.rawValue.hasPrefix(id) == true && window.occlusionState.contains(.visible)
+        }
+    }
 }
 
 /// Window ▸ Huddle (⌘0), as Messages has it. Made with the menus at launch, before there may be
