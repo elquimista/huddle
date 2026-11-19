@@ -65,7 +65,7 @@ private struct RailSpaceButton: View {
     let account: AccountSession
     let kind: Kind
 
-    enum Kind {
+    enum Kind: Equatable {
         case home
         case space(SpaceRoom)
         case invite(RoomSummary)
@@ -73,9 +73,6 @@ private struct RailSpaceButton: View {
 
     /// The corner radius of a space's 34-point square, as `AvatarView` draws it.
     static let corner: CGFloat = 34 * 0.27
-    /// The selected space's ring, and the gap between it and the space's square.
-    private static let ringWidth: CGFloat = 2.5
-    private static let ringGap: CGFloat = 2
 
     /// An invitation open in the main area is the one selected, whatever the list shows.
     private var isBrowsingInvite: Bool {
@@ -100,6 +97,97 @@ private struct RailSpaceButton: View {
         }
     }
 
+    /// The space whose rooms this stands for; nil for Home.
+    private var spaceID: String? {
+        if case .space(let space) = kind { space.roomId } else { nil }
+    }
+
+    var body: some View {
+        let isInvite = if case .invite = kind { true } else { false }
+        let state = isInvite ? nil : account.attention(inSpace: spaceID)
+        RailIcon(kind: kind,
+                 media: account.media,
+                 isSelected: isSelected,
+                 attention: state.map { RailIcon.Attention(count: $0.count, urgent: $0.urgent, hasUnread: $0.hasUnread) },
+                 canEdit: spaceID.map { account.editableSpaceIDs.contains($0) } ?? false,
+                 hasUnreadRooms: !isInvite && account.hasUnreadRooms(inSpace: spaceID),
+                 actions: actions)
+            .equatable()
+    }
+
+    private var actions: RailIcon.Actions {
+        let account = account
+        let kind = kind
+        let spaceID = spaceID
+        return RailIcon.Actions(
+            select: {
+                switch kind {
+                case .home: account.choose(inRail: .home)
+                case .space(let space): account.choose(inRail: .space(space.roomId))
+                case .invite(let invite): account.choose(inRail: .invite(invite.id))
+                }
+            },
+            browse: { if let spaceID { account.browse(space: spaceID) } },
+            newRoom: { if let spaceID { account.sheet = .newRoom(inSpace: spaceID) } },
+            addRooms: { if let spaceID { account.sheet = .addRooms(toSpace: spaceID) } },
+            newSection: { if let spaceID { account.askForNewSection(inSpace: spaceID) } },
+            markAllRead: { account.markAllRead(inSpace: spaceID) },
+            leave: { if let spaceID { account.sheet = .leaveSpace(spaceID) } },
+            accept: {
+                guard case .invite(let invite) = kind else { return }
+                FailureAlert.run("Couldn’t Join the Space") { try await account.acceptSpaceInvite(invite.id) }
+            },
+            decline: {
+                guard case .invite(let invite) = kind else { return }
+                FailureAlert.run("Couldn’t Decline the Invitation") { try await account.declineSpaceInvite(invite.id) }
+            })
+    }
+}
+
+/// A space, Home or an invitation in the rail, drawn from plain values so it redraws only when
+/// one of them changes. Its tooltip is SwiftUI's, which starts over whenever the view it's on is
+/// redrawn: reading the account itself, the icon redrew whenever any room changed, in a busy
+/// account more often than the tooltip's delay, and the tooltip never came.
+private struct RailIcon: View, Equatable {
+    struct Attention: Equatable {
+        var count: Int
+        var urgent: Int
+        var hasUnread: Bool
+    }
+
+    /// What its click and its menu do. Left out of comparing: they do the same each time.
+    struct Actions {
+        let select: () -> Void
+        let browse: () -> Void
+        let newRoom: () -> Void
+        let addRooms: () -> Void
+        let newSection: () -> Void
+        let markAllRead: () -> Void
+        let leave: () -> Void
+        let accept: () -> Void
+        let decline: () -> Void
+    }
+
+    let kind: RailSpaceButton.Kind
+    let media: MediaLoader
+    let isSelected: Bool
+    /// Its rooms' unread state; nil for an invitation.
+    let attention: Attention?
+    /// Whether the account may add rooms to the space.
+    let canEdit: Bool
+    let hasUnreadRooms: Bool
+    let actions: Actions
+
+    static func == (lhs: RailIcon, rhs: RailIcon) -> Bool {
+        lhs.kind == rhs.kind && lhs.media === rhs.media && lhs.isSelected == rhs.isSelected
+            && lhs.attention == rhs.attention && lhs.canEdit == rhs.canEdit && lhs.hasUnreadRooms == rhs.hasUnreadRooms
+    }
+
+    private static var corner: CGFloat { RailSpaceButton.corner }
+    /// The selected space's ring, and the gap between it and the space's square.
+    private static let ringWidth: CGFloat = 2.5
+    private static let ringGap: CGFloat = 2
+
     var body: some View {
         // The selected space has a ring around it, a gap apart, in the text colour: it stands out
         // against a space's picture whatever its colours, as the accent colour would not on one
@@ -120,13 +208,13 @@ private struct RailSpaceButton: View {
             .railBadge(badge)
             .contentShape(RoundedRectangle(cornerRadius: Self.corner + 3, style: .continuous))
             .padding(RailBadge.overhang)
-            .onTapGesture(perform: select)
+            .onTapGesture(perform: actions.select)
             .help(help)
             .contextMenu { menu }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel)
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-            .accessibilityAction(.default, select)
+            .accessibilityAction(.default, actions.select)
     }
 
     @ViewBuilder private var icon: some View {
@@ -140,32 +228,22 @@ private struct RailSpaceButton: View {
                 // compositing group would flatten and darken.
                 .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
         case .space(let space):
-            AvatarView(media: account.media, url: space.avatarUrl, name: space.displayName,
+            AvatarView(media: media, url: space.avatarUrl, name: space.displayName,
                        seed: space.roomId, size: 34, isSquare: true)
         case .invite(let invite):
             // Faded until joined, and marked by its red dot.
-            AvatarView(media: account.media, url: invite.avatarURL, name: invite.name,
+            AvatarView(media: media, url: invite.avatarURL, name: invite.name,
                        seed: invite.id, size: 34, isSquare: true)
                 .opacity(0.5)
         }
     }
 
-    /// The space whose rooms this stands for; nil for Home.
-    private var spaceID: String? {
-        if case .space(let space) = kind { space.roomId } else { nil }
-    }
-
     /// As the account's own badge: rooms with notifications, red when any of them needs
     /// attention now; a grey dot when there is only something unread. An invitation has a red dot.
     private var badge: RailBadge? {
-        switch kind {
-        case .invite:
-            return .dot(.red, size: 10)
-        case .home, .space:
-            let state = account.attention(inSpace: spaceID)
-            if let count = RailBadge.count(urgent: state.urgent, other: state.count) { return count }
-            return state.hasUnread ? .dot(Color(nsColor: .tertiaryLabelColor)) : nil
-        }
+        guard let attention else { return .dot(.red, size: 10) }
+        if let count = RailBadge.count(urgent: attention.urgent, other: attention.count) { return count }
+        return attention.hasUnread ? .dot(Color(nsColor: .tertiaryLabelColor)) : nil
     }
 
     private var help: String {
@@ -181,40 +259,32 @@ private struct RailSpaceButton: View {
         case .invite(let invite): return "Invitation to \(invite.name)"
         case .home, .space:
             let name = if case .space(let space) = kind { space.displayName } else { "Home" }
-            let count = account.attention(inSpace: spaceID).count
+            let count = attention?.count ?? 0
             return count > 0 ? "\(name), \(count) with new messages" : name
-        }
-    }
-
-    private func select() {
-        switch kind {
-        case .home: account.choose(inRail: .home)
-        case .space(let space): account.choose(inRail: .space(space.roomId))
-        case .invite(let invite): account.choose(inRail: .invite(invite.id))
         }
     }
 
     @ViewBuilder private var menu: some View {
         switch kind {
         case .home:
-            Button("Mark All as Read") { account.markAllRead(inSpace: nil) }
-                .disabled(!account.hasUnreadRooms(inSpace: nil))
-        case .space(let space):
-            Button("Browse Rooms") { account.browse(space: space.roomId) }
-            if account.editableSpaceIDs.contains(space.roomId) {
-                Button("New Room…") { account.sheet = .newRoom(inSpace: space.roomId) }
-                Button("Add Existing Rooms…") { account.sheet = .addRooms(toSpace: space.roomId) }
+            Button("Mark All as Read", action: actions.markAllRead)
+                .disabled(!hasUnreadRooms)
+        case .space:
+            Button("Browse Rooms", action: actions.browse)
+            if canEdit {
+                Button("New Room…", action: actions.newRoom)
+                Button("Add Existing Rooms…", action: actions.addRooms)
             }
             // Yours alone, so whoever may change the space.
-            Button("New Section…") { account.askForNewSection(inSpace: space.roomId) }
+            Button("New Section…", action: actions.newSection)
             Divider()
-            Button("Mark All as Read") { account.markAllRead(inSpace: space.roomId) }
-                .disabled(!account.hasUnreadRooms(inSpace: space.roomId))
+            Button("Mark All as Read", action: actions.markAllRead)
+                .disabled(!hasUnreadRooms)
             Divider()
-            Button("Leave Space…") { account.sheet = .leaveSpace(space.roomId) }
-        case .invite(let invite):
-            Button("Accept Invitation") { FailureAlert.run("Couldn’t Join the Space") { try await account.acceptSpaceInvite(invite.id) } }
-            Button("Decline Invitation") { FailureAlert.run("Couldn’t Decline the Invitation") { try await account.declineSpaceInvite(invite.id) } }
+            Button("Leave Space…", action: actions.leave)
+        case .invite:
+            Button("Accept Invitation", action: actions.accept)
+            Button("Decline Invitation", action: actions.decline)
         }
     }
 }
