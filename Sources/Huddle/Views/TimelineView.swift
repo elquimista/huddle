@@ -239,6 +239,7 @@ struct TimelineView: View {
                                 DispatchQueue.main.async {
                                     if followsNewest { jump(proxy, to: Self.bottomID, anchor: .bottom) }
                                 }
+                                settleOnNewest(proxy)
                             }
                         }
                 }
@@ -270,6 +271,7 @@ struct TimelineView: View {
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height.rounded() }) { _ in
                     if followsNewest {
                         jump(proxy, to: Self.bottomID, anchor: .bottom)
+                        settleOnNewest(proxy)
                     } else if place.heldRow != nil {
                         restoreReadingPlace(proxy)
                     }
@@ -582,6 +584,24 @@ struct TimelineView: View {
         let scroller = NSScroller.preferredScrollerStyle == .legacy
             ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
         return max(0, timelineWidth - scroller)
+    }
+
+    /// Makes sure the end is in view once things have settled, while following the newest
+    /// message. A jump to it can land short when rows change height in that same moment (one
+    /// arriving as another decrypts or gains a note), and nothing would try again until
+    /// something else moved: the newest message would sit half under the composer until the
+    /// reader scrolled. Each call puts the check off again, so it runs once, after the last change;
+    /// a jump of its own that lands short too gets one more look.
+    private func settleOnNewest(_ proxy: ScrollViewProxy, retry: Bool = false) {
+        place.settleCheck?.cancel()
+        let check = DispatchWorkItem {
+            guard followsNewest, !isAtBottom, place.heldRow == nil, timeline.focusedEvent == nil else { return }
+            TimelineLog.log.notice("The newest message was out of view while following it, \(shownRows.count, privacy: .public) rows drawn: going back to it\(retry ? " again" : "", privacy: .public)")
+            jump(proxy, to: Self.bottomID, anchor: .bottom)
+            if !retry { settleOnNewest(proxy, retry: true) }
+        }
+        place.settleCheck = check
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: check)
     }
 
     /// The messages are about to re-wrap for a new width: the thread panel opening or closing,
@@ -2353,6 +2373,8 @@ private struct NewestMessageHold: ViewModifier {
 @MainActor
 final class ReadingPlace {
     var rows: [String: CGRect?] = [:]
+    /// The pending look at whether the newest message ended up in view; see `settleOnNewest`.
+    var settleCheck: DispatchWorkItem?
     var viewport: CGFloat = 0
     /// What covers the top and bottom of the view: the pinned banner and the composer.
     var topInset: CGFloat = 0
