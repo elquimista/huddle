@@ -200,6 +200,11 @@ final class AccountSession: Identifiable {
     /// ones: the server says only when the typists change, so a room opened while someone is
     /// typing would otherwise not know until they stopped.
     @ObservationIgnored private var typingUserIDs: [String: [String]] = [:]
+    /// The same by name, for the room list's rows: made for a room once its row asks.
+    @ObservationIgnored private var roomTypists: [String: RoomTypists] = [:]
+    /// Names of those who have typed, by room and user ID, and those asked of the room so far.
+    @ObservationIgnored private var typistNames: [String: String] = [:]
+    @ObservationIgnored private var typistNamesAsked: Set<String> = []
     /// Whether people see when this account is typing, and it sees when they are. Element's
     /// setting, kept in the account's data; changed with `setSharesTyping`, which saves it there.
     var sharesTyping = true
@@ -370,6 +375,7 @@ final class AccountSession: Identifiable {
         typingHandles.removeAll()
         typingUpdates?.finish()
         typingTask?.cancel()
+        roomTypists.values.forEach { $0.names = [] }
         stopFollowingTypingSetting()
         presence.stop()
         ownPresence.stop()
@@ -1079,7 +1085,10 @@ final class AccountSession: Identifiable {
         for (roomID, handle) in typingHandles where !listed.contains(roomID) {
             handle.cancel()
             typingHandles[roomID] = nil
-            if typingUserIDs.removeValue(forKey: roomID) != nil { timelines[roomID]?.setTypingUserIDs([]) }
+            if typingUserIDs.removeValue(forKey: roomID) != nil {
+                timelines[roomID]?.setTypingUserIDs([])
+                roomTypists[roomID]?.names = []
+            }
         }
         guard let updates = typingUpdates else { return }
         for roomID in listed where typingHandles[roomID] == nil {
@@ -1091,10 +1100,42 @@ final class AccountSession: Identifiable {
     }
 
     private func setTyping(_ userIDs: [String], in roomID: String) {
+        if AppEnvironment.isDev {
+            print("DEV_TYPING \(userID) \(roomID) \(userIDs)")
+            fflush(stdout)
+        }
         let others = userIDs.filter { $0 != userID }
         guard others != typingUserIDs[roomID] ?? [] else { return }
         typingUserIDs[roomID] = others.isEmpty ? nil : others
         timelines[roomID]?.setTypingUserIDs(others)
+        showTypists(others, in: roomID)
+    }
+
+    /// Who is typing in a room, by name, for its row in the room list.
+    func typists(in roomID: String) -> RoomTypists {
+        if let typists = roomTypists[roomID] { return typists }
+        let typists = RoomTypists()
+        roomTypists[roomID] = typists
+        showTypists(typingUserIDs[roomID] ?? [], in: roomID)
+        return typists
+    }
+
+    /// Names the room's typists for its row, if it has asked: by their names in the room where
+    /// known, otherwise by user ID until the room has said.
+    private func showTypists(_ userIDs: [String], in roomID: String) {
+        guard let typists = roomTypists[roomID] else { return }
+        let names = userIDs.map { typistNames["\(roomID)|\($0)"] ?? $0.matrixLocalpart }
+        if typists.names != names { typists.names = names }
+        let unknown = userIDs.filter { typistNamesAsked.insert("\(roomID)|\($0)").inserted }
+        guard !unknown.isEmpty, let room = roomHandles[roomID] else { return }
+        Task { [weak self] in
+            for userID in unknown {
+                let name = (try? await room.memberDisplayName(userId: userID)) ?? nil
+                self?.typistNames["\(roomID)|\(userID)"] = name ?? userID.matrixLocalpart
+            }
+            guard let self else { return }
+            self.showTypists(self.typingUserIDs[roomID] ?? [], in: roomID)
+        }
     }
 
     /// What every timeline of this account's needs to know of the account.

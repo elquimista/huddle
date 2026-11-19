@@ -357,7 +357,10 @@ private struct RoomListRow: View {
     var body: some View {
         RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id],
                 threadReply: account.threadReplyDates[room.id],
-                presence: room.directUserID.flatMap { account.presence.people[$0] })
+                presence: room.directUserID.flatMap { account.presence.people[$0] },
+                // Seen only where this account shares its own typing, as in the conversation,
+                // and not in a muted room, which is meant to be quiet.
+                typists: account.sharesTyping && !room.isMuted && !room.isInvite ? account.typists(in: room.id) : nil)
             .tag(room.id)
             .draggable(room.id) {
                 Label(room.name, systemImage: "bubble.left")
@@ -489,6 +492,10 @@ private struct RoomRow: View {
     var threadReply: Date?
     /// The other person's, in a direct chat.
     var presence: PresenceInfo?
+    /// Who is typing in the room.
+    var typists: RoomTypists?
+
+    @Environment(\.backgroundProminence) private var backgroundProminence
 
     /// The reaction, when it is more recent than the room's newest message.
     private var latestReaction: ReactionPreview? {
@@ -501,6 +508,14 @@ private struct RoomRow: View {
         // The newest message is that reply: say it's in a thread.
         let inThread = threadReply != nil && threadReply == room.timestamp ? room.lastMessageInThread : nil
         return latestReaction?.text ?? inThread ?? room.lastMessage ?? " "
+    }
+
+    /// Who is typing, said in place of the newest message while they are: "typing…" in a direct
+    /// chat, whose name is theirs, and "Alice is typing…" in a room.
+    private var typing: String? {
+        guard let names = typists?.names, !names.isEmpty else { return nil }
+        if room.directUserID != nil, names.count == 1 { return "typing…" }
+        return TypingRow.sentence(for: names.map { Typist(userID: $0, name: $0, avatarURL: nil) }) + "…"
     }
 
     var body: some View {
@@ -530,10 +545,19 @@ private struct RoomRow: View {
                     }
                 }
                 HStack(alignment: .center) {
-                    Text(preview)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let typing {
+                        // In colour, as it's news (on a selected row, as the row's text is).
+                        Text(typing)
+                            .font(.callout)
+                            .foregroundStyle(backgroundProminence == .increased
+                                             ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
+                            .lineLimit(1)
+                    } else {
+                        Text(preview)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     Spacer(minLength: 4)
                     if room.isMuted {
                         Image(systemName: "bell.slash.fill")

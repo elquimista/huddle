@@ -11,6 +11,13 @@ struct Typist: Identifiable, Equatable {
     var id: String { userID }
 }
 
+/// Who is typing in one room, by name, for its row in the room list. Each room has its own, so
+/// a row redraws for its room's typing and no other's.
+@MainActor @Observable
+final class RoomTypists {
+    var names: [String] = []
+}
+
 final class TypingObserver: TypingNotificationsListener, @unchecked Sendable {
     private let handler: ([String]) -> Void
     init(_ handler: @escaping ([String]) -> Void) { self.handler = handler }
