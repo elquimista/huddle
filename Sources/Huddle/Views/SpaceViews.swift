@@ -15,33 +15,49 @@ struct SpaceRail: View {
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 2) {
-                RailSpaceButton(account: account, kind: .home)
-                ForEach(account.spaces, id: \.roomId) { space in
-                    RailSpaceButton(account: account, kind: .space(space))
+        VStack(spacing: 0) {
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 2) {
+                    RailSpaceButton(account: account, kind: .home)
+                    ForEach(account.spaces, id: \.roomId) { space in
+                        RailSpaceButton(account: account, kind: .space(space))
+                    }
+                    ForEach(account.invitedSpaces) { invite in
+                        RailSpaceButton(account: account, kind: .invite(invite))
+                    }
                 }
-                ForEach(account.invitedSpaces) { invite in
-                    RailSpaceButton(account: account, kind: .invite(invite))
-                }
-                Button {
-                    account.sheet = .newSpace
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 34, height: 34)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: RailSpaceButton.corner, style: .continuous))
-                        .padding(7)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("New space")
-                .accessibilityLabel("New Space")
+                .padding(.vertical, 3)
             }
-            .padding(.vertical, 3)
+            // At the foot of the rail, as Mac sidebars keep their add buttons: a tile among the
+            // spaces looked like one more space.
+            NewSpaceButton { account.sheet = .newSpace }
+                .padding(.vertical, 4)
         }
         .frame(width: 54)
+    }
+}
+
+/// A plain plus, with a light background while pointed at.
+private struct NewSpaceButton: View {
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus")
+                .font(.system(size: 15))
+                .foregroundStyle(isHovering ? .primary : .secondary)
+                .frame(width: 30, height: 26)
+                .background(Color.primary.opacity(isHovering ? 0.08 : 0),
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("New space")
+        .accessibilityLabel("New Space")
     }
 }
 
