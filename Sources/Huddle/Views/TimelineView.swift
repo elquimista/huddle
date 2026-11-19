@@ -103,13 +103,17 @@ struct TimelineView: View {
     private static let bottomID = "timeline-bottom"
     @Environment(\.timelineWidth) private var timelineWidth
 
-    /// Messages arriving while the app is in the background stay unread until it is back in front.
-    @State private var appIsActive = NSApp.isActive || DevHooks.assumesActive
+    /// Whether the conversation is in front of the user: its window the one in front, and no
+    /// picture open over it. Messages arriving otherwise (the app in the background, Settings
+    /// in front, a picture being looked at, a sheet over the room) stay unread until it is.
+    private var isInFrontOfUser: Bool {
+        (windowState == .key || DevHooks.assumesActive) && ImageViewerState.shared.item == nil
+    }
 
     private struct ReadTrigger: Equatable {
         let lastRow: String?
         let isAtBottom: Bool
-        let appIsActive: Bool
+        let isInFrontOfUser: Bool
     }
 
     private struct HistoryTrigger: Equatable {
@@ -478,14 +482,8 @@ struct TimelineView: View {
             }
         }
         // Runs when a new message arrives and when the newest one scrolls into view.
-        .task(id: ReadTrigger(lastRow: timeline.rows.last?.id, isAtBottom: isAtBottom, appIsActive: appIsActive)) {
-            if isAtBottom, appIsActive, !timeline.rows.isEmpty { await timeline.markAsRead() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            appIsActive = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-            appIsActive = DevHooks.assumesActive
+        .task(id: ReadTrigger(lastRow: timeline.rows.last?.id, isAtBottom: isAtBottom, isInFrontOfUser: isInFrontOfUser)) {
+            if isAtBottom, isInFrontOfUser, !timeline.rows.isEmpty { await timeline.markAsRead() }
         }
         .onAppear {
             // Ready to type in. Not when the room was reached with the arrow keys, though: the
