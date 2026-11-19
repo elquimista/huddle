@@ -8,3 +8,6 @@ build/
 # Recreate with Scripts/build-sdk.sh.
 Vendor/MatrixRustSDK/MatrixSDKFFI.xcframework/
 Vendor/MatrixRustSDK/Sources/
+
+# Element Call, the call screen, fetched by Scripts/fetch-element-call.sh.
+Vendor/ElementCall/

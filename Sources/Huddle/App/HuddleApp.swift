@@ -150,6 +150,7 @@ struct RootView: View {
                 LoginView(isFirstAccount: true)
             }
         }
+        .background { CallPages() }
         // The full-size image viewer covers the whole window, title bar included, which an
         // overlay here can't reach. `ImageViewerPresenter` puts it above everything, where it
         // takes every click. (Don't switch hit-testing off on this content instead: that makes

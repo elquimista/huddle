@@ -44,6 +44,8 @@ struct RoomView: View {
             if let room = account.room(id: roomID), room.membership() == .invited || summary?.isInvite == true {
                 InviteView(account: account, roomID: roomID, name: title)
             } else if let timeline = account.timeline(for: roomID) {
+                // Read here rather than in the toolbar's content, whose changes aren't followed.
+                let isInCall = CallCenter.shared.isInCall(account: account, roomID: roomID)
                 GeometryReader { geometry in
                     let layout = PanelLayout(width: geometry.size.width, preferred: CGFloat(preferredPanelWidth))
                     ZStack(alignment: .trailing) {
@@ -93,6 +95,40 @@ struct RoomView: View {
                 }
                 .onChange(of: panel) { _, new in panelChanged(to: new) }
                 .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        // A voice call: in a direct chat it rings the other person; in a room it
+                        // starts one, or joins the one going on.
+                        let calls = CallCenter.shared
+                        let hasCall = summary?.hasCall == true
+                        // With two people and no call going on, the older kind of call can be
+                        // had whatever the room's settings for Element Call's say.
+                        let canCall = timeline.permissions.canJoinCalls || (summary?.isOneToOne == true && !hasCall)
+                        Button {
+                            if isInCall {
+                                calls.hangUp(account: account, roomID: roomID)
+                            } else {
+                                calls.call(account: account, roomID: roomID, title: title)
+                            }
+                        } label: {
+                            // In the call: the button ends it, as End Call at the foot of the
+                            // room list does.
+                            if isInCall {
+                                Label {
+                                    Text("End Call")
+                                } icon: {
+                                    Image(systemName: "phone.down.fill")
+                                        .foregroundStyle(.red)
+                                }
+                            } else {
+                                Label(hasCall ? "Join Call" : "Call", systemImage: hasCall ? "phone.fill" : "phone")
+                            }
+                        }
+                        .disabled(!isInCall && !canCall)
+                        .help(isInCall ? "End the call"
+                              : !canCall ? "This room’s settings don’t let you take part in calls"
+                              : hasCall ? "Join the call going on here"
+                              : summary?.isDirect == true ? "Voice call" : "Start a voice call in this room")
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button {
                             if panel == .search {

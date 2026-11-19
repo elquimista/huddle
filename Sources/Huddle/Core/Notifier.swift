@@ -82,6 +82,29 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 for old in seenOrder.prefix(1000) { seen.remove(old) }
                 seenOrder.removeFirst(1000)
             }
+            // Someone ringing: the call panel, whether or not the room is in front, and not an
+            // alert as well. A ring that goes unanswered leaves a missed call (CallCenter).
+            let callerName = item.senderInfo.displayName ?? senderID.matrixLocalpart
+            // A direct chat's name is the caller's; only a room's is worth saying.
+            let callRoomName = item.roomInfo.isDm || item.roomInfo.isDirect
+                || item.roomInfo.displayName == item.senderInfo.displayName ? nil : item.roomInfo.displayName
+            if case .messageLike(.rtcNotification(let type, let expirationTs, let intent)) = content, type == .ring {
+                let call = IncomingCall(
+                    account: account, roomID: roomID, eventID: event.eventId(),
+                    callerName: callerName, callerAvatarURL: item.senderInfo.avatarUrl, callerID: senderID,
+                    roomName: callRoomName,
+                    isVoice: intent != .video, expires: Date(matrixTimestamp: expirationTs))
+                // Rung out before it got here (this Mac was asleep, say): missed.
+                if call.expires > .now { CallCenter.shared.ring(call) } else { announceMissedCall(call) }
+                return
+            } else if case .messageLike(.callInvite) = content {
+                // The older kind of one-to-one call, as Element Web makes in a direct chat.
+                if CallCenter.shared.ringLegacy(
+                    invite: item.rawEvent, account: account, roomID: roomID, callerName: callerName,
+                    callerAvatarURL: item.senderInfo.avatarUrl, callerID: senderID, roomName: callRoomName) {
+                    return
+                }
+            }
         case .invite(let sender):
             senderID = sender
             body = "Invited you to join"
@@ -127,6 +150,26 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
         guard NotificationSettings.isEnabled else { return }
         center?.add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
+    }
+
+    /// A call that rang and went unanswered, here and on the account's other devices. It stays in
+    /// Notification Center, as a missed call does, and opens the room when clicked.
+    func announceMissedCall(_ call: IncomingCall) {
+        let recipient = (store?.accounts.count ?? 1) > 1 ? "for \(call.account.displayName ?? call.account.userID)" : nil
+        let content = UNMutableNotificationContent()
+        content.title = call.title
+        content.subtitle = [call.roomName != nil ? call.callerName : nil, recipient]
+            .compactMap { $0 }.joined(separator: " · ").capitalizedFirst
+        content.body = call.isVoice ? "Missed voice call" : "Missed call"
+        content.threadIdentifier = Self.group(accountID: call.account.id, roomID: call.roomID)
+        content.userInfo = ["account": call.account.id, "room": call.roomID, "thread": ""]
+        if AppEnvironment.isDev {
+            print("DEV_NOTIFY \(content.title) | \(content.subtitle) | \(content.body) | shown=\(NotificationSettings.isEnabled)")
+            fflush(stdout)
+        }
+        guard NotificationSettings.isEnabled else { return }
+        center?.add(UNNotificationRequest(identifier: "\(call.account.id)|\(call.roomID)|\(call.eventID)|missed",
+                                          content: content, trigger: nil))
     }
 
     /// A request to verify, when Huddle isn't in front, its window is out of sight, or the

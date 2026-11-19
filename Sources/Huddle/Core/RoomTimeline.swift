@@ -1380,7 +1380,8 @@ extension TimelineItemContent {
             let line = text.replacingOccurrences(of: "\n", with: " ")
             return sender.map { "\($0): \(line)" } ?? line
         case .callInvite, .rtcNotification:
-            return "\(who) started a call"
+            // In a direct chat, as its messages are, without the name the chat already has.
+            return sender.map { "\($0) started a call" } ?? "Started a call"
         case .roomMembership(let userID, let displayName, let change, _):
             let target = displayName ?? userID
             switch change {
@@ -1461,6 +1462,8 @@ struct TimelinePermissions: Equatable {
     var canDeleteOwn = true
     var canDeleteOthers = false
     var canPin = false
+    /// Whether it may take part in calls: post its call membership, which Element Call needs.
+    var canJoinCalls = true
 
     init() {}
 
@@ -1468,6 +1471,7 @@ struct TimelinePermissions: Equatable {
         canDeleteOwn = levels.canOwnUserRedactOwn()
         canDeleteOthers = levels.canOwnUserRedactOther()
         canPin = levels.canOwnUserPinUnpin()
+        canJoinCalls = levels.canOwnUserSendState(stateEvent: .callMember)
     }
 }
 

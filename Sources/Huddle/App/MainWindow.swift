@@ -32,6 +32,11 @@ enum MainWindow {
         window.identifier?.rawValue.hasPrefix(id) == true && (window.isVisible || window.isMiniaturized)
     }
 
+    /// Huddle's window, open and not in the Dock.
+    static var window: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix(id) == true && $0.isVisible && !$0.isMiniaturized }
+    }
+
     /// Whether some of Huddle's window can be seen: not closed, in the Dock, on another desktop
     /// or wholly covered by other windows.
     static var isOnScreen: Bool {
@@ -56,6 +61,23 @@ struct MainWindowCommand: View {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Quitting during a call leaves it first, given a moment, so the room doesn't go on showing
+    /// this device in it.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            let center = CallCenter.shared
+            guard !center.calls.isEmpty else { return .terminateNow }
+            center.hangUpAll()
+            Task { @MainActor in
+                for _ in 0..<20 where !center.calls.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        }
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         // One window, without tabs: a second, from a tab bar's "+", would show the same account.
         NSWindow.allowsAutomaticWindowTabbing = false

@@ -57,6 +57,9 @@ enum AboutPanel {
         line([("Matrix Rust SDK", URL(string: "https://github.com/matrix-org/matrix-rust-sdk")),
               ("License", license("matrix-rust-sdk-LICENSE"))])
         line([("Sparkle", URL(string: "https://sparkle-project.org")), ("License", license("Sparkle-LICENSE"))])
+        // AGPL-3.0: its licence file also says where its source is.
+        line([("Element Call", URL(string: "https://github.com/element-hq/element-call")),
+              ("License", license("Element-Call-LICENSE"))])
         credits.deleteCharacters(in: NSRange(location: credits.length - 1, length: 1))  // no last line break
         let all = NSRange(location: 0, length: credits.length)
         credits.addAttribute(.paragraphStyle, value: paragraph, range: all)

@@ -79,6 +79,10 @@ struct RoomListView: View {
                 if let status {
                     Banner(icon: "exclamationmark.triangle", text: status, action: nil) {}
                 }
+                // Calls going on, whichever account's and wherever you are.
+                ForEach(CallCenter.shared.calls, id: \.identity) { call in
+                    CallStrip(call: call)
+                }
             }
         }
         .navigationTitle(account.displayName ?? account.userID)
@@ -511,6 +515,14 @@ private struct RoomRow: View {
                         .fontWeight(room.showsUnread || room.isHighlighted ? .semibold : .regular)
                         .lineLimit(1)
                     Spacer(minLength: 4)
+                    if room.hasCall {
+                        // A call going on in the room.
+                        Image(systemName: "phone.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                            .help("A call is going on")
+                            .accessibilityLabel("Call going on")
+                    }
                     if let timestamp = latestReaction?.date ?? room.timestamp {
                         Text(timestamp.roomListLabel)
                             .font(.caption)

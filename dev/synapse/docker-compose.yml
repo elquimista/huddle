@@ -1,4 +1,6 @@
 # Local Synapse for testing "Huddle Dev". Start it with ./setup.sh.
+# With it, what calls (Element Call, MatrixRTC) need: LiveKit, the call server, and
+# lk-jwt-service, which hands out LiveKit tokens to Matrix users of this server.
 services:
   synapse:
     image: ghcr.io/element-hq/synapse:latest
@@ -10,3 +12,39 @@ services:
     environment:
       SYNAPSE_SERVER_NAME: localhost
       SYNAPSE_REPORT_STATS: "no"
+
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    # lk-jwt and its proxy share this container's network: there, localhost is LiveKit for them
+    # as it is for the Mac, so the one URL serves both.
+    ports:
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+      - "127.0.0.1:50100-50120:50100-50120/udp"
+      - "127.0.0.1:8091:8080"   # lk-jwt-service
+
+  lk-jwt:
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    restart: unless-stopped
+    environment:
+      LIVEKIT_URL: ws://localhost:7880
+      LIVEKIT_KEY: devkey
+      LIVEKIT_SECRET: huddle-dev-livekit-secret-not-for-production
+      LIVEKIT_JWT_BIND: ":8080"
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: localhost
+      LIVEKIT_LOCAL_HOMESERVERS: localhost
+      # It checks a user's token with their server over federation, at https://localhost:8448:
+      # the proxy beside it answers there for Synapse, with a certificate of its own.
+      LIVEKIT_INSECURE_SKIP_VERIFY_TLS: YES_I_KNOW_WHAT_I_AM_DOING
+    network_mode: "service:livekit"
+
+  # Synapse's federation API at https://localhost:8448, in that same network.
+  lk-jwt-tls:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: "service:livekit"
+    command: caddy reverse-proxy --from https://localhost:8448 --to http://synapse:8008 --internal-certs

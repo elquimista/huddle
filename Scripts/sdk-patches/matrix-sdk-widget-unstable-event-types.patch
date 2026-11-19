@@ -1,0 +1,17 @@
+diff --git a/crates/matrix-sdk/src/widget/filter.rs b/crates/matrix-sdk/src/widget/filter.rs
+index d144545..4ae5ba5 100644
+--- a/crates/matrix-sdk/src/widget/filter.rs
++++ b/crates/matrix-sdk/src/widget/filter.rs
+@@ -79,7 +79,11 @@ impl<'a> MessageLikeEventFilter {
+         };
+         match self {
+             Self::WithType(filter_event_type) => {
+-                message_like_filter_input.event_type == filter_event_type.to_string()
++                // Compared as ruma reads the type, so an event sent under an older name ruma
++                // knows as this type (org.matrix.call.sdp_stream_metadata_changed, which
++                // Element's clients sent until 2026) matches as the type does.
++                MessageLikeEventType::from(message_like_filter_input.event_type)
++                    == *filter_event_type
+             }
+             Self::RoomMessageWithMsgtype(msgtype) => {
+                 message_like_filter_input.event_type == "m.room.message"

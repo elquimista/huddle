@@ -60,6 +60,10 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "Resources/$ICON.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp -R Resources/Licenses "$APP/Contents/Resources/"  # the open-source libraries' licenses (linked from About)
+# Element Call, the call screen: a web app run in a web view (Sources/Huddle/Core/Calls.swift).
+Scripts/fetch-element-call.sh
+ditto Vendor/ElementCall/dist "$APP/Contents/Resources/ElementCall"
+cp Vendor/ElementCall/LICENSE.txt "$APP/Contents/Resources/Licenses/Element-Call-LICENSE.txt"
 cp "$BIN" "$APP/Contents/MacOS/Huddle"
 if [ "$CONFIG" = release ]; then strip -x "$APP/Contents/MacOS/Huddle"; fi
 ditto "$(dirname "$BIN")/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
@@ -83,6 +87,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.social-networking</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key><string>Huddle uses the microphone for calls.</string>
     $UPDATE_KEYS
 </dict>
 </plist>
@@ -102,11 +107,13 @@ RUNTIME=()
 ENTITLEMENTS=()
 if [ "$IDENTITY" != "-" ]; then
   RUNTIME=(--options runtime)
+  # The hardened runtime keeps the microphone from an app that doesn't say it uses one: calls do.
+  APP_ENTITLEMENTS="$(mktemp -t huddle-entitlements).plist"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.security.device.audio-input bool true" "$APP_ENTITLEMENTS" >/dev/null
   if [ "$CONFIG" = debug ]; then
-    DEV_ENTITLEMENTS="$(mktemp -t huddle-entitlements).plist"
-    /usr/libexec/PlistBuddy -c "Add :com.apple.security.get-task-allow bool true" "$DEV_ENTITLEMENTS" >/dev/null
-    ENTITLEMENTS=(--entitlements "$DEV_ENTITLEMENTS")
+    /usr/libexec/PlistBuddy -c "Add :com.apple.security.get-task-allow bool true" "$APP_ENTITLEMENTS" >/dev/null
   fi
+  ENTITLEMENTS=(--entitlements "$APP_ENTITLEMENTS")
 fi
 # Sparkle's parts, innermost first, then the framework, then the app that holds it.
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"

@@ -39,11 +39,23 @@ final class AccountStore {
             for (index, account) in stored.enumerated() {
                 group.addTask {
                     do {
-                        let client = try await ClientFactory.makeClient(
+                        var client = try await ClientFactory.makeClient(
                             storeID: account.id,
                             passphrase: account.passphrase,
                             server: .known(url: account.homeserverUrl, nativeSlidingSync: account.nativeSlidingSync))
                         try await client.restoreSession(session: account.session)
+                        if DevHooks.clearsCaches(for: account.userId) {
+                            // Its caches emptied, and with them where sync had got to (kept with
+                            // the keys, and reset only through a sync service), the SDK asks for
+                            // a client made afresh.
+                            let syncService = try await client.syncService().finish()
+                            try await client.clearCaches(syncService: syncService)
+                            client = try await ClientFactory.makeClient(
+                                storeID: account.id,
+                                passphrase: account.passphrase,
+                                server: .known(url: account.homeserverUrl, nativeSlidingSync: account.nativeSlidingSync))
+                            try await client.restoreSession(session: account.session)
+                        }
                         return (index, .success(client))
                     } catch {
                         return (index, .failure(error))

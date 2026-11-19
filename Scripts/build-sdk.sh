@@ -17,6 +17,10 @@ git -C "$SRC" remote add origin https://github.com/matrix-org/matrix-rust-sdk 2>
 git -C "$SRC" fetch -q --depth 1 origin "$SDK_COMMIT"
 # Forced, so a Cargo.lock rewritten by the last patched build goes back to the SDK's own.
 git -C "$SRC" checkout -q -f FETCH_HEAD
+# Patches to the SDK itself, each explained in its file in Scripts/sdk-patches.
+for patch in Scripts/sdk-patches/matrix-sdk-*.patch; do
+  git -C "$SRC" apply "$PWD/$patch"
+done
 
 # Patches to the SDK's dependencies, each explained in its file in Scripts/sdk-patches. ruma's
 # are applied to a copy of ruma at the commit the SDK uses, and every ruma crate the SDK uses is

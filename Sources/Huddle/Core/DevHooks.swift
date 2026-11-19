@@ -19,8 +19,16 @@ import Foundation
 ///                        does, once the space is showing (without bringing the app forward)
 ///   HUDDLE_DEV_SIGN_OUT  username to sign out at launch (same code path as the Sign Out menu)
 ///   HUDDLE_DEV_FRESH     start with no accounts loaded (stored ones are left alone), to see first run
+///   HUDDLE_DEV_CLEAR_CACHES  comma-separated usernames whose caches to empty at launch (keys are kept),
+///                        for a store that has fallen out of step with the server
 ///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance
-///   HUDDLE_DEV_ASSUME_ACTIVE  mark rooms as read even while the app is in the background
+///   HUDDLE_DEV_ASSUME_ACTIVE  mark rooms as read even while the app is in the background; call windows
+///                             and the ringing panel open behind other windows, not over them
+///   HUDDLE_DEV_CALL      with HUDDLE_DEV_SELECT "user/Room": start a voice call there at launch
+///   HUDDLE_DEV_NO_MIC    calls get no microphone (no system prompt), to test their signalling
+///   HUDDLE_DEV_CALL_PER_ACCOUNT  a call for each account at once, so two can call each other here
+///   HUDDLE_DEV_LEGACY_CALLS  one-to-one calls are the older kind, as if the server had no Element Call
+///                        backend (the local one has); with HUDDLE_DEV_NO_MIC they send silence
 ///   HUDDLE_DEV_HOVER     text of a message to show the hover actions on ("text!" also opens its emoji picker)
 ///   HUDDLE_DEV_MUTE_AUDIO  play audio messages silently (Scripts/run-dev.sh sets this)
 ///   HUDDLE_DEV_AUDIO_DEVICE  UID of the output device to play through, instead of the Mac's default
@@ -120,6 +128,19 @@ enum DevHooks {
 
     static let assumesActive = AppEnvironment.isDev
         && ProcessInfo.processInfo.environment["HUDDLE_DEV_ASSUME_ACTIVE"] != nil
+    static let deniesMicrophone = AppEnvironment.isDev
+        && ProcessInfo.processInfo.environment["HUDDLE_DEV_NO_MIC"] != nil
+    static let callPerAccount = AppEnvironment.isDev
+        && ProcessInfo.processInfo.environment["HUDDLE_DEV_CALL_PER_ACCOUNT"] != nil
+    static let legacyCalls = AppEnvironment.isDev
+        && ProcessInfo.processInfo.environment["HUDDLE_DEV_LEGACY_CALLS"] != nil
+
+    /// Whether to empty an account's caches at launch (HUDDLE_DEV_CLEAR_CACHES), as if it had
+    /// just signed in on this device: its encryption keys are kept.
+    nonisolated static func clearsCaches(for userID: String) -> Bool {
+        guard AppEnvironment.isDev, let names = ProcessInfo.processInfo.environment["HUDDLE_DEV_CLEAR_CACHES"] else { return false }
+        return names.split(separator: ",").contains { userID == "@\($0):localhost" || userID == String($0) }
+    }
 
     /// Stands in for the pointer, which automation cannot move over the Dev app.
     /// A file to take as chosen wherever a picture is asked for, in place of the open panel.
@@ -234,6 +255,9 @@ enum DevHooks {
                     // Show it in the list too, which the space selected last time might hide.
                     account.showInList(room.id)
                     account.selectedRoomID = room.id
+                    if env["HUDDLE_DEV_CALL"] != nil {
+                        CallCenter.shared.call(account: account, roomID: room.id, title: room.name)
+                    }
                     await openThread(env["HUDDLE_DEV_THREAD"], in: room.id, of: account)
                     if let query = env["HUDDLE_DEV_SEARCH"] {
                         account.showSearch(scope: env["HUDDLE_DEV_SEARCH_ALL"] == nil ? .room : .all)

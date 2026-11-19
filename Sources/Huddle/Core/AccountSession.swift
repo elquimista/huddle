@@ -23,6 +23,10 @@ struct RoomSummary: Identifiable, Equatable {
     /// False when the room's details could not be read, so the counts above mean nothing.
     var hasCounts = false
     var lastMessage: String?
+    /// A call is going on in the room (MatrixRTC: someone is in it).
+    var hasCall = false
+    /// How many are in the call going on, counting each device.
+    var callParticipantCount = 0
     /// The same said as a reply in a thread ("Bob in a thread: …"), for when the newest message
     /// turns out to be one: the SDK's latest event doesn't say (see `threadReplyDates`).
     var lastMessageInThread: String?
@@ -810,6 +814,19 @@ final class AccountSession: Identifiable {
         case anyone
     }
 
+    /// Power levels for a new room or chat in which anyone may take part in calls, as Element
+    /// makes them: Synapse's own levels for its events (the override replaces them whole), with
+    /// call membership open to every member, which Element Call needs to join.
+    static let callFriendlyPowerLevels = PowerLevels(
+        usersDefault: nil, eventsDefault: nil, stateDefault: nil, ban: nil, kick: nil, redact: nil,
+        invite: nil, notifications: nil, users: [:],
+        events: [
+            "m.room.name": 50, "m.room.power_levels": 100, "m.room.history_visibility": 100,
+            "m.room.canonical_alias": 50, "m.room.avatar": 50, "m.room.tombstone": 100,
+            "m.room.server_acl": 100, "m.room.encryption": 100,
+            "org.matrix.msc3401.call.member": 0,
+        ])
+
     /// Creates a room and, given a space, puts it there. Returns the new room's ID.
     func createRoom(name: String, topic: String?, access: RoomAccess, encrypted: Bool,
                     inSpace spaceID: String?) async throws -> String {
@@ -821,6 +838,7 @@ final class AccountSession: Identifiable {
             name: name, topic: topic?.isEmpty == true ? nil : topic, isEncrypted: encrypted,
             visibility: access == .anyone ? .public : .private,
             preset: access == .anyone ? .publicChat : .privateChat,
+            powerLevelContentOverride: Self.callFriendlyPowerLevels,
             joinRuleOverride: joinRule)
         let roomID = try await client.createRoom(request: parameters)
         if let spaceID {
@@ -875,7 +893,8 @@ final class AccountSession: Identifiable {
         if let roomID = existingDirectChat(with: userID) { return roomID }
         let parameters = CreateRoomParameters(
             name: nil, topic: nil, isEncrypted: encrypted, isDirect: true,
-            visibility: .private, preset: .trustedPrivateChat, invite: [userID])
+            visibility: .private, preset: .trustedPrivateChat, invite: [userID],
+            powerLevelContentOverride: Self.callFriendlyPowerLevels)
         return try await client.createRoom(request: parameters)
     }
 
@@ -909,7 +928,8 @@ final class AccountSession: Identifiable {
         let name = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let parameters = CreateRoomParameters(
             name: name?.isEmpty == false ? name : nil, topic: nil, isEncrypted: encrypted, isDirect: true,
-            visibility: .private, preset: .trustedPrivateChat, invite: userIDs)
+            visibility: .private, preset: .trustedPrivateChat, invite: userIDs,
+            powerLevelContentOverride: Self.callFriendlyPowerLevels)
         return try await client.createRoom(request: parameters)
     }
 
@@ -1341,6 +1361,8 @@ extension RoomSummary {
             summary.isLowPriority = info.isLowPriority
             summary.isEncrypted = info.encryptionState == .encrypted
             summary.isOneToOne = info.activeMembersCount == 2
+            summary.hasCall = info.hasRoomCall
+            summary.callParticipantCount = info.activeRoomCallParticipants.count
             if info.isDirect, info.heroes.count == 1 {
                 summary.directUserID = info.heroes[0].userId
                 if summary.avatarURL == nil { summary.avatarURL = info.heroes[0].avatarUrl }
