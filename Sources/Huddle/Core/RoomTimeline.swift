@@ -236,6 +236,8 @@ final class RoomTimeline {
     private(set) var pinnedEventIDs: [String] = []
     /// What this account may do to messages here.
     private(set) var permissions = TimelinePermissions()
+    /// Whether the room is encrypted; if not, whether it's public, where that's usual.
+    private(set) var encryption: RoomEncryption = .unknown
     /// A message another view wants this one to go to and light up, such as one picked from
     /// the pinned messages in the side panel. Cleared once it has been dealt with.
     var requestedJump: String?
@@ -351,6 +353,12 @@ final class RoomTimeline {
     }
 
     private func apply(_ info: RoomInfo) {
+        let encryption: RoomEncryption = switch info.encryptionState {
+        case .encrypted: .encrypted
+        case .notEncrypted: .notEncrypted(isPublic: info.isPublic == true)
+        case .unknown: .unknown
+        }
+        if encryption != self.encryption { self.encryption = encryption }
         let permissions = info.powerLevels.map(TimelinePermissions.init) ?? self.permissions
         guard info.pinnedEventIds != pinnedEventIDs || permissions != self.permissions else { return }
         pinnedEventIDs = info.pinnedEventIds
@@ -1153,6 +1161,14 @@ extension MessageRow {
             }
         }
     }
+}
+
+/// Whether a room's messages are end-to-end encrypted.
+enum RoomEncryption: Equatable {
+    case unknown
+    case encrypted
+    /// Public rooms are usually unencrypted on purpose; elsewhere it's worth noticing.
+    case notEncrypted(isPublic: Bool)
 }
 
 /// Someone in the room whose encryption identity changed, which needs a word from the person

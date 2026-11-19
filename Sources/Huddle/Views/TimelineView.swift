@@ -446,14 +446,14 @@ struct TimelineView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
                     // Someone's identity changed: said over the composer, before anything is sent.
-                    if let warning = timeline.identityWarnings.first {
+                    if let warning = identityWarning {
                         IdentityWarningBar(warning: warning, account: account)
                             .id(warning.userID)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     composer(proxy)
                 }
-                .animation(.snappy(duration: 0.2), value: timeline.identityWarnings.first?.userID)
+                .animation(.snappy(duration: 0.2), value: identityWarning?.userID)
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.bottomInset = $0 }
             }
         }
@@ -631,6 +631,13 @@ struct TimelineView: View {
         jump(proxy, to: held.id, anchor: UnitPoint(x: 0, y: fraction))
     }
 
+    /// The first of the room's identity warnings still standing: one answered here (verified,
+    /// accepted, withdrawn) goes at once, without waiting for the room to hear of it, which
+    /// takes until the SDK next looks at their keys.
+    private var identityWarning: IdentityWarning? {
+        timeline.identityWarnings.first { account?.peopleIdentities[$0.userID]?.isChange ?? true }
+    }
+
     private func composer(_ proxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if let error = timeline.error {
@@ -695,40 +702,44 @@ struct TimelineView: View {
                     }
                 }
                 .padding(.bottom, 1)
-                TextField(composerPlaceholder, text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...8)
-                    .focused($composerFocused)
-                    .onSubmit { send(proxy) }
-                    // While suggestions are showing, the arrows move through them and Return
-                    // or Tab picks one instead of sending.
-                    .onKeyPress(.upArrow) { upArrow() }
-                    .onKeyPress(.downArrow) { moveSuggestion(1) }
-                    .onKeyPress(.return) { pickSelectedSuggestion() }
-                    .onKeyPress(.tab) { pickSelectedSuggestion() }
-                    .onKeyPress(.escape) {
-                        // Escape closes the mention list if it is open; otherwise it cancels a reply.
-                        if !suggestions.isEmpty {
-                            dismissedQuery = mentionQuery
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    // Whether what's typed here will be encrypted, at a glance, where it's typed.
+                    EncryptionGlyph(encryption: timeline.encryption, showInfo: room?.showInfo)
+                    TextField(composerPlaceholder, text: $draft, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...8)
+                        .focused($composerFocused)
+                        .onSubmit { send(proxy) }
+                        // While suggestions are showing, the arrows move through them and Return
+                        // or Tab picks one instead of sending.
+                        .onKeyPress(.upArrow) { upArrow() }
+                        .onKeyPress(.downArrow) { moveSuggestion(1) }
+                        .onKeyPress(.return) { pickSelectedSuggestion() }
+                        .onKeyPress(.tab) { pickSelectedSuggestion() }
+                        .onKeyPress(.escape) {
+                            // Escape closes the mention list if it is open; otherwise it cancels a reply.
+                            if !suggestions.isEmpty {
+                                dismissedQuery = mentionQuery
+                                return .handled
+                            }
+                            if editTarget != nil {
+                                finishEdit()
+                                return .handled
+                            }
+                            guard replyTarget != nil else { return .ignored }
+                            replyTarget = nil
                             return .handled
                         }
-                        if editTarget != nil {
-                            finishEdit()
-                            return .handled
+                        .onChange(of: draft) {
+                            suggestionIndex = 0
+                            if mentionQuery != dismissedQuery { dismissedQuery = nil }
+                            if mentionQuery != nil { Task { await timeline.loadMembers() } }
                         }
-                        guard replyTarget != nil else { return .ignored }
-                        replyTarget = nil
-                        return .handled
-                    }
-                    .onChange(of: draft) {
-                        suggestionIndex = 0
-                        if mentionQuery != dismissedQuery { dismissedQuery = nil }
-                        if mentionQuery != nil { Task { await timeline.loadMembers() } }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(.separator) }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.background, in: RoundedRectangle(cornerRadius: 14))
+                .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(.separator) }
                 Button { send(proxy) } label: {
                     Image(systemName: editTarget == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill")
                         .font(.system(size: 24))
@@ -2416,6 +2427,8 @@ struct RoomContext {
     /// Whether the room has been marked unread while it is open.
     var isMarkedUnread = false
     let markRead: () -> Void
+    /// Opens the room's details beside it.
+    var showInfo: (() -> Void)?
 }
 
 /// Along the top of a room the user has marked unread while in it: what that means, and the

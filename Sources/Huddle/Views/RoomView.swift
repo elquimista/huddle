@@ -55,7 +55,8 @@ struct RoomView: View {
                                                            focus: { focus(on: $0) },
                                                            returnToLive: returnToLive,
                                                            isMarkedUnread: summary?.isMarkedUnread == true,
-                                                           markRead: { account.setRoom(roomID, unread: false) }))
+                                                           markRead: { account.setRoom(roomID, unread: false) },
+                                                           showInfo: { panel = .info }))
                             // A fresh view for each timeline it shows: where it is scrolled to
                             // belongs to that timeline.
                             .id(focused.map(ObjectIdentifier.init))
@@ -131,8 +132,9 @@ struct RoomView: View {
             account.roomWasLeft(roomID)
         }
         .navigationTitle(title)
-        // In a direct chat, whether the other person is around.
-        .navigationSubtitle(presenceLine)
+        // In a direct chat, whether the other person is around; and whether the room isn't
+        // encrypted, which the lock in the composer also shows.
+        .navigationSubtitle(subtitle)
     }
 
     /// The panel's place at the room's trailing edge. Closed, it is no width at all, and the
@@ -235,6 +237,11 @@ struct RoomView: View {
             },
             onEnd: { dragStartWidth = nil },
             onReset: { preferredPanelWidth = 0 })
+    }
+
+    private var subtitle: String {
+        let notEncrypted = if case .notEncrypted = account.timeline(for: roomID)?.encryption { "Not encrypted" } else { "" }
+        return [presenceLine, notEncrypted].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     private var presenceLine: String {

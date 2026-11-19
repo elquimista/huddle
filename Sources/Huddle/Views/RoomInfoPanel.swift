@@ -59,6 +59,14 @@ private struct RoomInfoContent: View {
     }
 
     private var canEditText: Bool { details.canChangeName || details.canChangeTopic }
+
+    /// In a direct chat with one other person, that person: whether they are who they say is
+    /// what matters most about the chat.
+    private var directPerson: RoomDetails.Member? {
+        guard details.isDirect else { return nil }
+        let others = details.members.filter { !$0.isInvited && $0.userID != account.userID }
+        return others.count == 1 ? others[0] : nil
+    }
     private var noun: String { details.isDirect ? "Chat" : "Room" }
 
     var body: some View {
@@ -70,6 +78,10 @@ private struct RoomInfoContent: View {
                     .padding(.bottom, 16)
                 Divider()
                 encryption
+                if let person = directPerson {
+                    Divider()
+                    PersonIdentityRow(account: account, person: person)
+                }
                 Divider()
                 notifications
                 Divider()
@@ -316,18 +328,18 @@ private struct RoomInfoContent: View {
             } else {
                 let shown = showsAllMembers ? details.members : Array(details.members.prefix(50))
                 ForEach(shown) { member in
-                    let isVerified = account.verifiedPeople.contains(member.userID)
                     MemberRow(account: account, member: member, noun: noun,
-                              isVerified: isVerified,
-                              verify: canVerify(member, isVerified: isVerified)
+                              identity: account.peopleIdentities[member.userID],
+                              verify: !member.isInvited && account.canVerify(member.userID)
                                 ? { account.verify(person: member.userID, name: member.name) } : nil,
                               roles: details.roleChoices(for: member),
                               setRole: { choose($0, for: member) },
                               remove: details.canRemove(member) ? { removing = member } : nil)
                 }
-                // Which of them this account has verified, from what this Mac knows.
+                // Where each of them stands, asking the server about anyone this Mac doesn't keep
+                // track of, so it shows in an unencrypted room too.
                 .task(id: shown.map(\.userID)) {
-                    await account.refreshVerifiedPeople(shown.filter { !$0.isInvited }.map(\.userID))
+                    await account.refreshIdentities(of: shown.filter { !$0.isInvited }.map(\.userID), fromServer: true)
                 }
                 if shown.count < details.members.count {
                     Button("Show All \(details.members.count)") { showsAllMembers = true }
@@ -338,11 +350,6 @@ private struct RoomInfoContent: View {
             }
         }
         .padding(.bottom, 8)
-    }
-
-    /// Someone else who has joined, not verified yet, from a Mac that can verify people.
-    private func canVerify(_ member: RoomDetails.Member, isVerified: Bool) -> Bool {
-        account.canVerifyPeople && !isVerified && !member.isInvited && member.userID != account.userID
     }
 
     private var removalQuestion: String {
@@ -417,8 +424,8 @@ private struct MemberRow: View {
     let member: RoomDetails.Member
     /// "Room" or "Chat".
     let noun: String
-    /// This account has verified them.
-    let isVerified: Bool
+    /// What is known of their encryption identity.
+    let identity: PersonIdentity?
     /// Set when they can be verified from here.
     let verify: (() -> Void)?
     /// The roles they could be given, when this account may change theirs.
@@ -440,13 +447,7 @@ private struct MemberRow: View {
                 HStack(spacing: 4) {
                     Text(member.userID == account.userID ? "\(member.name) (you)" : member.name)
                         .lineLimit(1)
-                    if isVerified {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                            .help("Verified")
-                            .accessibilityLabel("Verified")
-                    }
+                    IdentityBadge(identity: identity)
                 }
                 if member.name != member.userID {
                     Text(member.userID)

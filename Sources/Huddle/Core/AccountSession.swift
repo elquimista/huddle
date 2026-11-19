@@ -88,8 +88,9 @@ final class AccountSession: Identifiable {
     let verificationFlow: VerificationFlow
     /// Whether the account has a recovery key, and this Mac the keys it unlocks.
     private(set) var recoveryState: RecoveryState = .unknown
-    /// People this account has verified, as far as has been looked up (PeopleIdentity.swift).
-    var verifiedPeople: Set<String> = []
+    /// What is known of other people's encryption identities, as far as has been looked up or
+    /// heard from rooms (PeopleIdentity.swift).
+    var peopleIdentities: [String: PersonIdentity] = [:]
     /// The room list's suggestion to set up a recovery key, closed.
     var recoveryNudgeDismissed: Bool {
         didSet { UserDefaults.standard.set(recoveryNudgeDismissed, forKey: "recoveryNudgeDismissed.\(id)") }
@@ -210,7 +211,7 @@ final class AccountSession: Identifiable {
         roomToReopen = lastRoomBySpace[selectedSpaceID ?? ""]
         verificationFlow.isThisMacVerified = { [weak self] in self?.verification == .verified }
         verificationFlow.onIncoming = { [weak self] in self?.showVerificationRequest() }
-        verificationFlow.onVerifiedPerson = { [weak self] userID in self?.verifiedPeople.insert(userID) }
+        verificationFlow.onVerifiedPerson = { [weak self] userID in self?.peopleIdentities[userID] = .verified }
     }
 
     /// A request to verify came in: shown at once unless something else is open, when the room
