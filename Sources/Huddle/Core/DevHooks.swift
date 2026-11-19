@@ -12,7 +12,7 @@ import Foundation
 ///   HUDDLE_DEV_SEARCH    with HUDDLE_DEV_SELECT: opens the search beside the room with this query
 ///                        (HUDDLE_DEV_SEARCH_ALL=1 for every room)
 ///   HUDDLE_DEV_SPACE     with HUDDLE_DEV_SELECT: name of a space (one of the account's, or an
-///                        invitation) to browse at launch; "" for all rooms
+///                        invitation) to browse at launch; "" for Home
 ///   HUDDLE_DEV_SHEET     with HUDDLE_DEV_SPACE: newRoom, newSpace, addRooms or leave, to open that sheet;
 ///                        profile, password, devices, verify or recovery for the account's own; manage for its OAuth account page
 ///   HUDDLE_DEV_NOTIFICATION  with HUDDLE_DEV_SPACE: name of a room to open as clicking its notification
@@ -231,10 +231,8 @@ enum DevHooks {
             // The room list fills in asynchronously after sync starts.
             for _ in 0..<100 {
                 if let room = account.allRooms.first(where: { $0.name == parts[1] && !$0.isSpace }) {
-                    // Show it in the list too, which a space selected last time might hide.
-                    if let space = account.selectedSpaceID, !account.roomIDs(inSpace: space).contains(room.id) {
-                        account.selectedSpaceID = nil
-                    }
+                    // Show it in the list too, which the space selected last time might hide.
+                    account.showInList(room.id)
                     account.selectedRoomID = room.id
                     await openThread(env["HUDDLE_DEV_THREAD"], in: room.id, of: account)
                     if let query = env["HUDDLE_DEV_SEARCH"] {

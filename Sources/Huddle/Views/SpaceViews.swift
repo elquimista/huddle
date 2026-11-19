@@ -3,8 +3,8 @@ import SwiftUI
 
 // MARK: - Rail
 
-/// Down the left of the sidebar: every room ("All Rooms"), then the account's spaces, the
-/// spaces it has been invited to, and a way to make a new one. Shown only for an account
+/// Down the left of the sidebar: Home (direct chats and rooms in no space), then the account's
+/// spaces, the spaces it has been invited to, and a way to make a new one. Shown only for an account
 /// with spaces or an invitation to one; for the rest, the room list has the sidebar to itself.
 struct SpaceRail: View {
     let account: AccountSession
@@ -117,7 +117,7 @@ private struct RailSpaceButton: View {
                 }
             }
             // After the ring, so a badge on the corner cuts a gap in it too.
-            .modifier(Badged(badge: badge, isHome: isHome))
+            .railBadge(badge)
             .contentShape(RoundedRectangle(cornerRadius: Self.corner + 3, style: .continuous))
             .padding(RailBadge.overhang)
             .onTapGesture(perform: select)
@@ -132,11 +132,13 @@ private struct RailSpaceButton: View {
     @ViewBuilder private var icon: some View {
         switch kind {
         case .home:
-            Image(systemName: "square.grid.2x2.fill")
+            Image(systemName: "house.fill")
                 .font(.system(size: 14))
                 .foregroundStyle(isSelected ? .primary : .secondary)
                 .frame(width: 34, height: 34)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
+                // A plain wash rather than the sidebar's translucent grey, which the badge's
+                // compositing group would flatten and darken.
+                .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
         case .space(let space):
             AvatarView(media: account.media, url: space.avatarUrl, name: space.displayName,
                        seed: space.roomId, size: 34, isSquare: true)
@@ -148,32 +150,19 @@ private struct RailSpaceButton: View {
         }
     }
 
-    private var isHome: Bool {
-        if case .home = kind { true } else { false }
-    }
-
-    /// The badge, for a space or an invitation. All Rooms never has one, and is left out of the
-    /// badge's compositing group, which would flatten its tile's sidebar translucency and draw it
-    /// darker than the New Space tile below.
-    private struct Badged: ViewModifier {
-        let badge: RailBadge?
-        let isHome: Bool
-
-        func body(content: Content) -> some View {
-            if isHome { content } else { content.railBadge(badge) }
-        }
+    /// The space whose rooms this stands for; nil for Home.
+    private var spaceID: String? {
+        if case .space(let space) = kind { space.roomId } else { nil }
     }
 
     /// As the account's own badge: rooms with notifications, red when any of them needs
     /// attention now; a grey dot when there is only something unread. An invitation has a red dot.
     private var badge: RailBadge? {
         switch kind {
-        case .home:
-            return nil
         case .invite:
             return .dot(.red, size: 10)
-        case .space(let space):
-            let state = account.attention(inSpace: space.roomId)
+        case .home, .space:
+            let state = account.attention(inSpace: spaceID)
             if let count = RailBadge.count(urgent: state.urgent, other: state.count) { return count }
             return state.hasUnread ? .dot(Color(nsColor: .tertiaryLabelColor)) : nil
         }
@@ -181,7 +170,7 @@ private struct RailSpaceButton: View {
 
     private var help: String {
         switch kind {
-        case .home: "All rooms, in every space and none"
+        case .home: "Direct chats and rooms that aren’t in a space"
         case .space(let space): space.displayName
         case .invite(let invite): "Invitation to \(invite.name)"
         }
@@ -189,11 +178,11 @@ private struct RailSpaceButton: View {
 
     private var accessibilityLabel: String {
         switch kind {
-        case .home: return "All Rooms"
         case .invite(let invite): return "Invitation to \(invite.name)"
-        case .space(let space):
-            let count = account.attention(inSpace: space.roomId).count
-            return count > 0 ? "\(space.displayName), \(count) with new messages" : space.displayName
+        case .home, .space:
+            let name = if case .space(let space) = kind { space.displayName } else { "Home" }
+            let count = account.attention(inSpace: spaceID).count
+            return count > 0 ? "\(name), \(count) with new messages" : name
         }
     }
 
@@ -208,8 +197,8 @@ private struct RailSpaceButton: View {
     @ViewBuilder private var menu: some View {
         switch kind {
         case .home:
-            Button("Mark All as Read") { account.markAllRead() }
-                .disabled(!account.hasUnreadRooms)
+            Button("Mark All as Read") { account.markAllRead(inSpace: nil) }
+                .disabled(!account.hasUnreadRooms(inSpace: nil))
         case .space(let space):
             Button("Browse Rooms") { account.browse(space: space.roomId) }
             if account.editableSpaceIDs.contains(space.roomId) {

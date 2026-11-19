@@ -15,6 +15,8 @@ import MatrixRustSDK
 struct RoomSection: Identifiable, Equatable {
     enum Kind: Equatable {
         case invites, favourites, custom, lowPriority, people, rooms
+        /// While searching: rooms found outside the list showing.
+        case elsewhere
     }
 
     let id: String
@@ -27,6 +29,7 @@ struct RoomSection: Identifiable, Equatable {
     static let lowPriorityID = "lowPriority"
     static let peopleID = "people"
     static let roomsID = "rooms"
+    static let elsewhereID = "elsewhere"
 
     /// Its place in the order that can be changed, for People, Rooms and the account's own.
     var orderTag: String? {

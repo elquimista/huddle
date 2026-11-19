@@ -172,7 +172,7 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var searchModel: MessageSearch?
     /// Goes through encrypted rooms' whole history, so search finds all of it.
     let historyIndexer = HistoryIndexer()
-    /// The room last open with each space selected ("" for all rooms), to go back to.
+    /// The room last open with each space selected ("" for Home), to go back to.
     @ObservationIgnored private var lastRoomBySpace: [String: String] = [:]
     /// The room that was open when the app last quit, to open again once the room list has it.
     @ObservationIgnored private var roomToReopen: String?
@@ -405,18 +405,23 @@ final class AccountSession: Identifiable {
 
     /// Sorts the rooms into the list's sections, in Element's order: invitations and favourites
     /// first, then People, Rooms and the account's own sections in the order set (here or in
-    /// Element), then low priority. Only rooms of the space showing (every room, with none) that
-    /// match the search; spaces left out. A room is in one section: a favourite or a room in an
-    /// own section is there even if tagged otherwise too. Empty sections are left out, except
-    /// the account's own made where the list is showing (the whole list, or that space), so
-    /// rooms can be put in them.
+    /// Element), then low priority. Only rooms of the list showing (a space's, or Home's) that
+    /// match the search; spaces left out. While searching, rooms found anywhere else follow,
+    /// under Elsewhere, so none is out of reach. A room is in one section: a favourite or a room
+    /// in an own section is there even if tagged otherwise too. Empty sections are left out,
+    /// except the account's own made where the list is showing (Home, or that space), so rooms
+    /// can be put in them.
     func rebuildSections() {
-        let inSpace = selectedSpaceID.map(roomIDs(inSpace:))
+        let listed = roomIDs(listedIn: selectedSpaceID)
         let query = searchText.trimmingCharacters(in: .whitespaces)
         var buckets: [String: [RoomSummary]] = [:]
+        var elsewhere: [RoomSummary] = []
         for room in allRooms where !room.isSpace {
-            if let inSpace, !inSpace.contains(room.id) { continue }
             if !query.isEmpty, room.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) == nil {
+                continue
+            }
+            guard listed.contains(room.id) else {
+                if !query.isEmpty { elsewhere.append(room) }
                 continue
             }
             let ownSection = roomSectionTags[room.id].flatMap { sectionData[$0] != nil ? $0 : nil }
@@ -439,6 +444,9 @@ final class AccountSession: Identifiable {
             }
         }
         add(RoomSection.lowPriorityID, "Low Priority", .lowPriority)
+        if !elsewhere.isEmpty {
+            result.append(RoomSection(id: RoomSection.elsewhereID, kind: .elsewhere, title: "Elsewhere", rooms: elsewhere))
+        }
         if result != sections { sections = result }
         let flattened = result.flatMap(\.rooms)
         if flattened != rooms { rooms = flattened }
@@ -547,7 +555,7 @@ final class AccountSession: Identifiable {
         if let selected = selectedSpaceID, !spaces.contains(where: { $0.roomId == selected }) {
             selectedSpaceID = nil
         }
-        if selectedSpaceID != nil { rebuildSections() }
+        rebuildSections()
     }
 
     private func applySpaceUpdates(_ updates: [SpaceListUpdate]) {
@@ -569,7 +577,8 @@ final class AccountSession: Identifiable {
         var filters = spaceFilters
         for update in updates { filters.apply(update.diff) }
         spaceFilters = filters
-        if selectedSpaceID != nil { rebuildSections() }
+        // Every list depends on them: a space's for its rooms, Home's for the rooms it leaves out.
+        rebuildSections()
     }
 
     private func refreshEditableSpaces() async {
@@ -577,8 +586,8 @@ final class AccountSession: Identifiable {
         editableSpaceIDs = Set(await spaceService.editableSpaces().map(\.roomId))
     }
 
-    /// Narrows the room list to a space (nil for every room) and shows the room last open
-    /// there, if it is still in it, or else the space itself.
+    /// Narrows the room list to a space (nil for Home) and shows the room last open there, if
+    /// it is still in it, or else the space itself.
     func show(space spaceID: String?) {
         selectedSpaceID = spaceID
         openRoom(forSpace: spaceID)
@@ -626,17 +635,20 @@ final class AccountSession: Identifiable {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { MainActor.assumeIsolated(work) }
     }
 
-    /// The room last open in a space, if it is still in it; else the space itself.
+    /// The room last open in a space (or Home), if it is still there; else the space itself, or
+    /// for Home, which has no page of its own, no room: the room open stays only if the list
+    /// shown holds it, so the two always agree.
     private func openRoom(forSpace spaceID: String?) {
-        let inSpace = spaceID.map(roomIDs(inSpace:))
-        if let last = lastRoomBySpace[spaceID ?? ""], inSpace?.contains(last) ?? true {
+        let listed = roomIDs(listedIn: spaceID)
+        if let last = lastRoomBySpace[spaceID ?? ""], listed.contains(last) {
             selectedRoomID = last
-        } else if let inSpace, let current = selectedRoomID, inSpace.contains(current) {
+        } else if let current = selectedRoomID, listed.contains(current) {
             browsingSpaceID = nil
         } else if let spaceID {
             selectedRoomID = nil
             browsingSpaceID = spaceID
         } else {
+            selectedRoomID = nil
             browsingSpaceID = nil
         }
     }
@@ -715,10 +727,24 @@ final class AccountSession: Identifiable {
         return result
     }
 
-    /// How a space's rooms stand, counted as the account's badge counts them: how many have
-    /// notifications, how many of those need attention now, and whether any has anything unread.
-    func attention(inSpace spaceID: String) -> (count: Int, urgent: Int, hasUnread: Bool) {
-        let ids = roomIDs(inSpace: spaceID)
+    /// Every room in one of the account's spaces, at any depth: the rooms Home leaves out.
+    var roomIDsInSpaces: Set<String> {
+        Set(spaceFilters.flatMap(\.descendants))
+    }
+
+    /// The rooms a space's list holds, or with none, Home's: direct chats and rooms in no space,
+    /// so a chat filed in a space is in one place and lights up one badge.
+    func roomIDs(listedIn spaceID: String?) -> Set<String> {
+        if let spaceID { return roomIDs(inSpace: spaceID) }
+        let inSpaces = roomIDsInSpaces
+        return Set(allRooms.lazy.filter { !$0.isSpace && !inSpaces.contains($0.id) }.map(\.id))
+    }
+
+    /// How a space's rooms (Home's, with none) stand, counted as the account's badge counts
+    /// them: how many have notifications, how many of those need attention now, and whether any
+    /// has anything unread.
+    func attention(inSpace spaceID: String?) -> (count: Int, urgent: Int, hasUnread: Bool) {
+        let ids = roomIDs(listedIn: spaceID)
         var count = 0
         var urgent = 0
         var hasUnread = false
@@ -730,16 +756,16 @@ final class AccountSession: Identifiable {
         return (count, urgent, hasUnread)
     }
 
-    /// Marks every room in a space read.
-    func markAllRead(inSpace spaceID: String) {
-        let ids = roomIDs(inSpace: spaceID)
+    /// Marks every room in a space (Home, with none) read.
+    func markAllRead(inSpace spaceID: String?) {
+        let ids = roomIDs(listedIn: spaceID)
         for room in allRooms where ids.contains(room.id) && Self.isUnread(room) {
             setRoom(room.id, unread: false)
         }
     }
 
-    func hasUnreadRooms(inSpace spaceID: String) -> Bool {
-        let ids = roomIDs(inSpace: spaceID)
+    func hasUnreadRooms(inSpace spaceID: String?) -> Bool {
+        let ids = roomIDs(listedIn: spaceID)
         return allRooms.contains { ids.contains($0.id) && Self.isUnread($0) }
     }
 
@@ -918,10 +944,9 @@ final class AccountSession: Identifiable {
     }
 
     /// Makes the room list show a room, if it doesn't already: on the first space in the rail
-    /// that holds it, or on every room if none does (as none holds a direct chat). A space
-    /// showing that holds it, or every room showing, is left as it is.
+    /// that holds it, or on Home if none does. A list showing that holds it is left as it is.
     func showInList(_ roomID: String) {
-        guard let space = selectedSpaceID, !roomIDs(inSpace: space).contains(roomID) else { return }
+        guard !roomIDs(listedIn: selectedSpaceID).contains(roomID) else { return }
         selectedSpaceID = topLevelSpace(containing: roomID)
     }
 

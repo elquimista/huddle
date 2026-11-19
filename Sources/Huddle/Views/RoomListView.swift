@@ -30,9 +30,12 @@ struct RoomListView: View {
                     RoomListSection(account: account, section: section, actions: actions)
                 }
             }
-            // A room chosen some other way (Next Room, a notification) is brought into view.
+            // A room chosen some other way (Next Room, a notification) is brought into view. One
+            // chosen from a search's Elsewhere takes the list to the space it's in (or Home).
             .onChange(of: account.selectedRoomID) { _, roomID in
-                if let roomID { proxy.scrollTo(roomID) }
+                guard let roomID else { return }
+                if !account.searchText.isEmpty { account.showInList(roomID) }
+                proxy.scrollTo(roomID)
             }
         }
         .listStyle(.sidebar)
@@ -187,11 +190,11 @@ private struct RoomListSection: View {
     let section: RoomSection
     let actions: Actions
 
-    /// Where a room dropped here goes; nil for invitations, and for a room whose usual section
-    /// this isn't (a direct chat dropped on Rooms).
+    /// Where a room dropped here goes; nil for invitations and Elsewhere, and for a room whose
+    /// usual section this isn't (a direct chat dropped on Rooms).
     private func place(for room: RoomSummary) -> SectionPlace? {
         switch section.kind {
-        case .invites: nil
+        case .invites, .elsewhere: nil
         case .favourites: .favourites
         case .custom: .custom(section.id)
         case .lowPriority: .lowPriority
@@ -272,7 +275,7 @@ private struct RoomListSection: View {
                 .disabled(!account.canMoveSection(orderTag, by: 1))
             Divider()
         }
-        if section.kind != .invites {
+        if section.kind != .invites && section.kind != .elsewhere {
             Button("Mark All as Read") { account.markAllRead(in: section) }
                 .disabled(!section.rooms.contains(where: AccountSession.isUnread))
             Divider()
@@ -436,8 +439,8 @@ private struct RoomRowMenu: View {
                     }
                 }
             } else {
-                Button("Mark All as Read") { account.markAllRead() }
-                    .disabled(!account.hasUnreadRooms)
+                Button("Mark All as Read") { account.markAllRead(inSpace: nil) }
+                    .disabled(!account.hasUnreadRooms(inSpace: nil))
             }
         }
     }
