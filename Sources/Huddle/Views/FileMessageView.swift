@@ -59,7 +59,7 @@ struct FileMessageView: View {
             .help(canOpen ? "Open “\(file.filename)”" : file.filename)
             .accessibilityLabel("\(file.filename), \(status)")
             .accessibilityHint(canOpen ? "Opens the file" : "")
-            .onHover { isHovering = $0 }
+            .onHoverInFrontWindow { isHovering = $0 }
             // Over the tile, not inside it, so the stop button is a control of its own.
             .overlay(alignment: .trailing) {
                 trailing.padding(.trailing, 12)

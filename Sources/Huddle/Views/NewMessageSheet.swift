@@ -559,7 +559,7 @@ private struct PersonRow: View {
         }
         .buttonStyle(.plain)
         .disabled(person.unavailable != nil)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help(person.unavailable == nil ? "Add \(person.name)" : "")
         .accessibilityLabel([person.name, person.name == person.userID ? nil : person.userID, person.unavailable]
             .compactMap { $0 }.joined(separator: ", "))

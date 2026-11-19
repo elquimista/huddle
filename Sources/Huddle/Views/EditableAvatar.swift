@@ -38,7 +38,7 @@ struct EditableAvatar<Picture: View>: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .background(MenuAnchorView(anchor: anchor))
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help(isEnabled ? "Change the picture" : "")
         .accessibilityLabel(isEnabled ? "Change picture" : "Picture")
         // The menu's choices, straight from VoiceOver's actions.

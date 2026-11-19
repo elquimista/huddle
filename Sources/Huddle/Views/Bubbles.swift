@@ -148,7 +148,7 @@ struct RoundActionButton<Label: View>: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help(help)
         .accessibilityLabel(help)
     }

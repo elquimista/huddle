@@ -55,7 +55,7 @@ private struct NewSpaceButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help("New space")
         .accessibilityLabel("New Space")
     }
@@ -265,7 +265,7 @@ struct SpaceListHeader: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .onHover { isHovering = $0 }
+            .onHoverInFrontWindow { isHovering = $0 }
             .help("Browse every room in this space")
             .accessibilityHint("Shows every room in this space, including ones you haven’t joined")
             Menu {
@@ -710,7 +710,7 @@ private struct SpaceRoomRow: View {
         .padding(.horizontal, 12)
         .contentShape(Rectangle())
         .onTapGesture { if opens { open() } }
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isPreview ? [] : .isButton)
         .accessibilityAction(.default) {

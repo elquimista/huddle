@@ -75,7 +75,7 @@ struct PinnedBanner: View {
         .background(isHovering ? AnyShapeStyle(.quaternary.opacity(0.5)) : AnyShapeStyle(.clear))
         .background(.bar)
         .overlay(alignment: .bottom) { Rectangle().fill(.separator).frame(height: 1) }
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
     }
 
     private func snippet(_ message: MessageRow, _ preview: ReplyPreview?) -> some View {
@@ -230,7 +230,7 @@ private struct PinnedRow: View {
                 .padding(.trailing, 6)
             }
         }
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help("Go to this message")
         .accessibilityElement(children: .combine)
         .accessibilityAction(named: "Unpin") { if canUnpin { unpin() } }

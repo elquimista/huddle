@@ -371,7 +371,7 @@ private struct ChoiceRow: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .accessibilityLabel(title)
         .accessibilityHint(detail)
     }

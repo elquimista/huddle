@@ -333,7 +333,7 @@ private struct ThreadListRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
     }
 }
 

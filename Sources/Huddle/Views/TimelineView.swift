@@ -84,6 +84,7 @@ struct TimelineView: View {
     @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
     /// Which message shows its hover actions.
     @State private var hoverState = MessageHoverState()
+    @Environment(\.controlActiveState) private var windowState
     /// The names' width while it is being dragged; saved for the room when the drag ends.
     @State private var draggedNameWidth: CGFloat?
     @FocusState private var composerFocused: Bool
@@ -260,6 +261,10 @@ struct TimelineView: View {
                 .environment(\.emojiSize, emojiSize)
                 .environment(\.ircNameWidth, nameWidth)
                 .environment(\.messageHover, hoverState)
+                // A popover of the window's own (an emoji picker) leaves it active, not inactive.
+                .onChange(of: windowState, initial: true) { _, state in
+                    hoverState.isWindowActive = state != .inactive || DevHooks.assumesActive
+                }
                 // Laid out at the width the timeline is heading for, not at each width it passes
                 // through on the way: as the thread panel opens or closes, the messages re-wrap
                 // once, at the start, instead of again and again as the conversation narrows,
@@ -2059,7 +2064,7 @@ private struct ReactionChipView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help(summary)
         .accessibilityLabel("\(reaction.key), \(reaction.count)")
         .accessibilityValue(summary)
@@ -2104,7 +2109,7 @@ private struct AddReactionChip: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help("Add Reaction")
         .accessibilityLabel("Add Reaction")
     }
@@ -2173,7 +2178,7 @@ struct ActionButton<Label: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help(help)
         // Its icon says nothing to VoiceOver; what it does, as the tooltip has it, does.
         .accessibilityLabel(help)
@@ -2560,7 +2565,7 @@ private struct ThreadChip: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .padding(.leading, -6)
         .padding(.top, 1)
     }

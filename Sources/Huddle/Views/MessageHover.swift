@@ -28,6 +28,14 @@ final class MessageHoverState {
     private var active: String?
     private var isResolving = false
 
+    /// False while the window is behind another (Settings in front, say, or another app): no
+    /// message shows its actions then, as a Mac window behind doesn't answer the pointer, and a
+    /// first click there only brings the window forward. Where the pointer is is still followed,
+    /// so the message under it shows them as soon as the window comes to the front.
+    var isWindowActive = true {
+        didSet { if isWindowActive != oldValue { resolveSoon() } }
+    }
+
     func row(_ id: String) -> Row {
         if let row = rows[id] { return row }
         let row = Row()
@@ -66,7 +74,7 @@ final class MessageHoverState {
         isResolving = true
         DispatchQueue.main.async { [self] in
             isResolving = false
-            let next = barOwner ?? hovered.last
+            let next = isWindowActive ? barOwner ?? hovered.last : nil
             guard next != active else { return }
             if let active { rows[active]?.isActive = false }
             if let next { row(next).isActive = true }
@@ -77,4 +85,33 @@ final class MessageHoverState {
 
 extension EnvironmentValues {
     @Entry var messageHover: MessageHoverState = .unattached
+}
+
+extension View {
+    /// `onHover`, but only while the window is in front: a Mac window behind another doesn't
+    /// answer the pointer. Told again when the window comes forward or goes behind with the
+    /// pointer still over the view.
+    func onHoverInFrontWindow(_ action: @escaping (Bool) -> Void) -> some View {
+        modifier(FrontWindowHover(action: action))
+    }
+}
+
+private struct FrontWindowHover: ViewModifier {
+    let action: (Bool) -> Void
+    @Environment(\.controlActiveState) private var windowState
+    @State private var isOver = false
+
+    /// A popover of the window's own (an emoji picker) leaves it active, not inactive.
+    private var isInFront: Bool { windowState != .inactive || DevHooks.assumesActive }
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { over in
+                isOver = over
+                action(over && isInFront)
+            }
+            .onChange(of: isInFront) { _, inFront in
+                if isOver { action(inFront) }
+            }
+    }
 }

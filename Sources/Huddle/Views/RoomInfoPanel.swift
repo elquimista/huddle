@@ -476,7 +476,7 @@ private struct MemberRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 5)
         .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .contextMenu {
             Button("Copy User ID", action: copyUserID)
             if let verify {

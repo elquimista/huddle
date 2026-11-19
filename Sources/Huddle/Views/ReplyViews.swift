@@ -57,7 +57,7 @@ struct ReplyQuoteView: View {
         }
         .buttonStyle(.plain)
         .disabled(reply.state != .ready)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help(reply.state == .ready ? "Go to this message" : "")
         // No wider than it needs: in a bubble, a short quote keeps the bubble short.
         .widthCap(460)

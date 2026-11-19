@@ -87,7 +87,7 @@ struct AttachButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverInFrontWindow { isHovering = $0 }
         .help("Attach pictures or files")
         .accessibilityLabel("Attach pictures or files")
     }
