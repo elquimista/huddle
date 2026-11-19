@@ -778,12 +778,17 @@ struct TimelineView: View {
                         .textFieldStyle(.plain)
                         .lineLimit(1...8)
                         .focused($composerFocused)
+                        .accessibilityHint(editTarget == nil ? "Return sends. Shift-Return starts a new line."
+                                                             : "Return saves. Shift-Return starts a new line.")
                         .onSubmit { send(proxy) }
                         // While suggestions are showing, the arrows move through them and Return
-                        // or Tab picks one instead of sending.
+                        // or Tab picks one instead of sending. Shift-Return starts a new line, as
+                        // in Element and most chat apps (Option-Return does too, as in any field).
                         .onKeyPress(.upArrow) { upArrow() }
                         .onKeyPress(.downArrow) { moveSuggestion(1) }
-                        .onKeyPress(.return) { pickSelectedSuggestion() }
+                        .onKeyPress(.return, phases: .down) { press in
+                            press.modifiers.contains(.shift) ? insertLineBreak() : pickSelectedSuggestion()
+                        }
                         .onKeyPress(.tab) { pickSelectedSuggestion() }
                         .onKeyPress(.escape) {
                             // Escape closes the mention list if it is open; otherwise it cancels a reply.
@@ -818,8 +823,8 @@ struct TimelineView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
                 .disabled(!canSend)
-                .help(editTarget == nil ? "Send (Return). Option-Return for a new line."
-                                        : "Save (Return). Esc to cancel.")
+                .help(editTarget == nil ? "Send (Return). Shift-Return for a new line."
+                                        : "Save (Return). Shift-Return for a new line, Esc to cancel.")
                 .accessibilityLabel(editTarget == nil ? "Send" : "Save")
             }
         }
@@ -1232,6 +1237,16 @@ struct TimelineView: View {
         let count = suggestions.count
         guard count > 0 else { return .ignored }
         suggestionIndex = (suggestionIndex + step + count) % count
+        return .handled
+    }
+
+    /// A line break where the cursor is, put in by the field's own editor as Option-Return's is,
+    /// so the field grows and the text stays where it was typed.
+    private func insertLineBreak() -> KeyPress.Result {
+        // The window the key went to: the key window, while Huddle is the app in front.
+        let window = NSApp.currentEvent?.window ?? NSApp.keyWindow
+        guard let editor = window?.firstResponder as? NSTextView else { return .ignored }
+        editor.insertNewlineIgnoringFieldEditor(nil)
         return .handled
     }
 
