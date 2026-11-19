@@ -32,6 +32,9 @@ struct TimelineView: View {
     @State private var replyTarget: ReplyPreview?
     /// The row just jumped to from a reply's quote, lit up for a moment.
     @State private var highlightedRow: String?
+    /// While the view scrolls to a row just chosen (a pinned message, a reply's original): no
+    /// earlier rows are drawn meanwhile.
+    @State private var showingRowUntil = Date.distantPast
     /// The message being looked for after clicking a quote, while older history loads.
     @State private var searchingFor: String?
     /// Images waiting in the composer to be sent.
@@ -159,15 +162,18 @@ struct TimelineView: View {
         guard start > timeline.rows.startIndex else { return }
         let newStart = max(timeline.rows.startIndex, start - Self.rowsAtFirst)
         firstShownID = newStart == timeline.rows.startIndex ? nil : timeline.rows[newStart].id
-        holdReadingPlace(proxy, rowsKeepTheirSize: true)
+        // Following the newest message, the view goes back to it whatever is drawn above.
+        if !followsNewest { holdReadingPlace(proxy, rowsKeepTheirSize: true) }
     }
 
-    /// Makes sure a row is drawn, drawing it and a few before it if it was among the undrawn.
+    /// Makes sure a row is drawn, drawing it and a few dozen before it if it was among the
+    /// undrawn: enough that the top of what's drawn isn't in view once the row is, which would
+    /// draw more above it as the view gets there, and move it.
     /// Returns whether anything changed, in which case it is on screen only after the next layout.
     private func drawRow(_ rowID: String) -> Bool {
         guard let index = timeline.rows.firstIndex(where: { $0.id == rowID }),
               index < shownRows.startIndex else { return false }
-        let newStart = max(timeline.rows.startIndex, index - 10)
+        let newStart = max(timeline.rows.startIndex, index - Self.rowsAtFirst)
         firstShownID = newStart == timeline.rows.startIndex ? nil : timeline.rows[newStart].id
         return true
     }
@@ -423,6 +429,13 @@ struct TimelineView: View {
             .task(id: HistoryTrigger(edgeVisible: historyEdgeVisible, finishedRequests: timeline.historyRequests,
                                      shown: shownRows.count)) {
                 guard historyEdgeVisible else { return }
+                // Not while the view is on its way to a message just chosen: rows drawn above
+                // it then would move it from under the view as it gets there.
+                let wait = showingRowUntil.timeIntervalSinceNow
+                if wait > 0 {
+                    try? await Task.sleep(for: .seconds(wait))
+                    guard !Task.isCancelled, historyEdgeVisible else { return }
+                }
                 if hasUndrawnRows {
                     // Already loaded: drawn at once, no need to ask the server.
                     drawEarlierRows(proxy)
@@ -637,6 +650,7 @@ struct TimelineView: View {
     private func holdReadingPlace(_ proxy: ScrollViewProxy, rowsKeepTheirSize: Bool = false) {
         guard let middle = place.middleRow(among: timeline.rows.map(\.id)) else { return }
         place.heldRow = middle
+        place.heldSince = Date()
         if rowsKeepTheirSize, let frame = place.rows[middle.id] ?? nil {
             let span = place.viewport - place.topInset
             if span > frame.height {
@@ -655,9 +669,19 @@ struct TimelineView: View {
         }
     }
 
-    /// Scrolls so the held row's top is where it was before the rows around it changed.
+    /// Scrolls so the held row's top is where it was before the rows around it changed. If the
+    /// reader has scrolled since the place was taken, where they are now is the place: it is
+    /// taken again there, and the view isn't pulled back.
     private func restoreReadingPlace(_ proxy: ScrollViewProxy) {
-        guard !followsNewest, let held = place.heldRow, let frame = place.rows[held.id] ?? nil,
+        guard !followsNewest, place.heldRow != nil else { return }
+        if input.hasInput(since: place.heldSince) {
+            if let middle = place.middleRow(among: timeline.rows.map(\.id)) {
+                place.heldRow = middle
+                place.heldSince = Date()
+            }
+            return
+        }
+        guard let held = place.heldRow, let frame = place.rows[held.id] ?? nil,
               abs(frame.minY - held.top) > 0.5 else { return }    // already where it was
         // Rows are measured from just below the pinned banner, and scrolling to a point of a row
         // lines it up with the point as far down the rest of the view (the composer counts in
@@ -1019,6 +1043,7 @@ struct TimelineView: View {
         // reading place pull the view back to where it was.
         followsNewest = false
         place.heldRow = nil
+        showingRowUntil = Date().addingTimeInterval(0.6)
         if animated {
             withAnimation(.snappy(duration: 0.3)) {
                 proxy.scrollTo(rowID, anchor: .center)
@@ -2259,6 +2284,9 @@ private final class ScrollInputTracker {
 
     var isRecent: Bool { DevHooks.freeScroll || Date().timeIntervalSince(lastInput) < 0.6 }
 
+    /// Whether the reader has scrolled (or dragged, or paged) since then.
+    func hasInput(since date: Date) -> Bool { lastInput > date }
+
     func start() {
         guard monitor == nil else { return }
         // Clicks themselves aren't scrolling: a click on a button (a message's actions, the
@@ -2679,6 +2707,8 @@ final class ReadingPlace {
     }
     /// The row being read and where its top was, from just before the messages re-wrapped.
     var heldRow: (id: String, top: CGFloat)?
+    /// When `heldRow` was taken: the reader's own scrolling after it wins over it.
+    var heldSince = Date.distantPast
 
     /// The row nearest the middle of the view, and where its top is.
     func middleRow(among order: [String]) -> (id: String, top: CGFloat)? {
