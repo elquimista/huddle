@@ -406,15 +406,23 @@ struct TimelineView: View {
                 if old != nil, old != new { messagesWillRewrap(proxy) }
             }
             .onChange(of: timeline.prependCount) {
-                // Older messages were added above. While following the newest message, stay
-                // there; otherwise stay on the message being read, wherever it is in the view.
-                if followsNewest {
-                    // Out of sight above the newest ones (the SDK fetches history on its own):
-                    // not drawn until scrolled to, so the room doesn't grow and slow down for
-                    // them. Only the rows that just arrived; those drawn stay drawn.
-                    if timeline.focusedEvent == nil, firstShownID == nil, let previousFirst = timeline.prependAnchorID {
-                        firstShownID = previousFirst
+                defer {
+                    if AppEnvironment.isDev, timeline.threadRoot == nil {
+                        print("DEV_TIMELINE_PREPEND rows=\(timeline.rows.count) drawn=\(shownRows.count) following=\(followsNewest) atTop=\(historyEdgeVisible)")
+                        fflush(stdout)
                     }
+                }
+                // Older messages were added above. Unless the view is at its top, where they were
+                // asked for, they came on their own (the SDK fetches history in the background,
+                // for search) and aren't drawn until scrolled to, so the room doesn't grow and
+                // slow down for them. Only the rows that just arrived; those drawn stay drawn.
+                if timeline.focusedEvent == nil, firstShownID == nil, followsNewest || !historyEdgeVisible,
+                   let previousFirst = timeline.prependAnchorID {
+                    firstShownID = previousFirst
+                }
+                // While following the newest message, stay there; otherwise stay on the message
+                // being read, wherever it is in the view.
+                if followsNewest {
                     scrollToBottom(proxy)
                 } else if let until = centersFocusUntil, Date() < until, !input.isRecent,
                           let focus = timeline.focusedEvent,

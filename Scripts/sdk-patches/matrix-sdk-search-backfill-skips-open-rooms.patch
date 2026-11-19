@@ -1,0 +1,67 @@
+diff --git a/crates/matrix-sdk/src/event_cache/back_pagination_queue.rs b/crates/matrix-sdk/src/event_cache/back_pagination_queue.rs
+index 668858d..ba35ce1 100644
+--- a/crates/matrix-sdk/src/event_cache/back_pagination_queue.rs
++++ b/crates/matrix-sdk/src/event_cache/back_pagination_queue.rs
+@@ -127,6 +127,10 @@ pub(crate) enum BackPaginationStopReason {
+     /// The room isn't worth back-paginating: it's a space, which has no
+     /// messages to load, or the user isn't joined to it.
+     Skipped,
++    /// A low-priority run left the room alone because something else is
++    /// subscribed to it (a timeline on screen, say): what it loaded would show
++    /// up there unasked for. Safe to retry later.
++    InUse,
+ }
+ 
+ /// The result of running a single [`BackPaginationRequest`] to completion.
+@@ -550,7 +554,7 @@ async fn run_request(
+     // this function returns triggers an auto-shrink of the room's linked chunk
+     // if nobody else is subscribed, so backfilled events don't linger in
+     // memory.
+-    let (pagination, _subscriber) = {
++    let (room, pagination, _subscriber) = {
+         let Some(inner) = event_cache.upgrade() else {
+             return BackPaginationRunResult { reason: BackPaginationStopReason::Cancelled };
+         };
+@@ -575,7 +579,7 @@ async fn run_request(
+                 return BackPaginationRunResult { reason: BackPaginationStopReason::Failed };
+             }
+         };
+-        (room.pagination(), subscriber)
++        (room.clone(), room.pagination(), subscriber)
+     };
+ 
+     let mut batches = 0usize;
+@@ -585,6 +589,14 @@ async fn run_request(
+             break BackPaginationStopReason::Cancelled;
+         }
+ 
++        // Every timeline on a room shows all of its loaded events, so a
++        // low-priority run (the search backfill) would grow the timeline of a
++        // room someone has open, batch after batch, as they read it. Such a
++        // room is left until nothing but this run is subscribed to it.
++        if request.priority == Priority::Low && room.subscriber_count().await > 1 {
++            break BackPaginationStopReason::InUse;
++        }
++
+         let outcome = match pagination.run_backwards_once(request.batch_size).await {
+             Ok(outcome) => outcome,
+             Err(err) => {
+diff --git a/crates/matrix-sdk/src/event_cache/caches/room/mod.rs b/crates/matrix-sdk/src/event_cache/caches/room/mod.rs
+index 3a5fda7..78e8803 100644
+--- a/crates/matrix-sdk/src/event_cache/caches/room/mod.rs
++++ b/crates/matrix-sdk/src/event_cache/caches/room/mod.rs
+@@ -158,6 +158,14 @@ impl RoomEventCache {
+         Ok((events, subscriber))
+     }
+ 
++    /// How many subscribers this room's cache has (timelines on it, say).
++    pub(crate) async fn subscriber_count(&self) -> usize {
++        match self.inner.state.read().await {
++            Ok(state) => state.subscribers_handle().count(),
++            Err(_) => 0,
++        }
++    }
++
+     /// Return a [`RoomPagination`] type useful for running back-pagination
+     /// queries in the current room.
+     pub fn pagination(&self) -> RoomPagination {
