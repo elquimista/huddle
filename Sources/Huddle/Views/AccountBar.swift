@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The accounts, as a row of small avatars in the title bar above the sidebar: the one shown
-/// is ringed, and each carries its own unread badge. They sit above what they switch (the
-/// spaces rail and the room list), out of the way of the open room's own title and buttons.
+/// opens into a chip with its name, and each carries its own unread badge. They sit above what
+/// they switch (the spaces rail and the room list), out of the way of the open room's own title
+/// and buttons.
 struct AccountBar: View {
     /// The sidebar's width, which decides how many avatars fit beside the window controls.
     let sidebar: SidebarWidth
@@ -13,14 +14,16 @@ struct AccountBar: View {
     /// by the New Message button and the toolbar's own margin after the last. On the generous side: the toolbar hides an
     /// item that is a little too wide outright rather than squeezing it.
     private static let reserved: CGFloat = 196
-    /// One avatar with its ring and the room its badge needs.
-    private static let slot: CGFloat = AccountButton.size + 4 + 2 * RailBadge.overhang
+    /// One avatar and the room its badge needs.
+    private static let slot: CGFloat = AccountButton.size + 2 * RailBadge.overhang
 
     /// The accounts shown as avatars, and the rest, behind a "+N" menu. The open account is
     /// always among those shown.
     private var split: (shown: [(Int, AccountSession)], more: [(Int, AccountSession)]) {
         let all = Array(store.accounts.enumerated())
-        let fits = max(1, Int((max(sidebar.width, 280) - Self.reserved) / Self.slot))
+        // The open account's chip takes its name's width on top of an avatar's slot.
+        let chip = store.selected.map { AccountButton.nameRoom(for: $0) } ?? 0
+        let fits = max(1, Int((max(sidebar.width, 280) - Self.reserved - chip) / Self.slot))
         guard all.count > fits else { return (all, []) }
         // One slot goes to the "+N" button.
         var shown = Array(all.prefix(max(0, fits - 1)))
@@ -123,7 +126,6 @@ private struct MoreAccountsButton: View {
                 .foregroundStyle(.secondary)
                 .frame(width: AccountButton.size, height: AccountButton.size)
                 .background(Color.secondary.opacity(0.2), in: Circle())
-                .padding(2)
                 .railBadge(badge)
                 .padding(RailBadge.overhang)
                 .contentShape(Circle())
@@ -152,26 +154,59 @@ private struct AccountButton: View {
     let isSelected: Bool
     let index: Int
     let select: () -> Void
-    @State private var isHovering = false
 
     static let size: CGFloat = 22
 
+    /// The longest a name in the chip runs before it's cut short.
+    private static let longestName: CGFloat = 110
+    private static let nameFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+
+    /// What the open account's chip adds to an avatar's width: its name, and the chip's margin.
+    static func nameRoom(for account: AccountSession) -> CGFloat {
+        let width = (chipName(account) as NSString).size(withAttributes: [.font: nameFont]).width
+        return min(ceil(width), longestName) + 6 + 8 + 2 * chipInset
+    }
+
+    /// Between the chip's edge and the avatar in it.
+    private static let chipInset: CGFloat = 2
+
+    /// Its display name, or the name part of its Matrix ID.
+    private static func chipName(_ account: AccountSession) -> String {
+        account.displayName ?? account.userID.matrixLocalpart
+    }
+
     var body: some View {
-        AvatarView(media: account.media,
-                   url: account.avatarURL,
-                   name: account.displayName ?? account.userID,
-                   seed: account.userID,
-                   size: Self.size)
-            .padding(2)
-            .overlay {
-                Circle().strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 1.5)
+        // The open account opens into a chip with its name, so it's plain at a glance which one
+        // is shown.
+        HStack(spacing: 6) {
+            AvatarView(media: account.media,
+                       url: account.avatarURL,
+                       name: account.displayName ?? account.userID,
+                       seed: account.userID,
+                       size: Self.size)
+                .padding(isSelected ? Self.chipInset : 0)
+                .railBadge(RailBadge.count(urgent: account.urgentCount, other: account.badgeCount, compact: true))
+            if isSelected {
+                Text(Self.chipName(account))
+                    .font(Font(Self.nameFont))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: Self.longestName, alignment: .leading)
+                    .fixedSize()
+                    .padding(.trailing, 8)
+                    .transition(.opacity)
             }
-            .railBadge(RailBadge.count(urgent: account.urgentCount, other: account.badgeCount, compact: true))
-            .opacity(isSelected || isHovering ? 1 : 0.85)
-            .contentShape(Circle())
+        }
+        .background {
+            if isSelected {
+                Capsule().fill(.quaternary)
+                    .overlay { Capsule().strokeBorder(.separator, lineWidth: 0.5) }
+            }
+        }
+        .animation(.snappy(duration: 0.22), value: isSelected)
+            .contentShape(Capsule())
             .padding(RailBadge.overhang)
             .onTapGesture(perform: select)
-            .onHover { isHovering = $0 }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel)
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)

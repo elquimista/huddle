@@ -574,6 +574,53 @@ final class AccountSession: Identifiable {
     /// there, if it is still in it, or else the space itself.
     func show(space spaceID: String?) {
         selectedSpaceID = spaceID
+        openRoom(forSpace: spaceID)
+    }
+
+    /// What was just chosen in the spaces rail. The rail shows it at once; the room list and the
+    /// main area follow, each as soon as it has been drawn, rather than all three waiting on the
+    /// conversation, which takes longest to draw.
+    var railChoice: RailChoice?
+
+    enum RailChoice: Equatable {
+        case home
+        case space(String)
+        case invite(String)
+    }
+
+    /// A choice in the spaces rail: shown there in this frame, the room list narrowed in the
+    /// next, and the room or space opened in the one after. A newer choice before then wins.
+    func choose(inRail choice: RailChoice) {
+        railChoice = choice
+        afterThisFrame { [weak self] in
+            guard let self, self.railChoice == choice else { return }
+            switch choice {
+            case .home: self.selectedSpaceID = nil
+            case .space(let spaceID): self.selectedSpaceID = spaceID
+            case .invite: break
+            }
+            self.afterThisFrame { [weak self] in
+                guard let self, self.railChoice == choice else { return }
+                switch choice {
+                case .home: self.openRoom(forSpace: nil)
+                case .space(let spaceID): self.openRoom(forSpace: spaceID)
+                case .invite(let inviteID):
+                    self.selectedRoomID = nil
+                    self.browsingSpaceID = inviteID
+                }
+                self.railChoice = nil
+            }
+        }
+    }
+
+    /// Runs once what has changed so far is on screen: a timer, unlike a block for the main
+    /// queue, waits for the run loop to draw first.
+    private func afterThisFrame(_ work: @escaping @MainActor () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { MainActor.assumeIsolated(work) }
+    }
+
+    /// The room last open in a space, if it is still in it; else the space itself.
+    private func openRoom(forSpace spaceID: String?) {
         let inSpace = spaceID.map(roomIDs(inSpace:))
         if let last = lastRoomBySpace[spaceID ?? ""], inSpace?.contains(last) ?? true {
             selectedRoomID = last

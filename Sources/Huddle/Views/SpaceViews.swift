@@ -57,6 +57,9 @@ private struct RailSpaceButton: View {
 
     /// The corner radius of a space's 34-point square, as `AvatarView` draws it.
     static let corner: CGFloat = 34 * 0.27
+    /// The selected space's ring, and the gap between it and the space's square.
+    private static let ringWidth: CGFloat = 2.5
+    private static let ringGap: CGFloat = 2
 
     /// An invitation open in the main area is the one selected, whatever the list shows.
     private var isBrowsingInvite: Bool {
@@ -65,7 +68,16 @@ private struct RailSpaceButton: View {
     }
 
     private var isSelected: Bool {
-        switch kind {
+        // Just chosen: shown at once, while the room list and the main area catch up.
+        if let choice = account.railChoice {
+            switch (kind, choice) {
+            case (.home, .home): return true
+            case (.space(let space), .space(let id)): return space.roomId == id
+            case (.invite(let invite), .invite(let id)): return invite.id == id
+            default: return false
+            }
+        }
+        return switch kind {
         case .home: account.selectedSpaceID == nil && !isBrowsingInvite
         case .space(let space): account.selectedSpaceID == space.roomId && !isBrowsingInvite
         case .invite(let invite): account.browsingSpaceID == invite.id
@@ -73,13 +85,23 @@ private struct RailSpaceButton: View {
     }
 
     var body: some View {
+        // The selected space has a ring around it, a gap apart, in the text colour: it stands out
+        // against a space's picture whatever its colours, as the accent colour would not on one
+        // of the same colour. It shows at once, with no animation, while the room list and the
+        // conversation are drawn just after.
         icon
             .padding(3)
             .overlay {
-                RoundedRectangle(cornerRadius: Self.corner + 3, style: .continuous)
-                    .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+                if isSelected {
+                    // Out past the 3-point margin around the square.
+                    let outset = Self.ringGap + Self.ringWidth - 3
+                    RoundedRectangle(cornerRadius: Self.corner + Self.ringGap + Self.ringWidth, style: .continuous)
+                        .strokeBorder(.primary, lineWidth: Self.ringWidth)
+                        .padding(-outset)
+                }
             }
-            .railBadge(badge)
+            // After the ring, so a badge on the corner cuts a gap in it too.
+            .modifier(Badged(badge: badge, isHome: isHome))
             .contentShape(RoundedRectangle(cornerRadius: Self.corner + 3, style: .continuous))
             .padding(RailBadge.overhang)
             .onTapGesture(perform: select)
@@ -96,16 +118,33 @@ private struct RailSpaceButton: View {
         case .home:
             Image(systemName: "square.grid.2x2.fill")
                 .font(.system(size: 14))
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .foregroundStyle(isSelected ? .primary : .secondary)
                 .frame(width: 34, height: 34)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
         case .space(let space):
             AvatarView(media: account.media, url: space.avatarUrl, name: space.displayName,
                        seed: space.roomId, size: 34, isSquare: true)
         case .invite(let invite):
+            // Faded until joined, and marked by its red dot.
             AvatarView(media: account.media, url: invite.avatarURL, name: invite.name,
                        seed: invite.id, size: 34, isSquare: true)
                 .opacity(0.5)
+        }
+    }
+
+    private var isHome: Bool {
+        if case .home = kind { true } else { false }
+    }
+
+    /// The badge, for a space or an invitation. All Rooms never has one, and is left out of the
+    /// badge's compositing group, which would flatten its tile's sidebar translucency and draw it
+    /// darker than the New Space tile below.
+    private struct Badged: ViewModifier {
+        let badge: RailBadge?
+        let isHome: Bool
+
+        func body(content: Content) -> some View {
+            if isHome { content } else { content.railBadge(badge) }
         }
     }
 
@@ -144,11 +183,9 @@ private struct RailSpaceButton: View {
 
     private func select() {
         switch kind {
-        case .home: account.show(space: nil)
-        case .space(let space): account.show(space: space.roomId)
-        case .invite(let invite):
-            account.selectedRoomID = nil
-            account.browsingSpaceID = invite.id
+        case .home: account.choose(inRail: .home)
+        case .space(let space): account.choose(inRail: .space(space.roomId))
+        case .invite(let invite): account.choose(inRail: .invite(invite.id))
         }
     }
 
