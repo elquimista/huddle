@@ -367,6 +367,7 @@ private struct PrivacySettingsTab: View {
     @Environment(AccountStore.self) private var store
     @AppStorage(OwnPresence.sharingKey) private var sharesPresence = true
     @AppStorage(HistoryIndexer.defaultsKey) private var indexesFullHistory = true
+    @AppStorage(EncryptionPreferences.excludesInsecureDevicesKey) private var excludesInsecureDevices = false
 
     /// Every account's full-history pass, taken together.
     private var progress: (done: Int, total: Int)? {
@@ -399,6 +400,21 @@ private struct PrivacySettingsTab: View {
                 }
             } footer: {
                 SectionNote(text: "The index is encrypted and never leaves this Mac. Your server searches unencrypted rooms itself.")
+            }
+            Section {
+                Toggle(isOn: $excludesInsecureDevices) {
+                    Text("Exclude unverified devices")
+                    Text("Your encrypted messages can only be read on devices their owners have verified, and messages from devices that aren’t are hidden.")
+                }
+                // The accounts' clients took the setting when Huddle opened.
+                if excludesInsecureDevices != EncryptionPreferences.excludedInsecureDevicesAtLaunch {
+                    SettingRow(title: "Takes effect when Huddle restarts",
+                               detail: "Huddle quits and opens again.") {
+                        Button("Restart Now") { AppRelauncher.relaunch() }
+                    }
+                }
+            } footer: {
+                SectionNote(text: "People whose apps don’t verify their devices won’t be able to read what you send, and this Mac must be verified to send encrypted messages. Element calls this “exclude insecure devices”.")
             }
         }
         .onChange(of: indexesFullHistory) { _, on in

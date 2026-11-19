@@ -44,6 +44,10 @@ enum ClientFactory {
             // AccountSession.start).
             .withSearchIndexStore(path: paths.data.appendingPathComponent("search-index").path, key: passphrase)
             .enableAutomaticBackPagination(enableAutomaticBackPagination: true)
+            // Settings ▸ Privacy ▸ Exclude unverified devices: who message keys go to, and whose
+            // messages are decrypted.
+            .roomKeyRecipientStrategy(strategy: EncryptionPreferences.keyRecipients)
+            .decryptionSettings(decryptionSettings: EncryptionPreferences.decryption)
 
         switch server {
         case .discover(let input):

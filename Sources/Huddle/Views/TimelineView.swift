@@ -1493,7 +1493,7 @@ private struct MessageView: View {
         }
         if message.sendState == .failed {
             HStack(spacing: 8) {
-                Label("Not sent", systemImage: "exclamationmark.circle.fill")
+                Label(message.sendFailure.map { "Not sent: \($0)" } ?? "Not sent", systemImage: "exclamationmark.circle.fill")
                     .foregroundStyle(.red)
                 Button("Try Again") { Task { await timeline.retry(message.itemID) } }
                     .buttonStyle(.link)
@@ -1630,8 +1630,9 @@ private struct MessageView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-        case .undecryptable:
-            Label("Waiting for encryption keys", systemImage: "lock")
+        case .undecryptable(let reason):
+            // Waiting for keys that may yet come, or never to be read, and why.
+            Label(reason ?? "Waiting for encryption keys", systemImage: reason == nil ? "lock" : "lock.slash")
                 .foregroundStyle(.secondary)
         case .redacted:
             Label("Message deleted", systemImage: "trash")

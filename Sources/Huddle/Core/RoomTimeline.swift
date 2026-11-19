@@ -45,7 +45,8 @@ struct MessageRow: Equatable {
         /// A document, archive, video or other file, shown as a tile to open or save.
         case file(FileAttachment)
         case attachment(icon: String, name: String)
-        case undecryptable
+        /// Not decrypted: waiting for its keys (nil), or never to be, and why.
+        case undecryptable(String?)
         case redacted
         case unsupported(String)
     }
@@ -116,6 +117,8 @@ struct MessageRow: Equatable {
     /// A doubt about who really sent it, in an encrypted room: from a device its owner hasn't
     /// verified, say. Nil when there's nothing to say.
     var shield: Shield?
+    /// Why it couldn't be sent, when the SDK says something worth passing on.
+    var sendFailure: String?
     /// For an image waiting its turn to upload: the picture to show, since there is nothing
     /// to load yet.
     var localPreview: NSImage?
@@ -1029,21 +1032,24 @@ extension TimelineRow.Kind {
             body = .unsupported("Poll: \(question)")
         case .redacted:
             body = .redacted
-        case .unableToDecrypt:
-            body = .undecryptable
+        case .unableToDecrypt(let message):
+            body = .undecryptable(MessageRow.Body.reason(undecryptable: message))
         case .other, .liveLocation:
             body = .unsupported("Unsupported message")
         }
 
         var sendState: MessageRow.SendState?
         var uploadProgress: Double?
+        var sendFailure: String?
         switch event.localSendState {
         case .notSentYet(let progress):
             sendState = .sending
             if let upload = progress?.progress, upload.total > 0 {
                 uploadProgress = min(Double(upload.current) / Double(upload.total), 1)
             }
-        case .sendingFailed: sendState = .failed
+        case .sendingFailed(let error, _):
+            sendState = .failed
+            sendFailure = MessageRow.sendFailure(error, name: name)
         default: break
         }
 
@@ -1079,11 +1085,31 @@ extension TimelineRow.Kind {
             replyTo: content.inReplyTo.map(ReplyPreview.init),
             uploadProgress: uploadProgress,
             // Not strict: people who haven't been verified are the usual case, not a warning.
-            shield: event.isOwn ? nil : MessageRow.Shield(event.lazyProvider.getShields(strict: false))))
+            shield: event.isOwn ? nil : MessageRow.Shield(event.lazyProvider.getShields(strict: false)),
+            sendFailure: sendFailure))
     }
 }
 
 extension MessageRow {
+    /// Why a message wasn't sent, in a few words after "Not sent: ". Nil for a plain failure
+    /// (the network, say), which Try Again is the answer to.
+    static func sendFailure(_ error: QueueWedgeError, name: (String) -> String) -> String? {
+        switch error {
+        // Excluding unverified devices (Settings ▸ Privacy) sends only from a verified Mac.
+        case .crossVerificationRequired: return "this Mac isn’t verified"
+        case .identityViolations(let users):
+            let names = users.map(name).sorted()
+            guard let first = names.first else { return nil }
+            return names.count == 1 ? "\(first)’s verified identity changed"
+                : "\(first) and \(names.count - 1) more changed their verified identity"
+        case .insecureDevices: return "someone here has devices they haven’t verified"
+        case .expiredAccessToken: return "sign in again"
+        case .missingMediaContent: return "the file is no longer on this Mac"
+        case .invalidMimeType: return "the file’s type isn’t recognized"
+        case .genericApiError: return nil
+        }
+    }
+
     /// What the SDK says about a message's authenticity, in words: a short label to show under
     /// it, and what that means, for its tooltip.
     struct Shield: Equatable {
@@ -1140,6 +1166,24 @@ struct IdentityWarning: Equatable, Identifiable {
 }
 
 extension MessageRow.Body {
+    /// Why a message can't be read, when it won't be: nil while its keys may still come.
+    static func reason(undecryptable message: EncryptedMessage) -> String? {
+        guard case .megolmV1AesSha2(_, let cause) = message else { return nil }
+        switch cause {
+        // Turned away by Settings ▸ Privacy ▸ Exclude unverified devices.
+        case .unsignedDevice: return "Hidden: sent from a device its owner hasn’t verified"
+        case .unknownDevice: return "Hidden: sent from an unknown or deleted device"
+        case .verificationViolation: return "Hidden: the sender’s verified identity changed"
+        // The sender's app wouldn't share it with this Mac.
+        case .withheldForUnverifiedOrInsecureDevice: return "Not shared with this Mac, which isn’t verified"
+        case .withheldBySender: return "The sender didn’t share the keys for this message"
+        case .sentBeforeWeJoined: return "Sent before you joined"
+        case .historicalMessageAndDeviceIsUnverified: return "Verify this Mac to read older messages"
+        case .historicalMessageAndBackupIsDisabled: return "Older message, not in your key backup"
+        case .unknown, .malformed: return nil
+        }
+    }
+
     init(message: MessageContent) {
         switch message.msgType {
         case .text(let content): self = .text(content.body)
@@ -1197,7 +1241,8 @@ extension TimelineItemContent {
             case .sticker: text = "Sticker"
             case .poll(let question, _, _, _, _, _, _): text = "Poll: \(question)"
             case .redacted: text = "Message deleted"
-            case .unableToDecrypt: text = "Waiting for encryption keys"
+            case .unableToDecrypt(let message):
+                text = MessageRow.Body.reason(undecryptable: message) ?? "Waiting for encryption keys"
             case .other, .liveLocation: text = "Message"
             }
             let line = text.replacingOccurrences(of: "\n", with: " ")
