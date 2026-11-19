@@ -216,6 +216,8 @@ private struct RailSpaceButton: View {
                 Button("New Room…") { account.sheet = .newRoom(inSpace: space.roomId) }
                 Button("Add Existing Rooms…") { account.sheet = .addRooms(toSpace: space.roomId) }
             }
+            // Yours alone, so whoever may change the space.
+            Button("New Section…") { account.askForNewSection(inSpace: space.roomId) }
             Divider()
             Button("Mark All as Read") { account.markAllRead(inSpace: space.roomId) }
                 .disabled(!account.hasUnreadRooms(inSpace: space.roomId))
@@ -272,6 +274,8 @@ struct SpaceListHeader: View {
                     Button("New Room…") { account.sheet = .newRoom(inSpace: spaceID) }
                     Button("Add Existing Rooms…") { account.sheet = .addRooms(toSpace: spaceID) }
                 }
+                // Yours alone, so whoever may change the space.
+                Button("New Section…") { account.askForNewSection(inSpace: spaceID) }
                 Divider()
                 Button("Mark All as Read") { account.markAllRead(inSpace: spaceID) }
                     .disabled(!account.hasUnreadRooms(inSpace: spaceID))

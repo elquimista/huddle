@@ -242,6 +242,13 @@ extension AccountSession {
         }
     }
 
+    /// A space's New Section…: shows that space if another is showing, so the section is made
+    /// there and kept in it, then asks for the name.
+    func askForNewSection(inSpace spaceID: String) {
+        if selectedSpaceID != spaceID { choose(inRail: .space(spaceID)) }
+        asksForNewSection = true
+    }
+
     /// Adds a section of the account's own, just above Rooms (Element's Chats), as Element does,
     /// noting the space showing. Returns its tag.
     @discardableResult
