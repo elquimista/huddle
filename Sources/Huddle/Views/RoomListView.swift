@@ -360,7 +360,8 @@ private struct RoomListRow: View {
                 presence: room.directUserID.flatMap { account.presence.people[$0] },
                 // Seen only where this account shares its own typing, as in the conversation,
                 // and not in a muted room, which is meant to be quiet.
-                typists: account.sharesTyping && !room.isMuted && !room.isInvite ? account.typists(in: room.id) : nil)
+                typists: account.sharesTyping && !room.isMuted && !room.isInvite ? account.typists(in: room.id) : nil,
+                isSelected: account.selectedRoomID == room.id)
             .tag(room.id)
             .draggable(room.id) {
                 Label(room.name, systemImage: "bubble.left")
@@ -494,8 +495,8 @@ private struct RoomRow: View {
     var presence: PresenceInfo?
     /// Who is typing in the room.
     var typists: RoomTypists?
-
-    @Environment(\.backgroundProminence) private var backgroundProminence
+    /// The open room's row, drawn in the accent colour when the list has the focus.
+    var isSelected = false
 
     /// The reaction, when it is more recent than the room's newest message.
     private var latestReaction: ReactionPreview? {
@@ -546,11 +547,11 @@ private struct RoomRow: View {
                 }
                 HStack(alignment: .center) {
                     if let typing {
-                        // In colour, as it's news (on a selected row, as the row's text is).
+                        // In colour, as it's news; on the open room's row, as the row's own text
+                        // is, since that row may be in the accent colour itself.
                         Text(typing)
                             .font(.callout)
-                            .foregroundStyle(backgroundProminence == .increased
-                                             ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
+                            .foregroundStyle(isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
                             .lineLimit(1)
                     } else {
                         Text(preview)
