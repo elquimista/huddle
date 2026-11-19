@@ -200,13 +200,15 @@ private struct ThreadTimelineHost: View {
     let roomID: String
     let root: String
     @State private var timeline: RoomTimeline?
+    @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
 
     var body: some View {
         Group {
             if let timeline {
                 TimelineView(timeline: timeline, media: account.media, placeholder: "Reply in thread")
                     // The panel is narrow; the compact layout crams it.
-                    .environment(\.forcedMessageLayout, .modern)
+                    .environment(\.forcedMessageLayout, chosenLayout == .irc ? .modern : nil)
+                    .environment(\.bubblesOnContentBackground, true)
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }

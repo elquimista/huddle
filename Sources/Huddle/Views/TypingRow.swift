@@ -4,24 +4,34 @@ import SwiftUI
 /// be (or their name, in the IRC layout), and who it is where the text would be.
 struct TypingRow: View {
     let typists: [Typist]
+    /// A direct chat between two: in the bubble layout, the bubble alone says who.
+    var isOneToOne = false
     @Environment(\.messageLayout) private var layout
     @Environment(\.ircNameWidth) private var nameWidth
     @State private var isShown = false
 
     var body: some View {
         HStack(alignment: .center, spacing: layout == .irc ? 8 : 10) {
-            if layout == .irc {
+            switch layout {
+            case .irc:
                 // The time column, then the names'.
                 Color.clear.frame(width: IRCNameColumn.leading - 8, height: 1)
                 TypingDots().frame(width: nameWidth, alignment: .trailing)
-            } else {
+            case .bubbles:
+                // Where the next bubble will be: an incoming one, its dots for text.
+                if !isOneToOne { Color.clear.frame(width: Bubble.avatarSize, height: 1) }
+                TypingDots(isBubbled: true)
+                    .padding(.leading, isOneToOne ? 0 : Bubble.avatarGap - 10)
+            case .modern:
                 TypingDots()
             }
-            Text(Self.sentence(for: typists))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            if layout != .bubbles || !isOneToOne {
+                Text(Self.sentence(for: typists))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             Spacer(minLength: 0)
         }
         .opacity(isShown ? 1 : 0)
@@ -42,6 +52,8 @@ struct TypingRow: View {
 
 /// Three dots in a little bubble, brightening one after another.
 private struct TypingDots: View {
+    /// In a chat bubble of the bubble layout's, rather than a capsule of its own.
+    var isBubbled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -59,9 +71,7 @@ private struct TypingDots: View {
             }
         }
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 6)
-        .background(.quaternary, in: Capsule())
+        .modifier(DotsFrame(isBubbled: isBubbled))
     }
 
     /// 0 to 1: a pulse that runs across the dots every 1.2 seconds, each a fifth behind the last.
@@ -69,5 +79,24 @@ private struct TypingDots: View {
         let phase = (time / 1.2 - Double(dot) * 0.2).truncatingRemainder(dividingBy: 1)
         let wave = sin((phase < 0 ? phase + 1 : phase) * 2 * .pi)
         return max(0, wave)
+    }
+}
+
+private struct DotsFrame: ViewModifier {
+    let isBubbled: Bool
+
+    func body(content: Content) -> some View {
+        if isBubbled {
+            content
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+                .padding(.leading, Bubble.tailWidth)
+                .background { BubbleShape(isOwn: false, joinsAbove: false, joinsBelow: false).fill(Bubble.others) }
+        } else {
+            content
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .background(.quaternary, in: Capsule())
+        }
     }
 }

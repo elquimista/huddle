@@ -210,7 +210,7 @@ struct TimelineView: View {
                     // Under the newest message, like the next one on its way. Only for someone
                     // who shares their own typing, as in most messaging apps.
                     if account?.sharesTyping ?? true, !timeline.typists.isEmpty {
-                        TypingRow(typists: timeline.typists)
+                        TypingRow(typists: timeline.typists, isOneToOne: timeline.isOneToOne)
                             .padding(.top, 6)
                     }
                     // The very last thing in the scroll view, with nothing below it: scrolling to it
@@ -1292,18 +1292,40 @@ private struct MessageView: View {
     @State private var showsReactionPicker = false
     /// True while the "More" menu is open, which keeps the actions up under it.
     @State private var isMenuOpen = false
+    /// The bubble layout: where the bubble and what hangs under it sit in the row, how wide the
+    /// row is, and how wide the hover actions are, to put the actions beside the bubble.
+    @State private var bubbleFrame = CGRect.zero
+    @State private var bubbleRowWidth: CGFloat = 0
+    @State private var bubbleActionsWidth: CGFloat = 86
+    @State private var receiptsWidth: CGFloat = 0
+    private static let bubbleRowSpace = "bubbleRow"
     @Environment(\.messageLayout) private var layout
     @Environment(\.emojiSize) private var emojiSize
     @Environment(\.ircNameWidth) private var nameWidth
     @Environment(\.timelineWidth) private var timelineWidth
+    @Environment(\.bubblesOnContentBackground) private var onContentBackground
 
     /// What is left for the message itself once the margins, the read-receipt gutter and the
     /// avatar (or, in the IRC layout, the time and name columns) have taken theirs.
     private var contentWidth: CGFloat {
         guard timelineWidth > 0 else { return .infinity }
-        let beside: CGFloat = layout == .modern ? 32 + 10 : IRCNameColumn.leading + nameWidth + 8
-        return max(120, timelineWidth - 32 - ReceiptView.gutter - beside)
+        // Bubbles keep their read receipts beside them, not in a gutter.
+        let available = timelineWidth - 32 - (layout == .bubbles ? 0 : ReceiptView.gutter)
+        switch layout {
+        case .modern:
+            return max(120, available - 32 - 10)
+        case .irc:
+            return max(120, available - IRCNameColumn.leading - nameWidth - 8)
+        case .bubbles:
+            // A bubble takes at most four fifths of the width, and no more than reads well.
+            let avatar = bubbleShowsSender ? Bubble.avatarSize + Bubble.avatarGap : 0
+            let bubble = min((available - avatar) * 0.8, 620)
+            return max(120, bubble - Bubble.tailWidth - Bubble.textInset.leading - Bubble.textInset.trailing)
+        }
     }
+
+    /// The bubble layout: others' messages carry their avatar and name, in rooms of more than two.
+    private var bubbleShowsSender: Bool { !message.isOwn && !timeline.isOneToOne }
 
     private static let quickReactions = ["👍", "❤️", "😂"]
 
@@ -1326,14 +1348,16 @@ private struct MessageView: View {
         Group {
             switch layout {
             case .modern: modernRow
+            case .bubbles: bubbleRow
             case .irc: ircRow
             }
         }
         .environment(\.messageContentWidth, contentWidth)
-        // A gutter on the right for read receipts, so they never sit on top of the text.
-        .padding(.trailing, ReceiptView.gutter)
-        .padding(.top, layout == .modern && message.showsHeader ? 9 : 3)
-        .padding(.bottom, 3)
+        // A gutter on the right for read receipts, so they never sit on top of the text. Bubbles
+        // keep theirs beside each bubble instead, so yours reach the margin as others' do.
+        .padding(.trailing, layout == .bubbles ? 0 : ReceiptView.gutter)
+        .padding(.top, topPadding)
+        .padding(.bottom, layout == .bubbles ? 1 : 3)
         .opacity(message.sendState != nil && message.sendState != .failed && !isImage ? 0.55 : 1)
         // The whole row is the message, gaps and all. Set here, before the action bar goes on,
         // so the half of the bar that sits over the message above is this message's too: there
@@ -1354,8 +1378,9 @@ private struct MessageView: View {
                     .padding(.top, layout == .modern && message.showsHeader ? 4 : 0)
                     .transition(.opacity)
             }
-            // Ties the floating actions to the message they act on.
-            if showsActions {
+            // Ties the floating actions to the message they act on. Not in the bubble layout,
+            // where they sit beside the bubble itself.
+            if showsActions, layout != .bubbles {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(0.045))
                     .padding(.horizontal, -8)
@@ -1365,11 +1390,14 @@ private struct MessageView: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            ReceiptView(message: message, media: media, space: receipts)
-                .padding(.bottom, 3)
+            if layout != .bubbles {
+                ReceiptView(message: message, media: media, space: receipts)
+                    .padding(.bottom, 3)
+            }
         }
         .overlay(alignment: .topTrailing) {
-            if showsActions {
+            // Bubbles have theirs beside the bubble.
+            if showsActions, layout != .bubbles {
                 actionBar
                     // Rides the top edge of the row, to the left of the receipts column so it
                     // covers neither this message's read receipts nor the previous one's.
@@ -1385,15 +1413,24 @@ private struct MessageView: View {
         .animation(.easeOut(duration: 0.15), value: isBeingEdited)
     }
 
+    /// Space above the message: more where a run of one person's messages starts.
+    private var topPadding: CGFloat {
+        switch layout {
+        case .modern: message.showsHeader ? 9 : 3
+        case .bubbles: message.showsHeader ? 8 : 1
+        case .irc: 3
+        }
+    }
+
     // MARK: Menus
 
     /// Everything that can be done to this message, in groups: answering it, changing it,
     /// passing it on, and deleting it. The hover bar has its own buttons for answering, so its
     /// "More" menu leaves those out.
-    private func menuSections(includingReplies: Bool) -> [[MessageMenuItem]] {
+    private func menuSections(includingReplies: Bool, includingThread: Bool? = nil) -> [[MessageMenuItem]] {
         var respond: [MessageMenuItem] = []
         if includingReplies, let reply { respond.append(.init("Reply", action: reply)) }
-        if includingReplies, let openThread {
+        if includingThread ?? includingReplies, let openThread {
             respond.append(.init(message.thread == nil ? "Reply in Thread" : "Open Thread", action: openThread))
         }
 
@@ -1504,39 +1541,45 @@ private struct MessageView: View {
         }
     }
 
-    /// The message itself with what hangs under it; shared by both layouts.
+    /// The message itself with what hangs under it; for the modern and IRC layouts.
     @ViewBuilder private var content: some View {
         // In the modern layout a message that starts a group says so beside its time.
         if message.isPinned, !(layout == .modern && message.showsHeader) {
             PinnedMark()
         }
+        replyQuote
+        bodyView
+        underneath
+    }
+
+    @ViewBuilder private var replyQuote: some View {
         if let reply = message.replyTo {
             ReplyQuoteView(reply: reply, isSearching: searchingFor == reply.eventID) {
                 actions.showOriginal(reply)
             }
         }
-        bodyView
+    }
+
+    /// What hangs under a message: a doubt about its sender, reactions, its thread, and why it
+    /// wasn't sent.
+    @ViewBuilder private var underneath: some View {
         if let shield = message.shield {
             ShieldNote(shield: shield)
         }
         if !message.reactions.isEmpty {
+            // Another reaction, from right where the others are, as Slack has it: shown while
+            // the message is hovered, so quiet messages stay uncluttered. On the open side of
+            // the reactions, so they stay put as it comes and goes: after them, except under a
+            // bubble of yours, whose reactions line up on the right.
+            let addsFirst = layout == .bubbles && message.isOwn
             HStack(spacing: 4) {
+                if addsFirst, showsActions { addReactionChip }
                 ForEach(message.reactions) { reaction in
                     ReactionChipView(reaction: reaction, names: reactorNames(reaction)) {
                         Task { await timeline.toggleReaction(reaction.key, on: message.itemID) }
                     }
                 }
-                // Another reaction, from right where the others are, as Slack has it: shown
-                // while the message is hovered, so quiet messages stay uncluttered.
-                if showsActions {
-                    AddReactionChip { showsReactionPicker = true }
-                        .popover(isPresented: $showsReactionPicker, arrowEdge: .bottom) {
-                            EmojiPicker { emoji in
-                                showsReactionPicker = false
-                                Task { await timeline.toggleReaction(emoji, on: message.itemID) }
-                            }
-                        }
-                }
+                if !addsFirst, showsActions { addReactionChip }
             }
         }
         if let thread = message.thread, let openThread {
@@ -1553,6 +1596,220 @@ private struct MessageView: View {
             }
             .font(.caption)
         }
+    }
+
+    private var addReactionChip: some View {
+        AddReactionChip { showsReactionPicker = true }
+            .popover(isPresented: $showsReactionPicker, arrowEdge: .bottom) {
+                EmojiPicker { emoji in
+                    showsReactionPicker = false
+                    Task { await timeline.toggleReaction(emoji, on: message.itemID) }
+                }
+            }
+    }
+
+    // MARK: Bubbles
+
+    /// Yours on the right, others' on the left, each person's run of messages hugging together,
+    /// the time said over the first after a pause.
+    private var bubbleRow: some View {
+        let side: HorizontalAlignment = message.isOwn ? .trailing : .leading
+        return VStack(alignment: side, spacing: 3) {
+            if message.startsAfterPause {
+                Text(message.date.formatted(date: .omitted, time: .shortened))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 8)
+                    .padding(.bottom, 5)
+            }
+            if message.showsHeader, bubbleShowsSender {
+                Text(message.senderName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AvatarView.color(for: message.sender))
+                    .padding(.leading, Bubble.avatarSize + Bubble.avatarGap + Bubble.tailWidth + Bubble.textInset.leading)
+            }
+            HStack(alignment: .bubbleFoot, spacing: Bubble.avatarGap) {
+                if message.isOwn { Spacer(minLength: 56) }
+                if bubbleShowsSender {
+                    if message.endsRun {
+                        AvatarView(media: media, url: message.senderAvatarURL, name: message.senderName,
+                                   seed: message.sender, size: Bubble.avatarSize)
+                    } else {
+                        Color.clear.frame(width: Bubble.avatarSize, height: 1)
+                    }
+                }
+                WidthCap(maxWidth: contentWidth + Bubble.tailWidth + Bubble.textInset.leading + Bubble.textInset.trailing) {
+                    VStack(alignment: side, spacing: 3) {
+                        if message.isPinned {
+                            PinnedMark().padding(bubbleSide, Bubble.tailWidth + Bubble.textInset.leading)
+                        }
+                        bubbleBody
+                            .alignmentGuide(.bubbleFoot) { $0[.bottom] }
+                            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.bubbleRowSpace)) }) { bubbleFrame = $0 }
+                            // Read receipts and ticks beside the bubble's foot, on its open side:
+                            // taking no room, they move from message to message without
+                            // shifting anything.
+                            .overlay(alignment: message.isOwn ? .bottomLeading : .bottomTrailing) {
+                                ReceiptView(message: message, media: media, space: receipts)
+                                    .fixedSize()
+                                    .onGeometryChange(for: CGFloat.self, of: \.size.width) { receiptsWidth = $0 }
+                                    // Just outside the bubble's edge, either side. (From the
+                                    // width: a guide set first would move the other.)
+                                    .alignmentGuide(.leading) { $0.width + 6 }
+                                    .alignmentGuide(.trailing) { _ in -6 }
+                                    .padding(.bottom, 1)
+                            }
+                            .overlay(alignment: message.isOwn ? .leading : .trailing) {
+                                if showsActions { bubbleActions }
+                            }
+                        underneath
+                            .padding(bubbleSide, Bubble.tailWidth)
+                    }
+                }
+                if !message.isOwn { Spacer(minLength: 56) }
+            }
+            .coordinateSpace(.named(Self.bubbleRowSpace))
+            .onGeometryChange(for: CGFloat.self, of: \.size.width) { bubbleRowWidth = $0 }
+        }
+    }
+
+    /// The hover actions of the bubble layout: react, reply and more, small and round, beside
+    /// the bubble on its open side and centred on it, past its read receipts. Where a wide
+    /// bubble leaves no room for them there, they move in as far as they must and sit on its
+    /// top edge, over the space above the text.
+    private var bubbleActions: some View {
+        let gap: CGFloat = 8
+        // From the bubble's open edge outwards: the receipts, then the actions.
+        let beyondReceipts = receiptsWidth > 0 ? gap + receiptsWidth : 0
+        let room = message.isOwn ? bubbleFrame.minX : bubbleRowWidth - bubbleFrame.maxX
+        let fits = room >= beyondReceipts + gap + bubbleActionsWidth
+        let outwards = fits ? beyondReceipts + gap + bubbleActionsWidth : room
+        return HStack(spacing: 4) {
+            if message.isOwn {
+                moreButton
+                replyButton
+                reactButton
+            } else {
+                reactButton
+                replyButton
+                moreButton
+            }
+        }
+        .onGeometryChange(for: CGFloat.self, of: \.size.width) { bubbleActionsWidth = $0 }
+        .offset(x: message.isOwn ? -outwards : outwards,
+                y: fits ? 0 : -(bubbleFrame.height / 2 + 13 - Bubble.textInset.top + 1))
+        // Nothing until the row has been measured, rather than a moment on top of the bubble.
+        .opacity(bubbleRowWidth > 0 ? 1 : 0)
+        .onHover { hover.pointer(isOverBar: $0, of: rowID) }
+        .onDisappear { hover.pointer(isOverBar: false, of: rowID) }
+    }
+
+    private var reactButton: some View {
+        RoundActionButton(help: "Add Reaction") { showsPicker = true } label: { AddReactionIcon() }
+            .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
+                QuickReactionPicker { emoji in
+                    showsPicker = false
+                    Task { await timeline.toggleReaction(emoji, on: message.itemID) }
+                }
+            }
+    }
+
+    @ViewBuilder private var replyButton: some View {
+        if let reply {
+            RoundActionButton(help: "Reply", action: reply) { Image(systemName: "arrowshape.turn.up.left") }
+        }
+    }
+
+    @ViewBuilder private var moreButton: some View {
+        // Reply has its own button; the thread is in here.
+        if !menuSections(includingReplies: false, includingThread: true).isEmpty {
+            MoreActionsButton(sections: { menuSections(includingReplies: false, includingThread: true) },
+                              isOpen: $isMenuOpen, isRound: true)
+        }
+    }
+
+    /// The sender's side, where the tail goes.
+    private var bubbleSide: Edge.Set { message.isOwn ? .trailing : .leading }
+
+    /// The message in its bubble. Pictures, files, voice messages and big emoji stand on their
+    /// own, a caption in a bubble under them.
+    @ViewBuilder private var bubbleBody: some View {
+        let side: HorizontalAlignment = message.isOwn ? .trailing : .leading
+        switch message.body {
+        case .text where isLargeEmoji:
+            VStack(alignment: side, spacing: 3) {
+                replyQuote
+                bodyView
+            }
+            .padding(bubbleSide, Bubble.tailWidth)
+            .help(message.date.formatted(date: .abbreviated, time: .shortened))
+        case .image(let image):
+            VStack(alignment: side, spacing: 3) {
+                replyQuote.padding(bubbleSide, Bubble.tailWidth)
+                ImageMessageView(image: image, media: media, sendState: message.sendState,
+                                 uploadProgress: message.uploadProgress,
+                                 localPreview: message.localPreview,
+                                 open: { actions.openImage(image, $0) },
+                                 cancelUpload: message.sendState == nil ? nil : {
+                                     Task { await timeline.discard(message.itemID) }
+                                 })
+                    .padding(bubbleSide, Bubble.tailWidth)
+                    .help(message.date.formatted(date: .abbreviated, time: .shortened))
+                if let caption = image.caption {
+                    bubbled { (Text(styled(caption)) + editedLabel).textSelection(.enabled) }
+                }
+            }
+        case .file(let file):
+            VStack(alignment: side, spacing: 3) {
+                replyQuote.padding(bubbleSide, Bubble.tailWidth)
+                FileMessageView(file: file, media: media, sendState: message.sendState,
+                                uploadProgress: message.uploadProgress,
+                                cancelUpload: message.sendState == nil ? nil : {
+                                    Task { await timeline.discard(message.itemID) }
+                                })
+                    .padding(bubbleSide, Bubble.tailWidth)
+                    .help(message.date.formatted(date: .abbreviated, time: .shortened))
+                if let caption = file.caption {
+                    bubbled { (Text(styled(caption)) + editedLabel).textSelection(.enabled) }
+                }
+            }
+        case .audio(let audio):
+            VStack(alignment: side, spacing: 3) {
+                replyQuote.padding(bubbleSide, Bubble.tailWidth)
+                bubbled {
+                    AudioMessageView(id: message.eventID ?? audio.media.source.url(), audio: audio,
+                                     media: media, owner: timeline)
+                    if let caption = audio.caption {
+                        (Text(caption.linkified) + editedLabel).textSelection(.enabled)
+                    }
+                }
+            }
+        case .attachment:
+            // Already a box of its own.
+            VStack(alignment: side, spacing: 3) {
+                replyQuote
+                bodyView
+            }
+            .padding(bubbleSide, Bubble.tailWidth)
+        default:
+            bubbled {
+                replyQuote
+                bodyView
+            }
+        }
+    }
+
+    /// Text in a bubble of the sender's colour, its tail on the last of a run.
+    private func bubbled<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) { content() }
+            .padding(Bubble.textInset)
+            .padding(bubbleSide, Bubble.tailWidth)
+            .background {
+                BubbleShape(isOwn: message.isOwn, joinsAbove: !message.showsHeader, joinsBelow: !message.endsRun)
+                    .fill(message.isOwn ? Bubble.own : onContentBackground ? Bubble.othersOnContent : Bubble.others)
+            }
+            .help(message.date.formatted(date: .abbreviated, time: .shortened))
     }
 
     private var actionBar: some View {

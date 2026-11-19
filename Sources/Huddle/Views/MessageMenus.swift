@@ -36,11 +36,17 @@ struct MoreActionsButton: View {
     let sections: () -> [[MessageMenuItem]]
     /// True while the menu is open.
     @Binding var isOpen: Bool
+    /// A small round button of its own, as the bubble layout has them, rather than one of a bar's.
+    var isRound = false
     @State private var anchor = MenuAnchor()
 
     var body: some View {
-        ActionButton(help: "More actions", action: open) {
-            Image(systemName: "ellipsis")
+        Group {
+            if isRound {
+                RoundActionButton(help: "More actions", action: open) { Image(systemName: "ellipsis") }
+            } else {
+                ActionButton(help: "More actions", action: open) { Image(systemName: "ellipsis") }
+            }
         }
         .background(MenuAnchorView(anchor: anchor))
         .accessibilityLabel("More actions")

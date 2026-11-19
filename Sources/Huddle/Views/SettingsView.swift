@@ -4,6 +4,8 @@ import SwiftUI
 enum MessageLayout: String, CaseIterable, Identifiable {
     /// Avatar, then the sender's name above their messages.
     case modern
+    /// Chat bubbles: yours on the right, others' on the left.
+    case bubbles
     /// One line per message: time, sender, text. No avatars.
     case irc
 
@@ -14,6 +16,7 @@ enum MessageLayout: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .modern: "Modern"
+        case .bubbles: "Bubbles"
         case .irc: "IRC"
         }
     }
@@ -21,6 +24,7 @@ enum MessageLayout: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .modern: "Avatars, with names above messages"
+        case .bubbles: "Chat bubbles, yours on the right"
         case .irc: "Compact, one line per message"
         }
     }
@@ -295,6 +299,7 @@ private struct ConversationPreview: View {
             ForEach(lines) { line in
                 switch layout {
                 case .modern: modernRow(line)
+                case .bubbles: bubbleRow(line, next: lines.first { $0.id == line.id + 1 })
                 case .irc: ircRow(line)
                 }
             }
@@ -342,6 +347,30 @@ private struct ConversationPreview: View {
             }
         }
         .padding(.top, line.startsGroup ? 9 : 3)
+    }
+
+    /// Alice's messages stand for yours, on the right.
+    private func bubbleRow(_ line: Line, next: Line?) -> some View {
+        let isOwn = line.sender == "Alice"
+        let endsRun = next?.sender != line.sender
+        return HStack {
+            if isOwn { Spacer(minLength: 40) }
+            Group {
+                if line.isEmoji {
+                    text(line).padding(isOwn ? .trailing : .leading, Bubble.tailWidth)
+                } else {
+                    text(line)
+                        .padding(Bubble.textInset)
+                        .padding(isOwn ? .trailing : .leading, Bubble.tailWidth)
+                        .background {
+                            BubbleShape(isOwn: isOwn, joinsAbove: !line.startsGroup, joinsBelow: !endsRun)
+                                .fill(isOwn ? Bubble.own : Bubble.others)
+                        }
+                }
+            }
+            if !isOwn { Spacer(minLength: 40) }
+        }
+        .padding(.top, line.startsGroup ? 8 : 2)
     }
 
     private func ircRow(_ line: Line) -> some View {

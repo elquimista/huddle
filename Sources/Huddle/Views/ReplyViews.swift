@@ -59,7 +59,8 @@ struct ReplyQuoteView: View {
         .disabled(reply.state != .ready)
         .onHover { isHovering = $0 }
         .help(reply.state == .ready ? "Go to this message" : "")
-        .frame(maxWidth: 460, alignment: .leading)
+        // No wider than it needs: in a bubble, a short quote keeps the bubble short.
+        .widthCap(460)
         .accessibilityLabel(reply.state == .ready ? "In reply to \(reply.senderName): \(reply.text)" : reply.placeholder)
         .accessibilityHint(reply.state == .ready ? "Goes to that message" : "")
     }

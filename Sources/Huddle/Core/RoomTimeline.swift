@@ -132,6 +132,12 @@ struct MessageRow: Equatable {
     var readDateIsExact = false
     /// False when this message continues a run from the same sender.
     var showsHeader = true
+    /// False when the next message continues this one's run: the bubble layout puts the
+    /// sender's avatar, and a bubble's tail, on the last of a run.
+    var endsRun = true
+    /// The first message after a quarter of an hour or more without any: the bubble layout
+    /// says the time above it.
+    var startsAfterPause = true
 }
 
 /// Summary of the thread hanging off a message, shown under it in the room.
@@ -276,7 +282,7 @@ final class RoomTimeline {
     @ObservationIgnored private var latestReaction: ReactionPreview?
     @ObservationIgnored private var lastRoomReceipt: String?
     /// A two-person direct chat shows ticks on your messages; other rooms show who has read.
-    @ObservationIgnored private var isOneToOne = false
+    @ObservationIgnored private(set) var isOneToOne = false
     /// Names and avatars for read receipts, learned from messages and fetched for the rest.
     @ObservationIgnored private var profiles: [String: (name: String, avatarURL: String?)] = [:]
     @ObservationIgnored private var requestedProfiles: Set<String> = []
@@ -481,6 +487,7 @@ final class RoomTimeline {
         var rows: [TimelineRow] = []
         rows.reserveCapacity(items.count)
         var previous: MessageRow?
+        var lastMessageDate: Date?
         let pinned = Set(pinnedEventIDs)
         for item in items {
             let id = item.uniqueId().id
@@ -491,7 +498,10 @@ final class RoomTimeline {
                     if let previous, previous.sender == message.sender,
                        message.date.timeIntervalSince(previous.date) < 300 {
                         message.showsHeader = false
+                        Self.continueRun(in: &rows)
                     }
+                    message.startsAfterPause = lastMessageDate.map { message.date.timeIntervalSince($0) >= 900 } ?? true
+                    lastMessageDate = message.date
                     previous = message
                     rows.append(TimelineRow(id: id, kind: .message(message)))
                 case .notice(let text)?:
@@ -875,10 +885,19 @@ final class RoomTimeline {
                 localPreview: queued.preview)
             if let previous, previous.sender == ownUserID, message.date.timeIntervalSince(previous.date) < 300 {
                 message.showsHeader = false
+                Self.continueRun(in: &rows)
             }
+            message.startsAfterPause = previous.map { message.date.timeIntervalSince($0.date) >= 900 } ?? true
             previous = message
             rows.append(TimelineRow(id: id, kind: .message(message)))
         }
+    }
+
+    /// The message last in the rows has another of its sender's after it, in the same run.
+    private static func continueRun(in rows: inout [TimelineRow]) {
+        guard let last = rows.indices.last, case .message(var message) = rows[last].kind else { return }
+        message.endsRun = false
+        rows[last].kind = .message(message)
     }
 
     private static func parameters(for queued: QueuedImage) -> UploadParameters {
