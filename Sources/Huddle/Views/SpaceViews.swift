@@ -97,6 +97,15 @@ private struct RailSpaceButton: View {
         }
     }
 
+    /// Its key in the Go menu, for its tooltip: ⇧⌘H for Home, ⌘1 to ⌘9 for the first nine spaces.
+    private var shortcut: String? {
+        switch kind {
+        case .home: RailShortcut.homeLabel
+        case .space(let space): account.spaces.firstIndex { $0.roomId == space.roomId }.flatMap(RailShortcut.spaceLabel(at:))
+        case .invite: nil
+        }
+    }
+
     /// The space whose rooms this stands for; nil for Home.
     private var spaceID: String? {
         if case .space(let space) = kind { space.roomId } else { nil }
@@ -106,6 +115,7 @@ private struct RailSpaceButton: View {
         let isInvite = if case .invite = kind { true } else { false }
         let state = isInvite ? nil : account.attention(inSpace: spaceID)
         RailIcon(kind: kind,
+                 shortcut: shortcut,
                  media: account.media,
                  isSelected: isSelected,
                  attention: state.map { RailIcon.Attention(count: $0.count, urgent: $0.urgent, hasUnread: $0.hasUnread) },
@@ -169,6 +179,8 @@ private struct RailIcon: View, Equatable {
     }
 
     let kind: RailSpaceButton.Kind
+    /// Its key in the Go menu ("⌘1"), said in its tooltip.
+    let shortcut: String?
     let media: MediaLoader
     let isSelected: Bool
     /// Its rooms' unread state; nil for an invitation.
@@ -179,7 +191,7 @@ private struct RailIcon: View, Equatable {
     let actions: Actions
 
     static func == (lhs: RailIcon, rhs: RailIcon) -> Bool {
-        lhs.kind == rhs.kind && lhs.media === rhs.media && lhs.isSelected == rhs.isSelected
+        lhs.kind == rhs.kind && lhs.shortcut == rhs.shortcut && lhs.media === rhs.media && lhs.isSelected == rhs.isSelected
             && lhs.attention == rhs.attention && lhs.canEdit == rhs.canEdit && lhs.hasUnreadRooms == rhs.hasUnreadRooms
     }
 
@@ -222,6 +234,8 @@ private struct RailIcon: View, Equatable {
             .contextMenu { menu }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel)
+            // The tooltip's key, which VoiceOver doesn't get from the tooltip of a combined element.
+            .accessibilityHint(shortcut.map { "Keyboard shortcut \($0)" } ?? "")
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             .accessibilityAction(.default, actions.select)
     }
@@ -255,10 +269,12 @@ private struct RailIcon: View, Equatable {
         return attention.hasUnread ? .dot(Color(nsColor: .tertiaryLabelColor)) : nil
     }
 
+    /// Its name with its key, as the account avatars' tooltips have them: "Work (⌘1)".
     private var help: String {
-        switch kind {
-        case .home: "Direct chats and rooms that aren’t in a space"
-        case .space(let space): space.displayName
+        let key = shortcut.map { " (\($0))" } ?? ""
+        return switch kind {
+        case .home: "Home\(key)\nDirect chats and rooms that aren’t in a space"
+        case .space(let space): space.displayName + key
         case .invite(let invite): "Invitation to \(invite.name)"
         }
     }
@@ -854,5 +870,21 @@ private struct SpaceRoomRow: View {
                 }
             }
         }
+    }
+}
+
+/// The Go menu's keys for the rail: ⌘1 to ⌘9 for the first nine spaces from the top, and ⇧⌘H
+/// for Home, as Finder's Go ▸ Home. The spaces are numbered from the first because that is the
+/// one a hand reaches for with ⌘1; Home is the base they hang from, not one of them.
+enum RailShortcut {
+    static let home = KeyboardShortcut("h", modifiers: [.command, .shift])
+    static let homeLabel = "⇧⌘H"
+
+    static func space(at index: Int) -> KeyboardShortcut? {
+        index < 9 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command) : nil
+    }
+
+    static func spaceLabel(at index: Int) -> String? {
+        index < 9 ? "⌘\(index + 1)" : nil
     }
 }

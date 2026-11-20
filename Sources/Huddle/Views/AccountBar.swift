@@ -296,7 +296,7 @@ private struct AccountButton: View {
     private var name: String { account.displayName ?? account.userID }
 
     private var helpText: String {
-        var lines = [index < 9 ? "\(name) (⌘\(index + 1))" : name, account.userID]
+        var lines = [index < 9 ? "\(name) (⌃\(index + 1))" : name, account.userID]
         if account.urgentCount > 0 {
             lines.append(account.urgentCount == 1
                 ? "1 direct message, mention or invitation"
