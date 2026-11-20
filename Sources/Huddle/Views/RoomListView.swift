@@ -361,6 +361,8 @@ private struct RoomListRow: View {
                 // Seen only where this account shares its own typing, as in the conversation,
                 // and not in a muted room, which is meant to be quiet.
                 typists: account.sharesTyping && !room.isMuted && !room.isInvite ? account.typists(in: room.id) : nil,
+                // Not on the open room's row: its composer shows it.
+                draft: account.selectedRoomID == room.id ? nil : account.draftPreviews[room.id],
                 isSelected: account.selectedRoomID == room.id)
             .tag(room.id)
             .draggable(room.id) {
@@ -495,6 +497,8 @@ private struct RoomRow: View {
     var presence: PresenceInfo?
     /// Who is typing in the room.
     var typists: RoomTypists?
+    /// A message being written in the room and not yet sent.
+    var draft: DraftPreview?
     /// The open room's row, drawn in the accent colour when the list has the focus.
     var isSelected = false
 
@@ -517,6 +521,17 @@ private struct RoomRow: View {
         guard let names = typists?.names, !names.isEmpty else { return nil }
         if room.directUserID != nil, names.count == 1 { return "typing…" }
         return TypingRow.sentence(for: names.map { Typist(userID: $0, name: $0, avatarURL: nil) }) + "…"
+    }
+
+    /// The draft, said in place of the newest message, unless that message is news: then it's
+    /// what they wrote that shows, and the draft comes back once the room has been read.
+    private var draftLine: Text? {
+        guard let draft else { return nil }
+        let isNews = room.notifications > 0 || room.mentions > 0 || (room.hasNewMessages && !room.isMuted)
+        guard !isNews else { return nil }
+        var label = AttributedString(draft.inThread ? "Draft in thread: " : "Draft: ")
+        label.foregroundColor = .red
+        return Text(label + AttributedString(draft.text))
     }
 
     var body: some View {
@@ -552,6 +567,11 @@ private struct RoomRow: View {
                         Text(typing)
                             .font(.callout)
                             .foregroundStyle(isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
+                            .lineLimit(1)
+                    } else if let draftLine {
+                        draftLine
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                     } else {
                         Text(preview)

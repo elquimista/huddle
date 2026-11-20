@@ -15,6 +15,8 @@ struct RoomSummary: Identifiable, Equatable {
     var hasUnread = false
     /// Marked unread by the user (here or in another client), as a reminder to come back.
     var isMarkedUnread = false
+    /// Messages have come since the room was last read (marking it unread aside).
+    var hasNewMessages = false
     /// A space rather than a room (the room list leaves spaces out).
     var isSpace = false
     /// Tagged favourite or low priority (m.favourite, m.lowpriority), here or in another app.
@@ -47,6 +49,24 @@ struct RoomSummary: Identifiable, Equatable {
 }
 
 /// One logged-in account: its client, sliding sync and room list.
+/// What a room's row in the list says of a message being written there and not yet sent.
+struct DraftPreview: Equatable {
+    /// Its text on one line, or what is attached ("2 images and 1 file").
+    let text: String
+    /// Written in a thread of the room, rather than in the room itself.
+    let inThread: Bool
+
+    /// What a draft comes to on one line: nothing, when it's only a reply begun.
+    static func summary(of draft: StashedDraft) -> String? {
+        let words = draft.text.prefix(500).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if !words.isEmpty { return words }
+        var attached: [String] = []
+        if !draft.images.isEmpty { attached.append(draft.images.count == 1 ? "1 image" : "\(draft.images.count) images") }
+        if !draft.files.isEmpty { attached.append(draft.files.count == 1 ? "1 file" : "\(draft.files.count) files") }
+        return attached.isEmpty ? nil : attached.formatted(.list(type: .and))
+    }
+}
+
 @MainActor @Observable
 final class AccountSession: Identifiable {
     nonisolated let id: String
@@ -117,6 +137,8 @@ final class AccountSession: Identifiable {
             // Something else was chosen first (by hand, from a notification): that stands.
             roomToReopen = nil
             guard selectedRoomID != oldValue else { return }
+            // The room left: its row says what was being written there.
+            if let oldValue { refreshDraftPreview(forRoom: oldValue) }
             PerfLog.began("room selected")
             updatePresenceWatch()
         }
@@ -129,6 +151,10 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private lazy var savedDraftTexts: [String: String] =
         UserDefaults.standard.dictionary(forKey: "drafts.\(id)") as? [String: String] ?? [:]
     @ObservationIgnored private var draftSave: DispatchWorkItem?
+    /// What each room's row says of an unsent message there, by room. Not for the open room,
+    /// whose composer shows it: its row catches up as it's left, so that typing there doesn't
+    /// redraw the list at every key.
+    private(set) var draftPreviews: [String: DraftPreview] = [:]
     /// A room just chosen in Go to Room: its composer takes the keyboard, though the room came
     /// by a key (Return) rather than a click.
     @ObservationIgnored var wantsComposerFocus = false
@@ -255,6 +281,10 @@ final class AccountSession: Identifiable {
         verificationFlow.isThisMacVerified = { [weak self] in self?.verification == .verified }
         verificationFlow.onIncoming = { [weak self] in self?.showVerificationRequest() }
         verificationFlow.onVerifiedPerson = { [weak self] userID in self?.peopleIdentities[userID] = .verified }
+        // The drafts kept from last time, for their rooms' rows.
+        for roomID in Set(savedDraftTexts.keys.map(Self.roomID(ofDraftKey:))) {
+            refreshDraftPreview(forRoom: roomID)
+        }
     }
 
     /// A request to verify came in: shown at once unless something else is open, when the room
@@ -1160,8 +1190,11 @@ final class AccountSession: Identifiable {
         let isEmpty = text.isEmpty && draft.reply == nil && draft.images.isEmpty && draft.files.isEmpty
         drafts[key] = isEmpty ? nil : draft
         let saved = text.isEmpty ? nil : draft.text
-        guard savedDraftTexts[key] != saved else { return }
+        let textChanged = savedDraftTexts[key] != saved
         savedDraftTexts[key] = saved
+        let roomID = Self.roomID(ofDraftKey: key)
+        if roomID != selectedRoomID { refreshDraftPreview(forRoom: roomID) }
+        guard textChanged else { return }
         // Written out a moment later, once typing pauses.
         draftSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -1170,6 +1203,27 @@ final class AccountSession: Identifiable {
         }
         draftSave = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    /// The room a draft's key is for: "room", or "room|thread root".
+    private static func roomID(ofDraftKey key: String) -> String {
+        key.split(separator: "|", maxSplits: 1).first.map(String.init) ?? key
+    }
+
+    /// Works out again what a room's row says of its drafts: the room's own, or else one in a
+    /// thread of it.
+    private func refreshDraftPreview(forRoom roomID: String) {
+        let threadKeys = Set(savedDraftTexts.keys).union(drafts.keys)
+            .filter { $0.hasPrefix(roomID + "|") }
+            .sorted()
+        var preview = draft(for: roomID).flatMap(DraftPreview.summary).map { DraftPreview(text: $0, inThread: false) }
+        if preview == nil {
+            preview = threadKeys.lazy
+                .compactMap { self.draft(for: $0).flatMap(DraftPreview.summary) }
+                .first
+                .map { DraftPreview(text: $0, inThread: true) }
+        }
+        if draftPreviews[roomID] != preview { draftPreviews[roomID] = preview }
     }
 
     /// Who is typing in a room, by name, for its row in the room list.
@@ -1253,6 +1307,7 @@ final class AccountSession: Identifiable {
             if !unread {
                 allRooms[index].notifications = 0
                 allRooms[index].mentions = 0
+                allRooms[index].hasNewMessages = false
             }
         }
         updateBadges()
@@ -1458,6 +1513,7 @@ extension RoomSummary {
             summary.mentions = Int(info.numUnreadMentions)
             summary.hasUnread = info.numUnreadMessages > 0 || info.isMarkedUnread
             summary.isMarkedUnread = info.isMarkedUnread
+            summary.hasNewMessages = info.numUnreadMessages > 0
             summary.isSpace = info.isSpace
             summary.isFavourite = info.isFavourite
             summary.isLowPriority = info.isLowPriority
