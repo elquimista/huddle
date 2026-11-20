@@ -245,6 +245,7 @@ struct TimelineView: View {
                         .frame(height: 8)
                     Color.clear
                         .frame(height: 1)
+                        .background { ScrollViewProbe(place: place) }
                         .id(Self.bottomID)
                         .onGeometryChange(for: EndPlace.self, of: Self.endPlace) { end in
                             let visible = end != .away
@@ -265,8 +266,9 @@ struct TimelineView: View {
                                         if followsNewest, !isAtEnd { jump(proxy, to: Self.bottomID, anchor: .bottom) }
                                     }
                                 }
-                            } else if input.isRecent {
-                                // The user scrolled away.
+                            } else if input.leftRecently {
+                                // The user scrolled away. (Not while scrolling down: rows growing
+                                // under it then pushed the end away, and the view follows on.)
                                 if followsNewest {
                                     TimelineLog.log.notice("Stopped following the newest message: reader's \(input.lastKind, privacy: .public) input, \(shownRows.count) rows drawn")
                                 }
@@ -406,7 +408,11 @@ struct TimelineView: View {
                     }
                     TimelineLog.log.notice("First \(rows.count) rows arrived, \(shownRows.count) drawn")
                 }
-                if previousLast == nil || followsNewest { scrollToBottom(proxy) }
+                if previousLast == nil || followsNewest {
+                    scrollToBottom(proxy)
+                    // The first rows arriving all at once is when the view can land short.
+                    if previousLast == nil { settleOnNewest(proxy) }
+                }
             }
             // A view around an older message opens on that message, lit up.
             .onChange(of: timeline.rows.count, initial: true) {
@@ -697,10 +703,19 @@ struct TimelineView: View {
     private func settleOnNewest(_ proxy: ScrollViewProxy, retry: Bool = false) {
         place.settleCheck?.cancel()
         let check = DispatchWorkItem {
-            guard followsNewest, !isAtEnd, place.heldRow == nil, timeline.focusedEvent == nil else { return }
-            TimelineLog.log.notice("The newest message was out of view while following it, \(shownRows.count, privacy: .public) rows drawn: going back to it\(retry ? " again" : "", privacy: .public)")
-            jump(proxy, to: Self.bottomID, anchor: .bottom)
-            if !retry { settleOnNewest(proxy, retry: true) }
+            guard followsNewest, place.heldRow == nil, timeline.focusedEvent == nil else { return }
+            guard isAtEnd else {
+                TimelineLog.log.notice("The newest message was out of view while following it, \(shownRows.count, privacy: .public) rows drawn: going back to it\(retry ? " again" : "", privacy: .public)")
+                jump(proxy, to: Self.bottomID, anchor: .bottom)
+                if !retry { settleOnNewest(proxy, retry: true) }
+                return
+            }
+            // SwiftUI has the end in view; AppKit's view, under it, may not (ReadingPlace.scrollView).
+            // A jump of SwiftUI's would change nothing, it being there already: move AppKit's.
+            if let short = place.scrollViewShortOfEnd, short > 2 {
+                TimelineLog.log.notice("The scroll view was \(Int(short), privacy: .public) points short of the end while following it, \(shownRows.count, privacy: .public) rows drawn: moved it there")
+                place.scrollViewToEnd()
+            }
         }
         place.settleCheck = check
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: check)
@@ -2585,6 +2600,13 @@ private final class ScrollInputTracker {
     private var lastInput = Date.distantPast
     /// What it was, for the log.
     private(set) var lastKind = ""
+    /// Whether it went toward the newest message (scrolling down, Page Down, End): that can't
+    /// take the reader away from the end, so the view keeps following it as rows grow meanwhile.
+    private(set) var wentTowardNewest = false
+
+    /// The reader moved the view recently, away from the end or not knowing which way: a drag of
+    /// the scroll bar, scrolling up, Page Up, Home.
+    var leftRecently: Bool { isRecent && !wentTowardNewest }
     /// A view covering the conversation, where input has to be to count.
     weak var area: NSView?
     /// Whether the mouse went down in the conversation: its drags are the reader's.
@@ -2612,19 +2634,27 @@ private final class ScrollInputTracker {
         case .leftMouseDragged:
             if dragStartedInside { counts("drag") }
         case .scrollWheel:
-            if isInside(event) { counts("scroll") }
+            // Only what moves the conversation up or down. A trackpad also sends scroll events
+            // that move nothing: fingers touching down or lifting, momentum ending. Counted, they
+            // made pictures growing as a room opened look like the reader scrolling away.
+            if event.scrollingDeltaY != 0, isInside(event) {
+                counts("scroll", towardNewest: event.scrollingDeltaY < 0)
+            }
         case .keyDown:
             // Page Up, Page Down, Home, End, with the conversation (or its composer) focused.
             // Other keys are typing; in the room list these scroll the list.
-            if [116, 121, 115, 119].contains(event.keyCode), focusIsInside(event.window) { counts("key") }
+            if [116, 121, 115, 119].contains(event.keyCode), focusIsInside(event.window) {
+                counts("key", towardNewest: [121, 119].contains(event.keyCode))
+            }
         default:
             break
         }
     }
 
-    private func counts(_ kind: String) {
+    private func counts(_ kind: String, towardNewest: Bool = false) {
         lastInput = Date()
         lastKind = kind
+        wentTowardNewest = towardNewest
         onInput?()
     }
 
@@ -2747,6 +2777,28 @@ private final class JumpCounter {
         guard times.count > 20, now - lastNoted > 60 else { return }
         lastNoted = now
         TimelineLog.log.notice("Scrolled itself \(self.times.count, privacy: .public) times in 2 s: \(rowsDrawn, privacy: .public) rows drawn, following newest \(follows, privacy: .public), newest on screen \(atBottom, privacy: .public)")
+    }
+}
+
+/// Hands the reading place AppKit's scroll view, from inside the scroll content.
+private struct ScrollViewProbe: NSViewRepresentable {
+    let place: ReadingPlace
+
+    func makeNSView(context: Context) -> NSView { Probe(place: place) }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        let place: ReadingPlace
+        init(place: ReadingPlace) {
+            self.place = place
+            super.init(frame: .zero)
+        }
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("not used") }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let scrollView = enclosingScrollView { place.scrollView = scrollView }
+        }
     }
 }
 
@@ -3004,6 +3056,35 @@ private struct NewestMessageHold: ViewModifier {
 @MainActor
 final class ReadingPlace {
     var rows: [String: CGRect?] = [:]
+    /// AppKit's scroll view under SwiftUI's (ScrollViewProbe). SwiftUI's measures of where the
+    /// view is come from SwiftUI's own record of it, and the two can come apart: right after a
+    /// room's first rows arrive, SwiftUI can take its jump to the end as done while AppKit's
+    /// view stays short of it, every measure then saying the end is in view.
+    weak var scrollView: NSScrollView?
+
+    /// How far AppKit's view is from the end, in points, by its own content and insets (the
+    /// composer's at the foot); nil without it.
+    var scrollViewShortOfEnd: CGFloat? {
+        guard let scrollView, let document = scrollView.documentView, document.isFlipped else { return nil }
+        let clip = scrollView.contentView
+        return endOrigin(of: clip).y - clip.bounds.origin.y
+    }
+
+    /// Scrolls AppKit's view to the end, as the reader dragging it there would.
+    func scrollViewToEnd() {
+        guard let scrollView, scrollView.documentView?.isFlipped == true else { return }
+        let clip = scrollView.contentView
+        clip.scroll(to: endOrigin(of: clip))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// Where the view's top sits with the end in view: the content's height, less what shows,
+    /// plus the inset the composer takes at the foot.
+    private func endOrigin(of clip: NSClipView) -> NSPoint {
+        let height = scrollView?.documentView?.frame.height ?? 0
+        let insets = scrollView?.contentInsets ?? NSEdgeInsetsZero
+        return NSPoint(x: clip.bounds.origin.x, y: max(-insets.top, height - clip.bounds.height + insets.bottom))
+    }
     /// The pending look at whether the newest message ended up in view; see `settleOnNewest`.
     var settleCheck: DispatchWorkItem?
     var viewport: CGFloat = 0
