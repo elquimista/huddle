@@ -85,6 +85,9 @@ struct ImageViewer: View {
     @State private var attempt = 0
     /// 1 is the size that fits the window.
     @State private var zoom: CGFloat = 1
+    /// The last click on the picture, so a double-click's second click is let go.
+    @State private var lastClick = Date.distantPast
+    @State private var isPointing = false
     /// Quarter turns clockwise. Not kept within 0…3, so each turn animates the short way round.
     @State private var turns = 0
     @State private var offset: CGSize = .zero
@@ -200,8 +203,18 @@ struct ImageViewer: View {
                 .rotationEffect(.degrees(Double(turns) * 90))
                 .offset(offset)
                 .contentShape(Rectangle())
-                .onTapGesture(count: 2) { toggleZoom() }
-                .onTapGesture {}          // a click on the picture is not a click outside it
+                // A click zooms in on where it was, at once; zoomed in, it goes back to fit.
+                // (So it isn't a click outside the picture, either.)
+                .onTapGesture(coordinateSpace: .global) { location in
+                    clickZoom(at: CGPoint(x: location.x - container.midX, y: location.y - container.midY))
+                }
+                .onContinuousHover { phase in
+                    if case .active = phase { isPointing = true } else { isPointing = false }
+                    showZoomCursor()
+                }
+                .onChange(of: zoom) { showZoomCursor() }
+                // VoiceOver's press does what a click does, about the middle.
+                .accessibilityAction { clickZoom(at: .zero) }
                 .gesture(
                     DragGesture(minimumDistance: 2)
                         .onChanged { value in
@@ -292,14 +305,28 @@ struct ImageViewer: View {
         withAnimation(.snappy(duration: 0.2)) { setZoom(1 / max(fitScale, 0.01)) }
     }
 
-    /// Double-click: in to full size (or double, for an image already at full size), then back.
-    private func toggleZoom() {
+    /// A click on the picture: in about the point clicked, to its own size or twice the fitted
+    /// size, whichever is more; zoomed in, back to fit. A double-click zooms in as a click does:
+    /// its second click is let go.
+    private func clickZoom(at anchor: CGPoint) {
+        let now = Date()
+        defer { lastClick = now }
+        guard now.timeIntervalSince(lastClick) > NSEvent.doubleClickInterval else { return }
         if abs(zoom - 1) > 0.01 {
             fit()
-        } else if fitScale < 0.99 {
-            actualSize()
         } else {
-            step(2)
+            withAnimation(.snappy(duration: 0.2)) { setZoom(max(2, 1 / max(fitScale, 0.01)), anchor: anchor) }
+        }
+    }
+
+    /// Over the picture, the pointer says what a click will do: a magnifier to zoom in, or out.
+    private func showZoomCursor() {
+        guard isPointing else {
+            NSCursor.arrow.set()
+            return
+        }
+        if #available(macOS 15.0, *) {
+            (abs(zoom - 1) > 0.01 ? NSCursor.zoomOut : NSCursor.zoomIn).set()
         }
     }
 
