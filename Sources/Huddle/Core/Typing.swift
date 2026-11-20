@@ -42,6 +42,7 @@ extension AccountSession {
             while !Task.isCancelled {
                 await self?.readTypingSetting()
                 await self?.readLabel()
+                await self?.readContactNames()
                 try? await Task.sleep(for: .seconds(15))
             }
         }
@@ -51,6 +52,7 @@ extension AccountSession {
                 Task { @MainActor in
                     await self?.readTypingSetting()
                     await self?.readLabel()
+                    await self?.readContactNames()
                 }
             }
         }

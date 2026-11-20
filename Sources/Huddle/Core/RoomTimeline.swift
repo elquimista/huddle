@@ -542,20 +542,23 @@ final class RoomTimeline {
                     previous = nil
                     rows.append(TimelineRow(id: id, kind: .notice(CallHistory.line(
                         for: invite, outcome: invite.callID.flatMap { callOutcomes[$0] },
-                        callerName: event.senderProfile.name(fallback: event.sender), isOwn: event.isOwn,
+                        callerName: contactName(event.sender) ?? event.senderProfile.name(fallback: event.sender), isOwn: event.isOwn,
                         ownUserID: ownUserID))))
                     continue
                 }
                 if case .rtcNotification(_, let declinedBy, let activeMembers, _, _) = event.content {
                     previous = nil
                     rows.append(TimelineRow(id: id, kind: .notice(CallHistory.line(
-                        callerName: event.senderProfile.name(fallback: event.sender), isOwn: event.isOwn,
+                        callerName: contactName(event.sender) ?? event.senderProfile.name(fallback: event.sender), isOwn: event.isOwn,
                         isOneToOne: hasTwoPeople, declinedBy: declinedBy, activeMembers: activeMembers,
                         ownUserID: ownUserID))))
                     continue
                 }
-                switch TimelineRow.Kind(event: event, ownUserID: ownUserID, name: displayName(for:)) {
+                switch TimelineRow.Kind(event: event, ownUserID: ownUserID, name: displayName(for:), contactName: contactName) {
                 case .message(var message):
+                    // The user's own names for whoever a reply quotes, and the newest in a thread.
+                    if let sender = message.replyTo?.sender, let name = contactName(sender) { message.replyTo?.senderName = name }
+                    if let sender = message.thread?.latestSender, let name = contactName(sender) { message.thread?.latestSenderName = name }
                     message.isPinned = message.eventID.map(pinned.contains) ?? false
                     if let previous, previous.sender == message.sender,
                        message.date.timeIntervalSince(previous.date) < 300 {
@@ -672,12 +675,21 @@ final class RoomTimeline {
     }
 
     /// A person's display name, if this timeline has come across it.
-    func knownName(for userID: String) -> String? { profiles[userID]?.name }
+    func knownName(for userID: String) -> String? { contactName(userID) ?? profiles[userID]?.name }
+
+    /// The user's own name for someone (ContactNames.swift), set by the account.
+    @ObservationIgnored var contactName: (String) -> String? = { _ in nil }
+
+    /// The user's names for people changed: everything naming them, drawn again.
+    func namesChanged() {
+        nameVersion += 1
+        rebuildRows()
+    }
 
     /// The newest reaction, if it came after the newest message: the room list shows it as the
     /// room's latest activity.
     private func updateLatestReaction() {
-        let newest = ReactionPreview.newest(in: rows, ownUserID: ownUserID, name: { [profiles] in profiles[$0]?.name })
+        let newest = ReactionPreview.newest(in: rows, ownUserID: ownUserID, name: { [profiles, contactName] in contactName($0) ?? profiles[$0]?.name })
         if newest != latestReaction {
             latestReaction = newest
             onLatestReaction?(newest)
@@ -733,7 +745,7 @@ final class RoomTimeline {
     private func reader(for receipt: MessageRow.RawReceipt) -> MessageRow.Reader {
         let userID = receipt.userID
         if let profile = profiles[userID] {
-            return .init(id: userID, name: profile.name, avatarURL: profile.avatarURL, date: receipt.date)
+            return .init(id: userID, name: contactName(userID) ?? profile.name, avatarURL: profile.avatarURL, date: receipt.date)
         }
         requestProfile(userID)
         return .init(id: userID, name: userID, avatarURL: nil, date: receipt.date)
@@ -742,6 +754,7 @@ final class RoomTimeline {
     /// A person's name for a line in the timeline (a role change): known already, or fetched,
     /// with the rows rebuilt when it arrives and their Matrix ID's local part meanwhile.
     private func displayName(for userID: String) -> String {
+        if let name = contactName(userID) { return name }
         if let profile = profiles[userID] { return profile.name }
         requestProfile(userID)
         return userID.matrixLocalpart
@@ -1180,6 +1193,7 @@ final class RoomTimeline {
 
     private func followThreads() {
         let list = RoomThreadList(room: room, datesBack: unreadHorizon)
+        list.contactName = { [weak self] in self?.contactName($0) }
         list.onChange = { [weak self] in self?.refreshNewThreads() }
         threadActivity = list
         refreshNewThreads()
@@ -1198,10 +1212,12 @@ final class RoomTimeline {
 extension TimelineRow.Kind {
     /// Nil for events not worth a row (join rules and other housekeeping state; of power
     /// levels, only changes to people's roles get one). `name` gives a person's name by ID.
-    init?(event: EventTimelineItem, ownUserID: String, name: (String) -> String = { $0.matrixLocalpart }) {
+    /// `contactName` gives the user's own name for someone, where they've given one.
+    init?(event: EventTimelineItem, ownUserID: String, name: (String) -> String = { $0.matrixLocalpart },
+          contactName: (String) -> String? = { _ in nil }) {
         // A call's answer, decline and end are told on its invite's line (`CallHistory`).
         if let kind = CallEvent.kind(of: event.content), kind != .invite { return nil }
-        let senderName = event.senderProfile.name(fallback: event.sender)
+        let senderName = contactName(event.sender) ?? event.senderProfile.name(fallback: event.sender)
         guard case .msgLike(let content) = event.content else {
             if case .state(_, .roomPowerLevels(_, _, let users, let previousUsers, let thresholds, _)) = event.content {
                 guard let text = RoleChangeNotice.text(senderID: event.sender, senderName: senderName, users: users,
@@ -1211,7 +1227,7 @@ extension TimelineRow.Kind {
                 self = .notice(text)
                 return
             }
-            guard let text = event.content.preview(sender: senderName) else { return nil }
+            guard let text = event.content.preview(sender: senderName, contactName: contactName) else { return nil }
             self = .notice(text)
             return
         }
@@ -1436,7 +1452,9 @@ extension MessageContent {
 
 extension TimelineItemContent {
     /// One-line description used for room list previews and state events.
-    func preview(sender: String?) -> String? {
+    /// `contactName` gives the user's own name for someone, for whoever joined, left or was
+    /// invited.
+    func preview(sender: String?, contactName: (String) -> String? = { _ in nil }) -> String? {
         let who = sender ?? "Someone"
         switch self {
         case .msgLike(let content):
@@ -1473,7 +1491,7 @@ extension TimelineItemContent {
         case .rtcNotification:
             return sender.map { "\($0) started a call" } ?? "Started a call"
         case .roomMembership(let userID, let displayName, let change, _):
-            let target = displayName ?? userID
+            let target = contactName(userID) ?? displayName ?? userID
             switch change {
             case .joined, .invitationAccepted, .knockAccepted: return "\(target) joined"
             case .left: return "\(target) left"

@@ -991,7 +991,8 @@ struct TimelineView: View {
             // A zero-height line along the composer's top edge; the list hangs upward from it.
             Color.clear.frame(height: 0).overlay(alignment: .bottom) {
                 if !suggestions.isEmpty {
-                    MentionSuggestions(candidates: suggestions, selected: suggestionIndex, media: media) { pick($0) }
+                    MentionSuggestions(candidates: suggestions, selected: suggestionIndex, media: media,
+                                       contactName: timeline.contactName) { pick($0) }
                         .padding(.horizontal, 14)
                         .padding(.bottom, 4)
                 } else if !emojiSuggestions.isEmpty {
@@ -1409,11 +1410,12 @@ struct TimelineView: View {
         var starts: [MentionCandidate] = []
         var contains: [MentionCandidate] = []
         for member in timeline.members + [.room] {
-            let name = member.name.lowercased()
-            let localpart = member.id.matrixLocalpart.lowercased()
-            if needle.isEmpty || name.hasPrefix(needle) || localpart.hasPrefix(needle) {
+            // By their own name, their user ID, or the user's name for them (ContactNames.swift).
+            let names = [member.name, member.id.matrixLocalpart, timeline.contactName(member.id)]
+                .compactMap { $0?.lowercased() }
+            if needle.isEmpty || names.contains(where: { $0.hasPrefix(needle) }) {
                 starts.append(member)
-            } else if name.contains(needle) || localpart.contains(needle) {
+            } else if names.contains(where: { $0.contains(needle) }) {
                 contains.append(member)
             }
         }
@@ -2362,7 +2364,20 @@ private struct MentionSuggestions: View {
     let candidates: [MentionCandidate]
     let selected: Int
     let media: MediaLoader
+    /// The user's own name for someone: shown, with their own name beside their ID, which is
+    /// what the mention sends.
+    var contactName: (String) -> String? = { _ in nil }
     let onPick: (MentionCandidate) -> Void
+
+    private func title(of candidate: MentionCandidate) -> String {
+        candidate.isRoom ? "@room" : contactName(candidate.id) ?? candidate.name
+    }
+
+    private func detail(of candidate: MentionCandidate) -> String {
+        if candidate.isRoom { return "Notify everyone in the room" }
+        guard contactName(candidate.id) != nil else { return candidate.id }
+        return "\(candidate.name) · \(candidate.id)"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2376,12 +2391,12 @@ private struct MentionSuggestions: View {
                                 .frame(width: 22, height: 22)
                                 .background(.quaternary, in: Circle())
                         } else {
-                            AvatarView(media: media, url: candidate.avatarURL, name: candidate.name,
+                            AvatarView(media: media, url: candidate.avatarURL, name: title(of: candidate),
                                        seed: candidate.id, size: 22)
                         }
-                        Text(candidate.isRoom ? "@room" : candidate.name)
+                        Text(title(of: candidate))
                             .fontWeight(.medium)
-                        Text(candidate.isRoom ? "Notify everyone in the room" : candidate.id)
+                        Text(detail(of: candidate))
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)

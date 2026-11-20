@@ -43,6 +43,8 @@ private struct RoomInfoContent: View {
     @State private var showsAllMembers = false
     /// Someone about to be taken out of the room, or have their invitation withdrawn.
     @State private var removing: RoomDetails.Member?
+    /// Someone being given a name of the user's own (ContactNames.swift).
+    @State private var naming: (userID: String, name: String)?
     /// A role change that can't be undone, waiting to be confirmed.
     @State private var roleChange: RoleChange?
     @State private var actionFailure: ActionFailure?
@@ -105,6 +107,7 @@ private struct RoomInfoContent: View {
         } message: {
             Text("From now on, only the people in this \(noun.lowercased()) can read its messages. Encryption can’t be turned off again.")
         }
+        .contactNamePrompt(for: $naming, in: account)
         .confirmationDialog("Leave “\(details.name)”?", isPresented: $asksToLeave) {
             Button("Leave", role: .destructive) { run { try await account.leave(roomID: details.roomID) } }
         } message: {
@@ -148,10 +151,19 @@ private struct RoomInfoContent: View {
             if isEditing {
                 editor
             } else {
-                Text(details.name)
+                // A direct chat is the person: the user's name for them, where they've given one,
+                // with their own beneath.
+                let nickname = directPerson.flatMap { account.contactName(for: $0.userID) }
+                Text(nickname ?? details.shownName(names: account.contactNames))
                     .font(.title3.weight(.semibold))
                     .multilineTextAlignment(.center)
                     .textSelection(.enabled)
+                if nickname != nil, let person = directPerson {
+                    Text(person.name)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .textSelection(.enabled)
+                }
                 if let topic = details.topic {
                     Text(topic)
                         .foregroundStyle(.secondary)
@@ -162,7 +174,13 @@ private struct RoomInfoContent: View {
                     Text("No topic")
                         .foregroundStyle(.tertiary)
                 }
-                if canEditText {
+                // A direct chat is named after the person: the name to set is the user's own for
+                // them, not one for the chat that both would see.
+                if let person = directPerson {
+                    Button("Set Name…") { naming = (person.userID, person.name) }
+                        .controlSize(.small)
+                        .padding(.top, 2)
+                } else if canEditText {
                     Button("Edit Name and Topic…") { startEditing() }
                         .controlSize(.small)
                         .padding(.top, 2)
@@ -189,7 +207,12 @@ private struct RoomInfoContent: View {
             isChangingPicture = true
             run { try await details.removeAvatar() } done: { isChangingPicture = false }
         } picture: {
-            AvatarView(media: account.media, url: details.avatarURL, name: details.name, seed: details.roomID, size: 76)
+            // A direct chat's looks like the person, as it does in the room list: their colour, and
+            // the initial of the name it goes by.
+            AvatarView(media: account.media, url: details.avatarURL,
+                       name: directPerson.flatMap { account.contactName(for: $0.userID) }
+                           ?? details.shownName(names: account.contactNames),
+                       seed: directPerson?.userID ?? details.roomID, size: 76)
         }
     }
 
@@ -334,7 +357,8 @@ private struct RoomInfoContent: View {
                                 ? { account.verify(person: member.userID, name: member.name) } : nil,
                               roles: details.roleChoices(for: member),
                               setRole: { choose($0, for: member) },
-                              remove: details.canRemove(member) ? { removing = member } : nil)
+                              remove: details.canRemove(member) ? { removing = member } : nil,
+                              setName: member.userID == account.userID ? nil : { naming = (member.userID, member.name) })
                 }
                 // Where each of them stands, asking the server about anyone this Mac doesn't keep
                 // track of, so it shows in an unencrypted room too.
@@ -433,6 +457,8 @@ private struct MemberRow: View {
     let setRole: (RoomDetails.RoleChoice) -> Void
     /// Set when this account may take them out of the room, or withdraw their invitation.
     let remove: (() -> Void)?
+    /// Asks for the user's own name for them; nil for the user themself.
+    var setName: (() -> Void)? = nil
     @State private var isHovering = false
     @State private var anchor = MenuAnchor()
 
@@ -440,16 +466,23 @@ private struct MemberRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            AvatarView(media: account.media, url: member.avatarURL, name: member.name, seed: member.userID, size: 28)
+            AvatarView(media: account.media, url: member.avatarURL, name: nickname ?? member.name,
+                       seed: member.userID, size: 28)
                 .opacity(member.isInvited ? 0.6 : 1)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 4) {
-                    Text(member.userID == account.userID ? "\(member.name) (you)" : member.name)
+                    Text(member.userID == account.userID ? "\(member.name) (you)" : nickname ?? member.name)
                         .lineLimit(1)
                     IdentityBadge(identity: identity)
                 }
-                if member.name != member.userID {
+                // Their own name beside their ID, where the user calls them something else.
+                if nickname != nil {
+                    Text(member.name == member.userID ? member.userID : "\(member.name) · \(member.userID)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if member.name != member.userID {
                     Text(member.userID)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -479,6 +512,9 @@ private struct MemberRow: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .contextMenu {
             Button("Copy User ID", action: copyUserID)
+            if let setName {
+                Button("Set Name…", action: setName)
+            }
             if let verify {
                 Button("Verify \(member.name)…", action: verify)
             }
@@ -497,6 +533,9 @@ private struct MemberRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityActions {
+            if let setName {
+                Button("Set Name", action: setName)
+            }
             if let verify {
                 Button("Verify \(member.name)", action: verify)
             }
@@ -509,7 +548,10 @@ private struct MemberRow: View {
         }
     }
 
-    private var hasActions: Bool { roles != nil || remove != nil || verify != nil }
+    private var hasActions: Bool { roles != nil || remove != nil || verify != nil || setName != nil }
+
+    /// The user's own name for them (ContactNames.swift).
+    private var nickname: String? { account.contactName(for: member.userID) }
     private var showsMenuButton: Bool { isHovering && hasActions }
 
     private var menuButton: some View {
@@ -531,6 +573,9 @@ private struct MemberRow: View {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(ClosureMenuItem(title: "Copy User ID", handler: copyUserID))
+        if let setName {
+            menu.addItem(ClosureMenuItem(title: "Set Name…", handler: setName))
+        }
         if let verify {
             menu.addItem(ClosureMenuItem(title: "Verify \(member.name)…", handler: verify))
         }

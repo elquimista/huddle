@@ -126,3 +126,51 @@ private struct AccountLabelPrompt: ViewModifier {
         }
     }
 }
+
+extension View {
+    /// Asks for the user's own name for someone (ContactNames.swift) while `person` is set: saved
+    /// to the account's data, or taken away to go back to their own name.
+    func contactNamePrompt(for person: Binding<(userID: String, name: String)?>, in account: AccountSession) -> some View {
+        modifier(ContactNamePrompt(person: person, account: account))
+    }
+}
+
+private struct ContactNamePrompt: ViewModifier {
+    @Binding var person: (userID: String, name: String)?
+    let account: AccountSession
+    @State private var text = ""
+    @State private var shown: (userID: String, name: String)?
+    @State private var failure: String?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: person?.userID, initial: true) {
+                guard let person else { return }
+                text = account.contactName(for: person.userID) ?? ""
+                shown = person
+            }
+            .alert("Name for \(shown?.name ?? "")",
+                   isPresented: Binding(get: { shown != nil }, set: { if !$0 { shown = nil; person = nil } })) {
+                TextField(shown?.name ?? "Name", text: $text)
+                Button("Save") { save(text) }
+                if let shown, account.contactName(for: shown.userID) != nil {
+                    Button("Use Their Own Name", role: .destructive) { save(nil) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Only you see it, wherever Huddle shows \(shown?.name ?? "them"). It’s kept with your account, so Huddle on your other Macs has it too.")
+            }
+            .alert("Couldn’t Save the Name", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(failure ?? "")
+            }
+    }
+
+    private func save(_ name: String?) {
+        guard let target = shown else { return }
+        Task {
+            do { try await account.setContactName(name, for: target.userID) } catch { failure = error.actionMessage }
+        }
+    }
+}

@@ -66,6 +66,9 @@ final class RoomThreadList {
         var byID: [String: Reply]
     }
 
+    /// The user's own name for someone (ContactNames.swift), set by whoever made the list.
+    var contactName: (String) -> String? = { _ in nil }
+
     init(room: Room, datesBack: Date? = nil) {
         self.room = room
         self.datesBack = datesBack
@@ -111,7 +114,7 @@ final class RoomThreadList {
             let rootDate = Date(matrixTimestamp: root.timestamp)
             var replies: Replies?
             if let event = item.latestEvent {
-                let reply = Reply(eventID: event.eventId, name: event.senderProfile.name(fallback: event.sender),
+                let reply = Reply(eventID: event.eventId, name: contactName(event.sender) ?? event.senderProfile.name(fallback: event.sender),
                                   isOthers: !event.isOwn)
                 // A reply dated after its root carries its own date: one the SDK came across
                 // itself. Dated as the root, it came from the server's list and needs looking up.
@@ -138,11 +141,11 @@ final class RoomThreadList {
             return ThreadListEntry(
                 id: root.eventId,
                 senderID: root.sender,
-                senderName: root.senderProfile.name(fallback: root.sender),
+                senderName: contactName(root.sender) ?? root.senderProfile.name(fallback: root.sender),
                 senderAvatarURL: root.senderProfile.avatarURL,
                 preview: root.content?.preview(sender: nil) ?? "Message",
                 replyCount: count,
-                latestReplierName: latest?.0.name ?? item.latestEvent.map { $0.senderProfile.name(fallback: $0.sender) },
+                latestReplierName: latest?.0.name ?? item.latestEvent.map { contactName($0.sender) ?? $0.senderProfile.name(fallback: $0.sender) },
                 latestDate: latest?.1 ?? rootDate,
                 latestDateIsKnown: latest != nil,
                 latestIsOthers: latest?.0.isOthers ?? false)

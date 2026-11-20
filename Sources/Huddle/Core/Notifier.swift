@@ -84,7 +84,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             }
             // Someone ringing: the call panel, whether or not the room is in front, and not an
             // alert as well. A ring that goes unanswered leaves a missed call (CallCenter).
-            let callerName = item.senderInfo.displayName ?? senderID.matrixLocalpart
+            let callerName = account.contactName(for: senderID) ?? item.senderInfo.displayName ?? senderID.matrixLocalpart
             // A direct chat's name is the caller's; only a room's is worth saying.
             let callRoomName = item.roomInfo.isDm || item.roomInfo.isDirect
                 || item.roomInfo.displayName == item.senderInfo.displayName ? nil : item.roomInfo.displayName
@@ -124,7 +124,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             }
         }
 
-        let sender = item.senderInfo.displayName ?? senderID
+        // The user's own name for them, where they've given one (ContactNames.swift).
+        let sender = account.contactName(for: senderID) ?? item.senderInfo.displayName ?? senderID
         let isDirect = item.roomInfo.isDirect && item.roomInfo.joinedMembersCount <= 2
         let recipient = arrival(on: account)
 

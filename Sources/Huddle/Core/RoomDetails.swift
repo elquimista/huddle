@@ -31,6 +31,8 @@ final class RoomDetails {
 
     let roomID: String
     private(set) var name = ""
+    /// What makes the name, for the user's names for people (ContactRoomName).
+    private(set) var nameSource: (hasOwnName: Bool, heroes: [RoomHero]) = (false, [])
     private(set) var topic: String?
     private(set) var avatarURL: String?
     private(set) var isEncrypted = false
@@ -71,6 +73,7 @@ final class RoomDetails {
 
     private func update(from info: RoomInfo) {
         name = info.displayName ?? info.rawName ?? ""
+        nameSource = (info.hasOwnName, info.heroes)
         topic = info.topic.flatMap { $0.isEmpty ? nil : $0 }
         avatarURL = info.avatarUrl
         isEncrypted = info.encryptionState == .encrypted
@@ -97,6 +100,12 @@ final class RoomDetails {
         canRemoveMembers = levels.canOwnUserKick()
         canChangeRoles = levels.canOwnUserSendState(stateEvent: .roomPowerLevels)
         usersDefault = levels.values().usersDefault
+    }
+
+    /// The name, with the user's names for people where it's made from theirs.
+    func shownName(names: [String: String]) -> String {
+        ContactRoomName.name(computed: name, hasOwnName: nameSource.hasOwnName, isDirect: isDirect,
+                             heroes: nameSource.heroes, names: names) ?? name
     }
 
     /// This account's power level here, once the members are known.

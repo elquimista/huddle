@@ -260,6 +260,11 @@ final class AccountSession: Identifiable {
     var label: String?
     /// Just changed here, until the account's copy of its data says so too.
     @ObservationIgnored var labelSaved: (value: String?, date: Date)?
+    /// The user's own names for people, by user ID (ContactNames.swift).
+    var contactNames: [String: String] = [:]
+    @ObservationIgnored var contactNamesSaved: (value: [String: String], date: Date)?
+    /// Every timeline this account has made that's still about, to draw names again.
+    @ObservationIgnored private var madeTimelines = NSHashTable<RoomTimeline>.weakObjects()
     @ObservationIgnored private var typingHandles: [String: TaskHandle] = [:]
     @ObservationIgnored private var typingUpdates: AsyncStream<(roomID: String, userIDs: [String])>.Continuation?
     @ObservationIgnored private var typingTask: Task<Void, Never>?
@@ -578,8 +583,11 @@ final class AccountSession: Identifiable {
         allRoomsTask = Task.detached { [weak self] in
             for await updates in stream {
                 var diffs: [VectorDiff<(Room, RoomSummary)>] = []
+                // The user's names for people as they are now: a direct chat's name, and who
+                // wrote the newest message.
+                let names = await self?.contactNames ?? [:]
                 for update in updates {
-                    diffs.append(await update.diff.map { room in (room, await RoomSummary.make(from: room)) })
+                    diffs.append(await update.diff.map { room in (room, await RoomSummary.make(from: room, names: names)) })
                 }
                 await self?.applyAll(diffs)
             }
@@ -1273,7 +1281,7 @@ final class AccountSession: Identifiable {
     /// known, otherwise by user ID until the room has said.
     private func showTypists(_ userIDs: [String], in roomID: String) {
         guard let typists = roomTypists[roomID] else { return }
-        let names = userIDs.map { typistNames["\(roomID)|\($0)"] ?? $0.matrixLocalpart }
+        let names = userIDs.map { contactNames[$0] ?? typistNames["\(roomID)|\($0)"] ?? $0.matrixLocalpart }
         if typists.names != names { typists.names = names }
         let unknown = userIDs.filter { typistNamesAsked.insert("\(roomID)|\($0)").inserted }
         guard !unknown.isEmpty, let room = roomHandles[roomID] else { return }
@@ -1290,7 +1298,33 @@ final class AccountSession: Identifiable {
     /// What every timeline of this account's needs to know of the account.
     private func prepared(_ timeline: RoomTimeline) -> RoomTimeline {
         timeline.sharesTyping = { [weak self] in self?.sharesTyping ?? false }
+        timeline.contactName = { [weak self] in self?.contactNames[$0] }
+        madeTimelines.add(timeline)
         return timeline
+    }
+
+    var allTimelines: [RoomTimeline] { madeTimelines.allObjects }
+
+    /// Every room's summary made again, the user's names for people having changed.
+    func refreshRoomSummaries() {
+        for probe in probes.values { probe.namesChanged() }
+        let handles = roomHandles
+        let names = contactNames
+        Task { [weak self] in
+            var fresh: [String: RoomSummary] = [:]
+            for (id, room) in handles { fresh[id] = await RoomSummary.make(from: room, names: names) }
+            guard let self, names == self.contactNames else { return }
+            var all = self.allRooms
+            for index in all.indices {
+                guard let summary = fresh[all[index].id] else { continue }
+                // Only what names change: the rest stays as the list last had it.
+                all[index].name = summary.name
+                all[index].lastMessage = summary.lastMessage
+                all[index].lastMessageInThread = summary.lastMessageInThread
+            }
+            self.allRooms = all
+            self.rebuildSections()
+        }
     }
 
     /// A fresh timeline for one thread. The caller owns it and stops it when done.
@@ -1417,7 +1451,11 @@ final class AccountSession: Identifiable {
     }
 
     func threadList(roomID: String) -> RoomThreadList? {
-        room(id: roomID).map { RoomThreadList(room: $0) }
+        room(id: roomID).map { room in
+            let list = RoomThreadList(room: room)
+            list.contactName = { [weak self] in self?.contactNames[$0] }
+            return list
+        }
     }
 
     // MARK: Rooms on screen
@@ -1476,13 +1514,15 @@ final class AccountSession: Identifiable {
         }
         for roomID in onScreen where probes[roomID] == nil && timelines[roomID] == nil && roomID != roomBeingIndexed {
             guard let room = room(id: roomID) else { continue }
-            probes[roomID] = RoomPreviewProbe(room: room) { [weak self] preview in
+            let probe = RoomPreviewProbe(room: room) { [weak self] preview in
                 guard let self, self.timelines[roomID] == nil else { return }
                 self.reactionPreviews[roomID] = preview
             } reportThreadReply: { [weak self] date in
                 guard let self, self.timelines[roomID] == nil else { return }
                 self.setThreadReplyDate(date, for: roomID)
             }
+            probe.contactName = { [weak self] in self?.contactNames[$0] }
+            probes[roomID] = probe
         }
     }
 
@@ -1536,7 +1576,9 @@ final class AccountSession: Identifiable {
 }
 
 extension RoomSummary {
-    static func make(from room: Room) async -> RoomSummary {
+    /// - Parameter names: the user's own names for people (ContactNames.swift), for a direct
+    ///   chat's name and whoever wrote the newest message.
+    static func make(from room: Room, names: [String: String] = [:]) async -> RoomSummary {
         var summary = RoomSummary(id: room.id(), name: room.displayName() ?? room.id())
         if let info = try? await room.roomInfo() {
             summary.name = info.displayName ?? info.canonicalAlias ?? "Empty room"
@@ -1560,22 +1602,26 @@ extension RoomSummary {
                 summary.directUserID = info.heroes[0].userId
                 if summary.avatarURL == nil { summary.avatarURL = info.heroes[0].avatarUrl }
             }
+            if let name = ContactRoomName.name(computed: info.displayName, hasOwnName: info.hasOwnName,
+                                               isDirect: info.isDirect, heroes: info.heroes, names: names) {
+                summary.name = name
+            }
         }
         switch await room.latestEvent() {
         case .none:
             break
         case .remote(let timestamp, let sender, let isOwn, let profile, let content):
             summary.timestamp = Date(matrixTimestamp: timestamp)
-            let prefix = isOwn ? "You" : (summary.isDirect ? nil : profile.name(fallback: sender))
-            summary.lastMessage = content.preview(sender: prefix)
-            summary.lastMessageInThread = Self.inThread(prefix, content).flatMap { content.preview(sender: $0) }
+            let prefix = isOwn ? "You" : (summary.isDirect ? nil : names[sender] ?? profile.name(fallback: sender))
+            summary.lastMessage = content.preview(sender: prefix, contactName: { names[$0] })
+            summary.lastMessageInThread = Self.inThread(prefix, content).flatMap { content.preview(sender: $0, contactName: { names[$0] }) }
         case .local(let timestamp, _, _, let content, _):
             summary.timestamp = Date(matrixTimestamp: timestamp)
             summary.lastMessage = content.preview(sender: "You")
             summary.lastMessageInThread = Self.inThread("You", content).flatMap { content.preview(sender: $0) }
         case .remoteInvite(let timestamp, let inviter, let profile):
             summary.timestamp = Date(matrixTimestamp: timestamp)
-            summary.lastMessage = inviter.map { "Invited by \(profile.name(fallback: $0))" } ?? "Invitation"
+            summary.lastMessage = inviter.map { "Invited by \(names[$0] ?? profile.name(fallback: $0))" } ?? "Invitation"
         }
         return summary
     }

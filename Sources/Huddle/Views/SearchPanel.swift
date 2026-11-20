@@ -109,6 +109,9 @@ private struct SearchResultRow: View {
     @State private var isHovering = false
     @Environment(\.colorScheme) private var colorScheme
 
+    /// The user's own name for them, where they've given one (ContactNames.swift).
+    private var senderName: String { account.contactName(for: hit.sender) ?? hit.senderName }
+
     private var roomName: String? {
         guard showsRoom else { return nil }
         return account.allRooms.first { $0.id == hit.roomID }?.name
@@ -117,14 +120,14 @@ private struct SearchResultRow: View {
     var body: some View {
         Button(action: open) {
             HStack(alignment: .top, spacing: 10) {
-                AvatarView(media: account.media, url: hit.senderAvatarURL, name: hit.senderName,
+                AvatarView(media: account.media, url: hit.senderAvatarURL, name: senderName,
                            seed: hit.sender, size: 28)
                     // In the found message's room, which may not be the one open.
                     .environment(\.nameColorRoom, hit.roomID)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(hit.senderName)
+                        Text(senderName)
                             .fontWeight(.semibold)
                             .foregroundStyle(NameColors.shared.color(for: hit.sender, inRoom: hit.roomID))
                             .lineLimit(1)

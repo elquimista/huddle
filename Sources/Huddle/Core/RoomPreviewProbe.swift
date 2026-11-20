@@ -22,6 +22,14 @@ final class RoomPreviewProbe {
     private var reported = false
     private var threadReply: Date?
     private var reportedThreadReply = false
+    /// The user's own name for someone (ContactNames.swift), set by the account.
+    var contactName: (String) -> String? = { _ in nil }
+
+    /// The user's names for people changed: the preview said again.
+    func namesChanged() {
+        reported = false
+        update()
+    }
 
     init(room: Room, report: @escaping (ReactionPreview?) -> Void,
          reportThreadReply: @escaping (Date?) -> Void) {
@@ -64,7 +72,7 @@ final class RoomPreviewProbe {
         var names: [String: String] = [:]
         for item in items {
             guard let event = item.asEvent(),
-                  case .message(let message)? = TimelineRow.Kind(event: event, ownUserID: ownUserID) else { continue }
+                  case .message(let message)? = TimelineRow.Kind(event: event, ownUserID: ownUserID, contactName: contactName) else { continue }
             names[message.sender] = message.senderName
             rows.append(TimelineRow(id: item.uniqueId().id, kind: .message(message)))
         }

@@ -128,7 +128,7 @@ struct PersonIdentityRow: View {
     @State private var failure: String?
 
     private var identity: PersonIdentity? { account.peopleIdentities[person.userID] }
-    private var name: String { person.name }
+    private var name: String { account.contactName(for: person.userID) ?? person.name }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
