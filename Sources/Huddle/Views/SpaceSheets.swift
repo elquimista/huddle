@@ -376,7 +376,7 @@ struct AddRoomsSheet: View {
                            set: { if $0 { chosen.insert(room.id) } else { chosen.remove(room.id) } })
         return Toggle(isOn: isOn) {
             HStack(spacing: 10) {
-                AvatarView(media: account.media, url: room.avatarURL, name: room.name, seed: room.id,
+                AvatarView(media: account.media, url: room.avatarURL, name: room.name, seed: room.avatarSeed,
                            size: 26, isSquare: room.isSpace)
                     .accessibilityHidden(true)
                 Text(room.name)

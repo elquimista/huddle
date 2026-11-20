@@ -479,10 +479,12 @@ final class RoomTimeline {
             let isDirect = await room.isDirect()
             isOneToOne = isDirect && room.activeMembersCount() <= 2
             hasTwoPeople = room.activeMembersCount() <= 2
+            refreshNameColors()
             isLoading = false
             for await diffs in stream {
                 for diff in diffs { items.apply(diff.diff) }
                 rebuildRows()
+                refreshNameColors()
             }
         } catch {
             self.error = error.actionMessage
@@ -790,6 +792,29 @@ final class RoomTimeline {
     }
 
     /// Loads the room's members for mention suggestions, once.
+    /// How many people were in the room when names' colours were last worked out.
+    @ObservationIgnored private var nameColorMembers: Int?
+
+    /// Works out names' colours for a room of up to six again (NameColors), when the number of
+    /// people in it has changed: someone joined or left.
+    private func refreshNameColors() {
+        let count = Int(room.activeMembersCount())
+        guard count != nameColorMembers else { return }
+        nameColorMembers = count
+        let room = room
+        let roomID = roomID
+        Task {
+            var joined: [String] = []
+            if count <= NameColors.largestRoom, let iterator = try? await room.members() {
+                while let chunk = iterator.nextChunk(chunkSize: 50) {
+                    joined += chunk.filter { $0.membership == .join }.map(\.userId)
+                }
+            }
+            // A bigger room, with none: Element's colours as they are.
+            NameColors.shared.setMembers(joined, ofRoom: roomID)
+        }
+    }
+
     func loadMembers() async {
         guard !membersRequested else { return }
         membersRequested = true

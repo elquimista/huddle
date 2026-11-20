@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Round avatar that falls back to a coloured initial. Spaces' are rounded squares, so they
-/// read apart from people and rooms at a glance.
+/// Round avatar that falls back to an initial in the person's or room's colour (Decorative), as
+/// Element has it. Spaces' are rounded squares, so they read apart from people and rooms at a
+/// glance.
 struct AvatarView: View {
     let media: MediaLoader
     let url: String?
@@ -13,6 +14,9 @@ struct AvatarView: View {
     var isSquare = false
 
     @State private var image: NSImage?
+    /// In a room, a person's colour is the room's for them (NameColors). A room's own ID isn't
+    /// among its people, so a room's avatar keeps its own colour.
+    @Environment(\.nameColorRoom) private var room
 
     var body: some View {
         ZStack {
@@ -21,7 +25,8 @@ struct AvatarView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
-                Self.color(for: seed)
+                let index = room == nil ? Decorative.index(for: seed) : NameColors.shared.index(for: seed, inRoom: room)
+                Decorative.avatarBackground[index]
                 Text(initial)
                     .font(.system(size: size * 0.45, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
@@ -45,12 +50,5 @@ struct AvatarView: View {
     private var initial: String {
         let trimmed = name.drop { "@#!".contains($0) }
         return trimmed.first.map { String($0).uppercased() } ?? "?"
-    }
-
-    private static let palette: [Color] = [.blue, .teal, .green, .orange, .pink, .purple, .indigo, .brown]
-
-    static func color(for seed: String) -> Color {
-        let hash = seed.utf8.reduce(UInt(5381)) { ($0 << 5) &+ $0 &+ UInt($1) }
-        return palette[Int(hash % UInt(palette.count))]
     }
 }

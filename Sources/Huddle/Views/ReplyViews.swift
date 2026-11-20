@@ -26,18 +26,19 @@ struct ReplyQuoteView: View {
     var isSearching = false
     let action: () -> Void
     @State private var isHovering = false
+    @Environment(\.nameColorRoom) private var room
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Capsule()
-                    .fill(reply.tint)
+                    .fill(reply.tint(inRoom: room))
                     .frame(width: 3)
                 VStack(alignment: .leading, spacing: 1) {
                     if reply.state == .ready {
                         Text(reply.senderName)
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(reply.tint)
+                            .foregroundStyle(reply.tint(inRoom: room))
                     }
                     ReplySnippet(reply: reply)
                 }
@@ -70,16 +71,17 @@ struct ReplyQuoteView: View {
 struct ReplyComposerBar: View {
     let reply: ReplyPreview
     let cancel: () -> Void
+    @Environment(\.nameColorRoom) private var room
 
     var body: some View {
         HStack(spacing: 8) {
             Capsule()
-                .fill(reply.tint)
+                .fill(reply.tint(inRoom: room))
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Replying to \(reply.senderName)")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(reply.tint)
+                    .foregroundStyle(reply.tint(inRoom: room))
                 ReplySnippet(reply: reply)
             }
             Spacer(minLength: 8)
@@ -155,9 +157,9 @@ struct ReplySnippet: View {
 }
 
 extension ReplyPreview {
-    /// The sender's colour, the same one their name has in the timeline.
-    var tint: Color {
-        state == .ready ? AvatarView.color(for: sender) : Color.secondary.opacity(0.5)
+    /// The sender's colour, the same one their name has in the room's conversation.
+    @MainActor func tint(inRoom roomID: String?) -> Color {
+        state == .ready ? NameColors.shared.color(for: sender, inRoom: roomID) : Color.secondary.opacity(0.5)
     }
 
     /// What to say in place of the message while it loads, or if it can't be had.

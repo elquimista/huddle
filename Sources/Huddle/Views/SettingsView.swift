@@ -385,7 +385,8 @@ private struct ConversationPreview: View {
     private struct Line: Identifiable {
         let id: Int
         let sender: String
-        let color: Color
+        /// Their colour (Decorative), as a person's name and avatar have it.
+        let color: Int
         let time: String
         let text: String
         var isEmoji = false
@@ -394,9 +395,9 @@ private struct ConversationPreview: View {
     }
 
     private let lines = [
-        Line(id: 0, sender: "Bob", color: .orange, time: "9:41 AM", text: "Shall we ship the build today?"),
-        Line(id: 1, sender: "Alice", color: .indigo, time: "9:42 AM", text: "Yes, right after lunch"),
-        Line(id: 2, sender: "Alice", color: .indigo, time: "9:42 AM", text: "🎉🙌", isEmoji: true, startsGroup: false),
+        Line(id: 0, sender: "Bob", color: 5, time: "9:41 AM", text: "Shall we ship the build today?"),
+        Line(id: 1, sender: "Alice", color: 3, time: "9:42 AM", text: "Yes, right after lunch"),
+        Line(id: 2, sender: "Alice", color: 3, time: "9:42 AM", text: "🎉🙌", isEmoji: true, startsGroup: false),
     ]
 
     var body: some View {
@@ -427,7 +428,7 @@ private struct ConversationPreview: View {
         HStack(alignment: .top, spacing: 10) {
             if line.startsGroup {
                 Circle()
-                    .fill(line.color)
+                    .fill(Decorative.avatarBackground[line.color])
                     .frame(width: 28, height: 28)
                     .overlay {
                         Text(String(line.sender.prefix(1)))
@@ -442,7 +443,7 @@ private struct ConversationPreview: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(line.sender)
                             .fontWeight(.semibold)
-                            .foregroundStyle(line.color)
+                            .foregroundStyle(Decorative.text[line.color])
                         Text(line.time)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -487,7 +488,7 @@ private struct ConversationPreview: View {
                 .frame(width: 54, alignment: .trailing)
             Text(line.sender)
                 .fontWeight(.semibold)
-                .foregroundStyle(line.color)
+                .foregroundStyle(Decorative.text[line.color])
                 .frame(width: 44, alignment: .trailing)
             text(line)
         }

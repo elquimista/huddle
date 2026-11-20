@@ -7,6 +7,8 @@ struct ForwardSheet: View {
     let account: AccountSession
     let request: ForwardRequest
     @Environment(\.dismiss) private var dismiss
+    /// The room the message is forwarded from, for its sender's colour.
+    @Environment(\.nameColorRoom) private var nameColorRoom
     @State private var query = ""
     @State private var states: [String: SendState] = [:]
     /// The rooms in the order they had when the sheet opened. Sending to one makes it the most
@@ -102,12 +104,12 @@ struct ForwardSheet: View {
     private var quote: some View {
         HStack(spacing: 8) {
             Capsule()
-                .fill(request.preview.tint)
+                .fill(request.preview.tint(inRoom: nameColorRoom))
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 1) {
                 Text(request.preview.senderName)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(request.preview.tint)
+                    .foregroundStyle(request.preview.tint(inRoom: nameColorRoom))
                 ReplySnippet(reply: request.preview)
             }
             Spacer(minLength: 0)
@@ -119,7 +121,7 @@ struct ForwardSheet: View {
 
     private func row(_ room: RoomSummary) -> some View {
         HStack(spacing: 10) {
-            AvatarView(media: account.media, url: room.avatarURL, name: room.name, seed: room.id, size: 28)
+            AvatarView(media: account.media, url: room.avatarURL, name: room.name, seed: room.avatarSeed, size: 28)
             Text(room.name)
                 .lineLimit(1)
                 .truncationMode(.tail)

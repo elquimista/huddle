@@ -557,7 +557,7 @@ private struct RoomRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            AvatarView(media: media, url: room.avatarURL, name: room.name, seed: room.id, size: 36)
+            AvatarView(media: media, url: room.avatarURL, name: room.name, seed: room.avatarSeed, size: 36)
                 .presenceDot(presence, avatarSize: 36)
                 .help(presence?.description ?? "")
                 .accessibilityValue(presence?.description ?? "")

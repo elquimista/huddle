@@ -1805,7 +1805,7 @@ private struct MessageView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(message.senderName)
                             .fontWeight(.semibold)
-                            .foregroundStyle(AvatarView.color(for: message.sender))
+                            .foregroundStyle(NameColors.shared.color(for: message.sender, inRoom: timeline.roomID))
                         Text(message.date.formatted(date: .omitted, time: .shortened))
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1834,7 +1834,7 @@ private struct MessageView: View {
                     .frame(width: 54, alignment: .trailing)
                 Text(message.senderName)
                     .fontWeight(.semibold)
-                    .foregroundStyle(AvatarView.color(for: message.sender))
+                    .foregroundStyle(NameColors.shared.color(for: message.sender, inRoom: timeline.roomID))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(width: nameWidth, alignment: .trailing)
@@ -1934,7 +1934,7 @@ private struct MessageView: View {
             if message.showsHeader, bubbleShowsSender {
                 Text(message.senderName)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(AvatarView.color(for: message.sender))
+                    .foregroundStyle(NameColors.shared.color(for: message.sender, inRoom: timeline.roomID))
                     .padding(.leading, Bubble.avatarSize + Bubble.avatarGap + Bubble.tailWidth + Bubble.textInset.leading)
             }
             HStack(alignment: .bubbleFoot, spacing: Bubble.avatarGap) {

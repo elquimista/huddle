@@ -119,12 +119,14 @@ private struct SearchResultRow: View {
             HStack(alignment: .top, spacing: 10) {
                 AvatarView(media: account.media, url: hit.senderAvatarURL, name: hit.senderName,
                            seed: hit.sender, size: 28)
+                    // In the found message's room, which may not be the one open.
+                    .environment(\.nameColorRoom, hit.roomID)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(hit.senderName)
                             .fontWeight(.semibold)
-                            .foregroundStyle(AvatarView.color(for: hit.sender))
+                            .foregroundStyle(NameColors.shared.color(for: hit.sender, inRoom: hit.roomID))
                             .lineLimit(1)
                         if let roomName {
                             Text(roomName)

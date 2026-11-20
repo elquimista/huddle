@@ -94,6 +94,8 @@ struct RoomView: View {
                     if none { account.dropBannerPins(for: roomID) }
                 }
                 .onChange(of: panel) { _, new in panelChanged(to: new) }
+                // People's colours as this room has them, everywhere inside it (NameColors).
+                .environment(\.nameColorRoom, roomID)
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         // A voice call: in a direct chat it rings the other person; in a room it

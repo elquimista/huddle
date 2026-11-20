@@ -27,6 +27,7 @@ struct PinnedBanner: View {
     let showAll: (() -> Void)?
     let select: () -> Void
     @State private var isHovering = false
+    @Environment(\.nameColorRoom) private var nameColorRoom
 
     var body: some View {
         let message = messages[index]
@@ -82,7 +83,7 @@ struct PinnedBanner: View {
         HStack(spacing: 4) {
             Text(message.senderName)
                 .fontWeight(.semibold)
-                .foregroundStyle(AvatarView.color(for: message.sender))
+                .foregroundStyle(NameColors.shared.color(for: message.sender, inRoom: nameColorRoom))
             if let icon = preview?.icon {
                 Image(systemName: icon)
                     .font(.caption)
@@ -183,6 +184,7 @@ private struct PinnedRow: View {
     let open: () -> Void
     let unpin: () -> Void
     @State private var isHovering = false
+    @Environment(\.nameColorRoom) private var nameColorRoom
 
     var body: some View {
         let preview = ReplyPreview(replyingTo: message)
@@ -194,7 +196,7 @@ private struct PinnedRow: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(message.senderName)
                             .fontWeight(.semibold)
-                            .foregroundStyle(AvatarView.color(for: message.sender))
+                            .foregroundStyle(NameColors.shared.color(for: message.sender, inRoom: nameColorRoom))
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         Text(message.date.roomListLabel)

@@ -137,7 +137,7 @@ private struct GoToRoomRow: View {
     var body: some View {
         HStack(spacing: 10) {
             AvatarView(media: match.account.media, url: match.room.avatarURL, name: match.room.name,
-                       seed: match.room.id, size: 24)
+                       seed: match.room.avatarSeed, size: 24)
             Text(match.room.name)
                 .lineLimit(1)
             if AccountSession.isUnread(match.room) {
