@@ -46,6 +46,10 @@ struct RoomSummary: Identifiable, Equatable {
     var isHighlighted: Bool { isInvite || notifications > 0 || mentions > 0 }
     /// Addressed to you personally: an invitation, a mention, or a direct message.
     var isUrgent: Bool { isInvite || mentions > 0 || (isDirect && notifications > 0) }
+    /// Only new messages, in a room set aside as Low Priority: left out where unread rooms are
+    /// gathered (a space's badge in the rail, Next Unread Room), as Element leaves them out of a
+    /// space's badge. A count, a mention, or marking it unread on purpose still counts.
+    var isLowPriorityActivity: Bool { isLowPriority && !isHighlighted && !isMarkedUnread }
 }
 
 /// One logged-in account: its client, sliding sync and room list.
@@ -829,7 +833,7 @@ final class AccountSession: Identifiable {
         for room in allRooms where !room.isSpace && ids.contains(room.id) {
             if room.isHighlighted { count += 1 }
             if room.isUrgent { urgent += 1 }
-            if room.showsUnread { hasUnread = true }
+            if room.showsUnread, !room.isLowPriorityActivity { hasUnread = true }
         }
         return (count, urgent, hasUnread)
     }
@@ -1303,7 +1307,8 @@ final class AccountSession: Identifiable {
 
     /// Next Room and Previous Room: the room `step` along the list as it shows, round from one
     /// end to the other. Next Unread Room (`unreadOnly`) looks in folded sections too, so
-    /// nothing unread is passed over.
+    /// nothing unread is passed over, except a Low Priority room with only new messages, which
+    /// the space's badge doesn't count either.
     func showRoom(step: Int, unreadOnly: Bool = false) {
         let showing = searchText.isEmpty ? sections.filter { !collapsedSections.contains($0.id) } : sections
         let list = unreadOnly ? rooms : showing.flatMap(\.rooms)
@@ -1311,7 +1316,7 @@ final class AccountSession: Identifiable {
         let start = selectedRoomID.flatMap { id in list.firstIndex { $0.id == id } } ?? (step > 0 ? -1 : list.count)
         for distance in 1...list.count {
             let index = ((start + step * distance) % list.count + list.count) % list.count
-            if !unreadOnly || Self.isUnread(list[index]) {
+            if !unreadOnly || (Self.isUnread(list[index]) && !list[index].isLowPriorityActivity) {
                 if list[index].id != selectedRoomID { selectedRoomID = list[index].id }
                 return
             }

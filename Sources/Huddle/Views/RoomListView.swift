@@ -447,10 +447,14 @@ private struct RoomRowMenu: View {
                 actions.setNotifications(room.id, $0)
             }
             Divider()
+            // As Element's room menu has them, ticked where the room is. A room is in one
+            // section at a time, so ticking one takes it out of the other; unticking puts it
+            // back in People or Rooms.
             let place = account.place(of: room)
-            Button(place == .favourites ? "Remove from Favourites" : "Add to Favourites") {
-                actions.move(room.id, place == .favourites ? .usual : .favourites)
-            }
+            Toggle("Favourite", isOn: Binding(get: { place == .favourites },
+                                              set: { actions.move(room.id, $0 ? .favourites : .usual) }))
+            Toggle("Low Priority", isOn: Binding(get: { place == .lowPriority },
+                                                 set: { actions.move(room.id, $0 ? .lowPriority : .usual) }))
             Menu("Move To") {
                 ForEach(RoomListRow.destinations(for: room, in: account), id: \.title) { destination in
                     Toggle(destination.title, isOn: Binding(get: { place == destination.place },

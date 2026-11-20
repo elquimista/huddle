@@ -163,6 +163,16 @@ struct HuddleApp: App {
                 .disabled(roomID == nil)
                 Button("Mark All as Read") { account?.markAllRead() }
                     .disabled(!(account?.hasUnreadRooms ?? false))
+                Divider()
+                // The open room's, as its menu in the list has them.
+                let place = roomID.flatMap { id in account?.allRooms.first { $0.id == id } }.map { account?.place(of: $0) }
+                ForEach([("Favourite", SectionPlace.favourites), ("Low Priority", .lowPriority)], id: \.0) { title, target in
+                    Toggle(title, isOn: Binding(get: { place == target }, set: { isOn in
+                        guard let account, let roomID else { return }
+                        FailureAlert.run("Couldn’t Move the Room") { try await account.move(roomID, to: isOn ? target : .usual) }
+                    }))
+                    .disabled(roomID == nil || account?.browsingSpaceID != nil)
+                }
             }
         }
 
