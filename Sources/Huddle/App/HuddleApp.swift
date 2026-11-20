@@ -153,6 +153,16 @@ struct HuddleApp: App {
                 }
                 .keyboardShortcut("i", modifiers: .command)
                 .disabled(roomID == nil || account?.browsingSpaceID != nil)
+                // Into the room's own composer, as its microphone button does.
+                let voice = VoiceRecorder.shared
+                let isRecording = roomID.map { voice.key == $0 } ?? false
+                Button(isRecording ? "Stop Recording" : "Record Voice Message") {
+                    guard let roomID else { return }
+                    Task { isRecording ? await voice.stop(roomID) : await voice.start(key: roomID) }
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(roomID == nil || account?.browsingSpaceID != nil
+                          || roomID.map { voice.recordings[$0] != nil } ?? false)
                 Divider()
                 let unread = roomID.map { account?.isUnread($0) ?? false } ?? false
                 Button(unread ? "Mark as Read" : "Mark as Unread") {

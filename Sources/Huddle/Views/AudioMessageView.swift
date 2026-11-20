@@ -12,6 +12,11 @@ struct AudioMessageView: View {
     let media: MediaLoader
     /// The timeline this row is in. Leaving it stops audio that was started from it.
     let owner: RoomTimeline
+    /// In the composer, playing back a recording before it's sent: no bubble of its own, as the
+    /// message field around it is one, and small enough to sit in the field's one line.
+    var isEmbedded = false
+
+    private var buttonSide: CGFloat { isEmbedded ? 22 : 30 }
 
     /// Where the pointer is while dragging through the audio, as a fraction of its length.
     @State private var scrub: Double?
@@ -31,7 +36,7 @@ struct AudioMessageView: View {
 
     /// Everything beside the track: padding, the play button, the gaps, and the speed button
     /// while it shows.
-    private var chrome: CGFloat { 8 + 30 + 10 + 12 + (isOpen ? 10 + 32 : 0) }
+    private var chrome: CGFloat { 8 + buttonSide + 10 + 12 + (isOpen ? 10 + 32 : 0) }
 
     /// In a very narrow column the time is left out rather than let the player spill over.
     private var showsTime: Bool { contentWidth - chrome - 8 - Self.timeWidth >= 48 }
@@ -76,10 +81,11 @@ struct AudioMessageView: View {
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
             }
-            .padding(.leading, 8)
-            .padding(.trailing, 12)
-            .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.leading, isEmbedded ? 0 : 8)
+            .padding(.trailing, isEmbedded ? 0 : 12)
+            .padding(.vertical, isEmbedded ? 0 : 8)
+            .background(isEmbedded ? Color.clear : Color.primary.opacity(0.06),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .animation(.snappy(duration: 0.22), value: isOpen)
 
             if phase == .loading, let output = playback.slowOutput {
@@ -116,7 +122,11 @@ struct AudioMessageView: View {
     private func playButton(phase: AudioPlayback.Phase?, failure: AudioLoadError?) -> some View {
         let isUnplayable = failure != nil && failure != .download
         return Button {
-            playback.toggle(id: id, source: audio.media.source, media: media, owner: owner)
+            if let url = audio.localURL {
+                playback.toggle(id: id, localURL: url, owner: owner)
+            } else {
+                playback.toggle(id: id, source: audio.media.source, media: media, owner: owner)
+            }
         } label: {
             ZStack {
                 Circle().fill(isUnplayable ? AnyShapeStyle(Color.primary.opacity(0.14)) : AnyShapeStyle(Color.accentColor))
@@ -137,9 +147,9 @@ struct AudioMessageView: View {
                     }
                 }
             }
-            .font(.system(size: 12, weight: .bold))
+            .font(.system(size: isEmbedded ? 10 : 12, weight: .bold))
             .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
+            .frame(width: buttonSide, height: buttonSide)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -229,7 +239,7 @@ struct AudioMessageView: View {
                     }
             )
         }
-        .frame(width: scrubberWidth, height: audio.waveform.isEmpty ? 16 : 26)
+        .frame(width: scrubberWidth, height: audio.waveform.isEmpty ? 16 : isEmbedded ? 18 : 26)
     }
 
     /// The sound's shape as bars, or a plain rounded track when the sender gave no waveform.
@@ -251,7 +261,11 @@ struct AudioMessageView: View {
 
     private func seek(to fraction: Double) {
         if playback.phase(of: id) == nil { pendingStart = fraction }
-        playback.seek(id: id, source: audio.media.source, media: media, owner: owner, to: fraction)
+        if let url = audio.localURL {
+            playback.seek(id: id, localURL: url, owner: owner, to: fraction)
+        } else {
+            playback.seek(id: id, source: audio.media.source, media: media, owner: owner, to: fraction)
+        }
     }
 
     private static func fraction(of x: CGFloat, in width: CGFloat) -> Double {

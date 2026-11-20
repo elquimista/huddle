@@ -92,6 +92,10 @@ struct TimelineView: View {
     /// The names' width while it is being dragged; saved for the room when the drag ends.
     @State private var draggedNameWidth: CGFloat?
     @FocusState private var composerFocused: Bool
+    /// The recording bar, or the recording waiting to be sent, while there's a voice message.
+    @FocusState private var voiceFocused: Bool
+    @State private var asksToDeleteVoice = false
+    @State private var isHoveringSend = false
 
     /// Whether the newest message is on screen.
     @State private var isAtBottom = true
@@ -644,6 +648,14 @@ struct TimelineView: View {
             typeToCompose.stop()
             AudioPlayback.shared.stop(owner: timeline)
             VideoPlayback.shared.stop(owner: timeline)
+            // A recording going on here stops and waits here, for coming back to, and the room
+            // list says it's waiting.
+            let key = draftKey
+            let account = account
+            Task {
+                await VoiceRecorder.shared.stop(key)
+                account?.voiceRecordingChanged(forDraftKey: key)
+            }
             timeline.setTyping(false)
             let timeline = timeline
             Task { await timeline.leave() }
@@ -906,7 +918,9 @@ struct TimelineView: View {
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Group {
-                    if editTarget == nil {
+                    if hasVoiceMessage {
+                        DeleteRecordingButton { deleteVoice() }
+                    } else if editTarget == nil {
                         AttachButton { pickFiles() }
                     } else {
                         // Nothing to attach to an edit: the place says what the field is doing.
@@ -918,7 +932,26 @@ struct TimelineView: View {
                             .accessibilityHidden(true)
                     }
                 }
-                .padding(.bottom, 1)
+                // Level with the middle of a one-line field, and with its last line as it grows.
+                .frame(height: ComposerField.oneLine)
+                if let phase = recordingPhase {
+                    VoiceRecordingBar(phase: phase, elapsed: voice.elapsed, levels: voice.levels) {
+                        let key = draftKey
+                        Task { await voice.stop(key) }
+                    }
+                    .frame(height: ComposerField.line)
+                    .modifier(ComposerField())
+                    .modifier(VoiceKeys(focus: $voiceFocused, send: { sendVoice(proxy) }, escape: escapeVoice))
+                } else if let recording = voiceRecording {
+                    HStack(spacing: 0) {
+                        AudioMessageView(id: VoiceRecorder.playbackID(for: recording), audio: recording.attachment,
+                                         media: media, owner: timeline, isEmbedded: true)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: ComposerField.line)
+                    .modifier(ComposerField())
+                    .modifier(VoiceKeys(focus: $voiceFocused, send: { sendVoice(proxy) }, escape: escapeVoice))
+                } else {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     // Whether what's typed here will be encrypted, at a glance, where it's typed.
                     EncryptionGlyph(encryption: timeline.encryption, showInfo: room?.showInfo)
@@ -961,21 +994,10 @@ struct TimelineView: View {
                             noteTyping()
                         }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(.background, in: RoundedRectangle(cornerRadius: 14))
-                .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(.separator) }
-                Button { send(proxy) } label: {
-                    Image(systemName: editTarget == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill")
-                        .font(.system(size: 24))
-                        .contentTransition(.symbolEffect(.replace))
+                .modifier(ComposerField())
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
-                .disabled(!canSend)
-                .help(editTarget == nil ? "Send (Return). Shift-Return for a new line."
-                                        : "Save (Return). Shift-Return for a new line, Esc to cancel.")
-                .accessibilityLabel(editTarget == nil ? "Send" : "Save")
+                sendButton(proxy)
+                    .frame(height: ComposerField.oneLine)
             }
         }
         .padding(.horizontal, 14)
@@ -984,6 +1006,27 @@ struct TimelineView: View {
         .animation(.snappy(duration: 0.2), value: editTarget?.itemID)
         .animation(.snappy(duration: 0.2), value: stagedImages.map(\.id))
         .animation(.snappy(duration: 0.2), value: stagedFiles.map(\.id))
+        .animation(.snappy(duration: 0.2), value: hasVoiceMessage)
+        .onChange(of: hasVoiceMessage) {
+            // The keys follow what's in the composer: Return sends the recording, Escape deletes it.
+            if hasVoiceMessage { voiceFocused = true } else { composerFocused = true }
+        }
+        .confirmationDialog("Delete this voice message?", isPresented: $asksToDeleteVoice) {
+            Button("Delete", role: .destructive) { voice.discard(draftKey) }
+        } message: {
+            Text("You can’t get it back.")
+        }
+        .alert(voice.failure?.reason.title ?? "", isPresented: Binding(
+            get: { voice.failure?.key == draftKey },
+            set: { if !$0 { voice.failure = nil } }
+        ), presenting: voice.failure?.reason) { reason in
+            if let url = reason.settingsURL {
+                Button("Open System Settings") { NSWorkspace.shared.open(url) }
+            }
+            Button("OK", role: .cancel) {}
+        } message: { reason in
+            Text(reason.message)
+        }
         .background(.bar)
         // Not Divider: inside the room's HStack it would draw itself vertically.
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
@@ -1012,6 +1055,89 @@ struct TimelineView: View {
         let isWriting = editTarget == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if isWriting, draft == restoredDraft { return }
         timeline.setTyping(isWriting)
+    }
+
+    // MARK: Voice messages
+
+    private var voice: VoiceRecorder { .shared }
+    /// Whether this composer is recording, and how far it has got.
+    private var recordingPhase: VoiceRecorder.Phase? { voice.phase(for: draftKey) }
+    /// A recording stopped here and waiting to be sent.
+    private var voiceRecording: VoiceRecording? { voice.recordings[draftKey] }
+    private var hasVoiceMessage: Bool { recordingPhase != nil || voiceRecording != nil }
+
+    /// Send, Save, or with nothing to send, Record: one button, its symbol changing in place.
+    private func sendButton(_ proxy: ScrollViewProxy) -> some View {
+        let records = editTarget == nil && !hasVoiceMessage && !canSend
+        // The microphone is a plain glyph, not a filled circle: a grey circle is how a send
+        // button that can't send looks.
+        let symbol = editTarget != nil ? "checkmark.circle.fill" : records ? "mic.fill" : "arrow.up.circle.fill"
+        let isReady = canSend || hasVoiceMessage
+        return Button {
+            if hasVoiceMessage {
+                sendVoice(proxy)
+            } else if records {
+                startRecording()
+            } else {
+                send(proxy)
+            }
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: records ? 17 : 24, weight: records ? .medium : .regular))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isReady ? Color.accentColor : records && isHoveringSend ? Color.primary : Color.secondary)
+        .onHoverInFrontWindow { isHoveringSend = $0 }
+        .disabled(editTarget != nil && !canSend || recordingPhase == .starting || recordingPhase == .finishing)
+        .help(records ? "Record a voice message (⇧⌘R)"
+              : hasVoiceMessage ? "Send voice message (Return). Esc to delete it."
+              : editTarget == nil ? "Send (Return). Shift-Return for a new line."
+              : "Save (Return). Shift-Return for a new line, Esc to cancel.")
+        .accessibilityLabel(records ? "Record voice message" : hasVoiceMessage ? "Send voice message"
+                            : editTarget == nil ? "Send" : "Save")
+    }
+
+    private func startRecording() {
+        let key = draftKey
+        Task { await voice.start(key: key) }
+    }
+
+    /// Sends the recording (stopping it first if it's still going), as a reply if one is set up.
+    private func sendVoice(_ proxy: ScrollViewProxy) {
+        let key = draftKey
+        let replyTo = replyTarget?.eventID
+        Task {
+            await voice.stop(key)
+            guard let recording = voice.take(key) else { return }
+            if AudioPlayback.shared.currentID == VoiceRecorder.playbackID(for: recording) { AudioPlayback.shared.stop() }
+            replyTarget = nil
+            timeline.send([.file(recording.staged)], caption: "", replyTo: replyTo)
+            scrollToBottom(proxy)
+            if timeline.focusedEvent != nil { room?.returnToLive() }
+        }
+    }
+
+    /// The trash button: away with it, at once.
+    private func deleteVoice() {
+        if recordingPhase != nil { voice.cancel() } else { voice.discard(draftKey) }
+    }
+
+    /// Escape deletes too, but a recording worth keeping (five seconds or more) is stopped and
+    /// asked about first: Escape is easily pressed by mistake.
+    private func escapeVoice() {
+        let key = draftKey
+        let length = recordingPhase != nil ? voice.elapsed : voiceRecording?.duration ?? 0
+        guard length >= 5 else {
+            deleteVoice()
+            return
+        }
+        Task {
+            await voice.stop(key)
+            if voice.recordings[key] != nil { asksToDeleteVoice = true }
+        }
     }
 
     private var canSend: Bool {
@@ -1809,7 +1935,7 @@ private struct MessageView: View {
                 }
             })
             share.append(.init("Save Image As…") { AttachmentSaver.save(image, media: media) })
-        case .audio(let audio):
+        case .audio(let audio) where message.sendState == nil && audio.localURL == nil:
             share.append(.init("Save Audio As…") { AttachmentSaver.save(audio, media: media) })
         case .file(let file) where message.sendState == nil && file.media != nil:
             share.append(.init(file.openTitle) { Task { try? await media.open(file) } })
@@ -3323,5 +3449,46 @@ extension MessageView {
             FileMessageView(file: file, media: media, sendState: message.sendState,
                             uploadProgress: message.uploadProgress, cancelUpload: cancel)
         }
+    }
+}
+
+/// The message field's rounded box, which the recording bar and the recording waiting to be
+/// sent take over in turn, one line high as the field is with one line in it.
+private struct ComposerField: ViewModifier {
+    /// A line of the field's text.
+    static let line = ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize)))
+    /// The field with one line in it: the line, and the padding above and below.
+    static let oneLine = line + 14
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background, in: RoundedRectangle(cornerRadius: 14))
+            .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(.separator) }
+    }
+}
+
+/// Return sends a voice message from the composer, and Escape deletes it, as they would a
+/// message typed there.
+private struct VoiceKeys: ViewModifier {
+    let focus: FocusState<Bool>.Binding
+    let send: () -> Void
+    let escape: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .focusable()
+            .focusEffectDisabled()
+            .focused(focus)
+            .onKeyPress(.return) {
+                send()
+                return .handled
+            }
+            .onKeyPress(.escape) {
+                escape()
+                return .handled
+            }
     }
 }

@@ -67,8 +67,17 @@ final class AudioPlayback {
 
     /// Play, pause or resume a message's audio. While it is still loading, cancel.
     func toggle(id: String, source: MediaSource, media: MediaLoader, owner: AnyObject) {
+        toggle(id: id, load: { try await media.playableAudio(source: source) }, owner: owner)
+    }
+
+    /// The same, for audio on this Mac: a voice message recorded and not yet sent.
+    func toggle(id: String, localURL url: URL, owner: AnyObject) {
+        toggle(id: id, load: { try Self.playableAudio(at: url) }, owner: owner)
+    }
+
+    private func toggle(id: String, load: @escaping @Sendable () async throws -> Data, owner: AnyObject) {
         guard currentID == id else {
-            start(id: id, source: source, media: media, owner: owner, at: 0)
+            start(id: id, load: load, owner: owner, at: 0)
             return
         }
         switch phase {
@@ -90,9 +99,17 @@ final class AudioPlayback {
     /// Jump to a point in a message's audio, as a fraction of its length. On audio that isn't
     /// loaded yet this starts playing from there.
     func seek(id: String, source: MediaSource, media: MediaLoader, owner: AnyObject, to fraction: Double) {
+        seek(id: id, load: { try await media.playableAudio(source: source) }, owner: owner, to: fraction)
+    }
+
+    func seek(id: String, localURL url: URL, owner: AnyObject, to fraction: Double) {
+        seek(id: id, load: { try Self.playableAudio(at: url) }, owner: owner, to: fraction)
+    }
+
+    private func seek(id: String, load: @escaping @Sendable () async throws -> Data, owner: AnyObject, to fraction: Double) {
         let fraction = min(max(fraction, 0), 1)
         guard currentID == id else {
-            start(id: id, source: source, media: media, owner: owner, at: fraction)
+            start(id: id, load: load, owner: owner, at: fraction)
             return
         }
         guard phase == .playing || phase == .paused else { return }
@@ -161,7 +178,12 @@ final class AudioPlayback {
 
     // MARK: Loading
 
-    private func start(id: String, source: MediaSource, media: MediaLoader, owner: AnyObject, at fraction: Double) {
+    private nonisolated static func playableAudio(at url: URL) throws -> Data {
+        guard let data = try? Data(contentsOf: url) else { throw AudioLoadError.download }
+        return try AudioPreparer.playableData(from: data)
+    }
+
+    private func start(id: String, load: @escaping @Sendable () async throws -> Data, owner: AnyObject, at fraction: Double) {
         stop()
         VideoPlayback.shared.pause()
         let session = session
@@ -180,7 +202,7 @@ final class AudioPlayback {
 
         loading = Task { [weak self] in
             do {
-                let data = try await media.playableAudio(source: source)
+                let data = try await load()
                 guard let self, self.session == session else { return }
 
                 // From here any wait is for the sound output, not the network. Say so if it drags.

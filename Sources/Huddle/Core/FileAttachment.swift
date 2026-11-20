@@ -119,6 +119,8 @@ struct StagedFile: Identifiable, Sendable {
         /// with a still from it, which apps show until it's played.
         case video(duration: TimeInterval?, size: CGSize?, poster: VideoPoster?)
         case audio(duration: TimeInterval?)
+        /// A voice message recorded in Huddle (VoiceRecorder.swift), with its loudness through it.
+        case voice(duration: TimeInterval, waveform: [Float])
 
         var isVideo: Bool { if case .video = self { true } else { false } }
     }

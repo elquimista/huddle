@@ -1247,6 +1247,11 @@ final class AccountSession: Identifiable {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
+    /// A voice message was recorded, sent or deleted in a composer: the room list says so.
+    func voiceRecordingChanged(forDraftKey key: String) {
+        refreshDraftPreview(forRoom: Self.roomID(ofDraftKey: key))
+    }
+
     /// The room a draft's key is for: "room", or "room|thread root".
     private static func roomID(ofDraftKey key: String) -> String {
         key.split(separator: "|", maxSplits: 1).first.map(String.init) ?? key
@@ -1255,13 +1260,18 @@ final class AccountSession: Identifiable {
     /// Works out again what a room's row says of its drafts: the room's own, or else one in a
     /// thread of it.
     private func refreshDraftPreview(forRoom roomID: String) {
-        let threadKeys = Set(savedDraftTexts.keys).union(drafts.keys)
+        let voice = VoiceRecorder.shared.recordings
+        let threadKeys = Set(savedDraftTexts.keys).union(drafts.keys).union(voice.keys)
             .filter { $0.hasPrefix(roomID + "|") }
             .sorted()
-        var preview = draft(for: roomID).flatMap(DraftPreview.summary).map { DraftPreview(text: $0, inThread: false) }
+        // What was typed, or else a voice message recorded and not sent.
+        func summary(_ key: String) -> String? {
+            draft(for: key).flatMap(DraftPreview.summary) ?? (voice[key] != nil ? "Voice message" : nil)
+        }
+        var preview = summary(roomID).map { DraftPreview(text: $0, inThread: false) }
         if preview == nil {
             preview = threadKeys.lazy
-                .compactMap { self.draft(for: $0).flatMap(DraftPreview.summary) }
+                .compactMap(summary)
                 .first
                 .map { DraftPreview(text: $0, inThread: true) }
         }

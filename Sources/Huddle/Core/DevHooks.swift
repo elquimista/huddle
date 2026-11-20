@@ -137,6 +137,10 @@ enum DevHooks {
         && ProcessInfo.processInfo.environment["HUDDLE_DEV_ASSUME_ACTIVE"] != nil
     static let deniesMicrophone = AppEnvironment.isDev
         && ProcessInfo.processInfo.environment["HUDDLE_DEV_NO_MIC"] != nil
+    /// A sound file that voice messages record instead of the microphone (HUDDLE_DEV_FAKE_MIC),
+    /// so tests never listen to the room.
+    static let fakeMicrophone: URL? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_FAKE_MIC"].map { URL(fileURLWithPath: $0) } : nil
     static let callPerAccount = AppEnvironment.isDev
         && ProcessInfo.processInfo.environment["HUDDLE_DEV_CALL_PER_ACCOUNT"] != nil
     static let legacyCalls = AppEnvironment.isDev

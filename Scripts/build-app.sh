@@ -87,7 +87,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.social-networking</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
-    <key>NSMicrophoneUsageDescription</key><string>Huddle uses the microphone for calls.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Huddle uses the microphone for calls and voice messages.</string>
     $UPDATE_KEYS
 </dict>
 </plist>

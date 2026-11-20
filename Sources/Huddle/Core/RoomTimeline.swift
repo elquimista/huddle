@@ -894,7 +894,12 @@ final class RoomTimeline {
         var body: MessageRow.Body {
             switch item {
             case .image(let image): .image(ImageAttachment(staged: image, caption: caption?.plain, id: id))
-            case .file(let file): .file(FileAttachment(staged: file, caption: caption?.plain))
+            case .file(let file):
+                if case .voice(let duration, let waveform) = file.kind {
+                    .audio(AudioAttachment(voiceAt: file.url, duration: duration, waveform: waveform))
+                } else {
+                    .file(FileAttachment(staged: file, caption: caption?.plain))
+                }
             }
         }
 
@@ -1047,6 +1052,9 @@ final class RoomTimeline {
                               thumbnailSource: poster.map { .data(bytes: $0.data, filename: "thumbnail.jpg") })
             case .audio(let duration):
                 return .audio(audioInfo: AudioInfo(duration: duration, size: file.size, mimetype: file.mimetype))
+            case .voice(let duration, let waveform):
+                return .voice(audioInfo: AudioInfo(duration: duration, size: file.size, mimetype: file.mimetype),
+                              waveform: waveform)
             }
         }
     }

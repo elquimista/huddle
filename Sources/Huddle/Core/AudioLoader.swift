@@ -14,6 +14,8 @@ struct AudioAttachment: Equatable {
     let isVoice: Bool
     /// As the sender reported it.
     let mimetype: String?
+    /// For a voice message recorded here and not yet sent: the file, on this Mac.
+    var localURL: URL?
 
     static let barCount = 48
 
@@ -25,6 +27,19 @@ struct AudioAttachment: Equatable {
         duration = content.audio?.duration ?? content.info?.duration
         waveform = Self.bars(from: content.audio?.waveform ?? [])
         isVoice = content.voice != nil
+    }
+
+    /// A voice message recorded here, before it's sent. It has no address yet, so it gets one of
+    /// its own that nothing will ever be fetched from.
+    init(voiceAt url: URL, duration: TimeInterval, waveform: [Float]) {
+        media = MediaRef(source: try! MediaSource.fromUrl(url: "mxc://queued.invalid/\(UUID().uuidString)"))
+        filename = VoiceRecording.filename
+        caption = nil
+        self.duration = duration
+        self.waveform = Self.bars(from: waveform.map { UInt16(min(max($0, 0), 1) * 1024) })
+        isVoice = true
+        mimetype = VoiceRecording.mimetype
+        localURL = url
     }
 
     /// Fits the sender's waveform, which can be any length, to a fixed number of bars: the
