@@ -255,6 +255,11 @@ final class AccountSession: Identifiable {
     @ObservationIgnored var typingSettingObserver: NSObjectProtocol?
     /// The setting as just changed here, until the account's copy of its data catches up.
     @ObservationIgnored var typingSettingSaved: (value: Bool, date: Date)?
+    /// A name of the user's own for this account ("Work"), to tell it from their others
+    /// (AccountLabel.swift); nil without one.
+    var label: String?
+    /// Just changed here, until the account's copy of its data says so too.
+    @ObservationIgnored var labelSaved: (value: String?, date: Date)?
     @ObservationIgnored private var typingHandles: [String: TaskHandle] = [:]
     @ObservationIgnored private var typingUpdates: AsyncStream<(roomID: String, userIDs: [String])>.Continuation?
     @ObservationIgnored private var typingTask: Task<Void, Never>?

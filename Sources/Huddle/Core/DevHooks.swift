@@ -32,8 +32,11 @@ import Foundation
 ///   HUDDLE_DEV_HOVER     text of a message to show the hover actions on ("text!" also opens its emoji picker)
 ///   HUDDLE_DEV_HOVER_NAMES  comma-separated names of spaces in the rail ("Home" too), rooms in the list,
 ///                        and accounts in the title bar by user name ("more" for the +N button) to draw as pointed at
+///   HUDDLE_DEV_LABEL_PROMPT  user name of an account whose Label… prompt opens when Settings ▸ Accounts shows;
+///                        "bar/<user name>" opens it from the title bar instead
 ///   HUDDLE_DEV_LOG_MENUS  the open account's menu, opened by clicking its chip, is written to the log
-///                        ("DEV_MENU …") instead of shown, so tests don't put a menu over the screen
+///                        ("DEV_MENU …") instead of shown, so tests don't put a menu over the screen; and
+///                        each account's menu in Settings ▸ Accounts as its row appears
 ///   HUDDLE_DEV_MUTE_AUDIO  play audio messages silently (Scripts/run-dev.sh sets this)
 ///   HUDDLE_DEV_AUDIO_DEVICE  UID of the output device to play through, instead of the Mac's default
 ///   HUDDLE_DEV_AUDIO_DELAY   seconds to stall before audio starts, standing in for a slow output device
@@ -169,6 +172,9 @@ enum DevHooks {
         : nil
 
     static let hoverText: String? = AppEnvironment.isDev ? ProcessInfo.processInfo.environment["HUDDLE_DEV_HOVER"] : nil
+
+    /// The account whose Label… prompt opens with Settings ▸ Accounts, by user name.
+    static let labelPrompt: String? = AppEnvironment.isDev ? ProcessInfo.processInfo.environment["HUDDLE_DEV_LABEL_PROMPT"] : nil
 
     /// Menus written to the log instead of shown.
     static let logsMenus = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_LOG_MENUS"] != nil

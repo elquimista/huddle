@@ -152,12 +152,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center?.add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
     }
 
-    /// Which account it arrived on, said only when there's more than one: "on acme.com", by its
-    /// server, which tells a work account from a personal one where their names are usually the
-    /// same person's; by its full Matrix ID when another of the accounts is on that server too.
+    /// Which account it arrived on, said only when there's more than one: by the label the user
+    /// gave it ("on Work", AccountLabel.swift); without one, "on acme.com", by its server, which
+    /// tells a work account from a personal one where their names are usually the same
+    /// person's; by its full Matrix ID when another of the accounts is on that server too.
     /// Worded as a place, so it isn't taken for whom a message was written to.
     private func arrival(on account: AccountSession) -> String? {
         guard let accounts = store?.accounts, accounts.count > 1 else { return nil }
+        if let label = account.label { return "on " + label }
         let server = account.userID.matrixServer
         let shared = accounts.contains { $0.id != account.id && $0.userID.matrixServer == server }
         return "on " + (shared ? account.userID : server)

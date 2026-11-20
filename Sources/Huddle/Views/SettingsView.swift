@@ -702,6 +702,7 @@ private struct AccountSettingsRow: View {
     let verify: () -> Void
     let recoveryKey: () -> Void
     let signOut: () -> Void
+    @State private var accountToLabel: AccountSession?
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -711,8 +712,20 @@ private struct AccountSettingsRow: View {
                        seed: account.userID,
                        size: 36)
             VStack(alignment: .leading, spacing: 2) {
-                Text(account.displayName ?? account.userID.matrixLocalpart)
-                    .fontWeight(.medium)
+                HStack(spacing: 6) {
+                    Text(account.displayName ?? account.userID.matrixLocalpart)
+                        .fontWeight(.medium)
+                    if let label = account.label {
+                        // The user's own name for the account, set apart from its profile name.
+                        Text(label)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(.quaternary, in: Capsule())
+                            .accessibilityLabel("Labelled \(label)")
+                    }
+                }
                 Text(account.userID)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -720,29 +733,10 @@ private struct AccountSettingsRow: View {
                 verificationLine
             }
             Spacer(minLength: 8)
-            // Signing out is rare and can't be undone: in a menu, not a button on every row.
+            // Signing out is rare and can't be undone: in a menu, not a button on every row. The
+            // account's own items, as the title bar's menu has them (AccountMenu).
             Menu {
-                Button("Copy User ID") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(account.userID, forType: .string)
-                }
-                if account.verification == .unverified {
-                    Button("Verify This Mac…", action: verify)
-                }
-                if account.managesRecoveryKey {
-                    Button(account.recoveryState == .disabled ? "Set Up Recovery Key…" : "Change Recovery Key…",
-                           action: recoveryKey)
-                }
-                Divider()
-                Button("Edit Profile…", action: editProfile)
-                if account.signsInWithOAuth {
-                    Button("Manage Account…") { openAccountPage(of: account) }
-                } else {
-                    Button("Change Password…", action: changePassword)
-                }
-                Button("Devices…", action: devices)
-                Divider()
-                Button("Sign Out…", action: signOut)
+                AccountMenuContent(sections: { menuSections })
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 15))
@@ -755,6 +749,26 @@ private struct AccountSettingsRow: View {
             .accessibilityLabel("More for \(account.displayName ?? account.userID)")
         }
         .padding(.vertical, 2)
+        .onAppear {
+            if DevHooks.labelPrompt == account.userID.matrixLocalpart { accountToLabel = account }
+            if DevHooks.logsMenus {
+                print("DEV_SETTINGS_MENU \(account.userID.matrixLocalpart): " + menuSections.map { $0.map(\.title).joined(separator: " | ") }.joined(separator: " | — | "))
+                fflush(stdout)
+            }
+        }
+        .accountLabelPrompt(for: $accountToLabel)
+    }
+
+    /// The account's menu, its sheets opening here in Settings.
+    private var menuSections: [[AccountMenuItem]] {
+        AccountMenu.sections(for: account, actions: AccountMenu.Actions(
+            label: { accountToLabel = account },
+            editProfile: editProfile,
+            changePassword: changePassword,
+            devices: devices,
+            verify: verify,
+            recoveryKey: recoveryKey,
+            signOut: signOut))
     }
 
     @ViewBuilder private var verificationLine: some View {

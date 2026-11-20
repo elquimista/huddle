@@ -9,6 +9,7 @@ struct AccountBar: View {
     let sidebar: SidebarWidth
     @Environment(AccountStore.self) private var store
     @State private var accountToSignOut: AccountSession?
+    @State private var accountToLabel: AccountSession?
 
     /// Room taken by the window controls and the sidebar button before the first avatar, and
     /// by the New Message button and the toolbar's own margin after the last. On the generous side: the toolbar hides an
@@ -45,7 +46,7 @@ struct AccountBar: View {
                               menu: { menuSections(for: account) })
                 // Its own view, made only as the menu opens, so its checks (unread rooms, for
                 // Mark All as Read) aren't run each time the bar is drawn.
-                .contextMenu { AccountContextMenu(header: account.userID, sections: { menuSections(for: account) }) }
+                .contextMenu { AccountMenuContent(header: account.userID, sections: { menuSections(for: account) }) }
             }
             if !split.more.isEmpty {
                 MoreAccountsButton(accounts: split.more) { store.selectedID = $0.id }
@@ -53,6 +54,12 @@ struct AccountBar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Accounts")
+        .accountLabelPrompt(for: $accountToLabel)
+        .onAppear {
+            if let name = DevHooks.labelPrompt, name.hasPrefix("bar/") {
+                accountToLabel = store.accounts.first { $0.userID.matrixLocalpart == name.dropFirst(4) }
+            }
+        }
         .confirmationDialog("Sign out of \(accountToSignOut?.userID ?? "")?",
                             isPresented: Binding(get: { accountToSignOut != nil },
                                                  set: { if !$0 { accountToSignOut = nil } })) {
@@ -68,60 +75,26 @@ struct AccountBar: View {
 }
 
 extension AccountBar {
-    /// An account's menu: the same for right-clicking any account's avatar and for clicking the
-    /// open account's chip.
+    /// An account's menu here (right-clicking any account's avatar, clicking the open one's
+    /// chip): the account's own items, as Settings ▸ Accounts has them (AccountMenu), opening
+    /// their sheets in the main window; then what's to do with the account in it: mark its
+    /// rooms read, make a space, add another account.
     fileprivate func menuSections(for account: AccountSession) -> [[AccountMenuItem]] {
         let store = store
         let select = { store.selectedID = account.id }
-        let accountPage = account.signsInWithOAuth
-            ? AccountMenuItem("Manage Account…") { openAccountPage(of: account) }
-            : AccountMenuItem("Change Password…") { select(); account.sheet = .changePassword }
-        return [
-            [AccountMenuItem("Copy User ID") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(account.userID, forType: .string)
-             },
-             AccountMenuItem("Mark All as Read", isEnabled: account.hasUnreadRooms) { account.markAllRead() }],
-            [AccountMenuItem("Edit Profile…") { select(); account.sheet = .profile },
-             accountPage,
-             AccountMenuItem("Devices…") { select(); account.sheet = .devices }],
-            [AccountMenuItem("New Space…") { select(); account.sheet = .newSpace },
-             AccountMenuItem("Add Account…") { store.isAddingAccount = true }],
-            [AccountMenuItem("Sign Out…", isDestructive: true) { accountToSignOut = account }],
-        ]
-    }
-}
-
-/// One item of an account's menu.
-private struct AccountMenuItem: Identifiable {
-    let title: String
-    var isEnabled = true
-    var isDestructive = false
-    let action: () -> Void
-    var id: String { title }
-
-    init(_ title: String, isEnabled: Bool = true, isDestructive: Bool = false, action: @escaping () -> Void) {
-        self.title = title
-        self.isEnabled = isEnabled
-        self.isDestructive = isDestructive
-        self.action = action
-    }
-}
-
-/// An account's menu as a context menu: its user ID on top, then its groups of items.
-private struct AccountContextMenu: View {
-    let header: String
-    let sections: () -> [[AccountMenuItem]]
-
-    var body: some View {
-        Text(header)
-        ForEach(Array(sections().enumerated()), id: \.offset) { index, section in
-            if index > 0 { Divider() }
-            ForEach(section) { item in
-                Button(item.title, role: item.isDestructive ? .destructive : nil, action: item.action)
-                    .disabled(!item.isEnabled)
-            }
-        }
+        let actions = AccountMenu.Actions(
+            label: { accountToLabel = account },
+            editProfile: { select(); account.sheet = .profile },
+            changePassword: { select(); account.sheet = .changePassword },
+            devices: { select(); account.sheet = .devices },
+            verify: { select(); account.sheet = .verify },
+            recoveryKey: { select(); account.sheet = .recoveryKey },
+            signOut: { accountToSignOut = account })
+        return AccountMenu.sections(for: account, actions: actions, extras: [
+            AccountMenuItem("Mark All as Read", isEnabled: account.hasUnreadRooms) { account.markAllRead() },
+            AccountMenuItem("New Space…") { select(); account.sheet = .newSpace },
+            AccountMenuItem("Add Account…") { store.isAddingAccount = true },
+        ])
     }
 }
 
@@ -172,7 +145,9 @@ private struct MoreAccountsButton: View {
         guard let view = anchor.view else { return }
         let menu = NSMenu()
         for (_, account) in accounts {
-            let item = ClosureMenuItem(title: account.displayName ?? account.userID) { select(account) }
+            // With its label, where it has one: accounts often share their owner's name.
+            let name = account.displayName ?? account.userID
+            let item = ClosureMenuItem(title: account.label.map { "\(name) · \($0)" } ?? name) { select(account) }
             if account.badgeCount > 0 { item.badge = NSMenuItemBadge(count: account.badgeCount) }
             menu.addItem(item)
         }
@@ -296,7 +271,8 @@ private struct AccountButton: View {
     private var name: String { account.displayName ?? account.userID }
 
     private var helpText: String {
-        var lines = [index < 9 ? "\(name) (⌃\(index + 1))" : name, account.userID]
+        let labelled = account.label.map { "\(name) · \($0)" } ?? name
+        var lines = [index < 9 ? "\(labelled) (⌃\(index + 1))" : labelled, account.userID]
         if account.urgentCount > 0 {
             lines.append(account.urgentCount == 1
                 ? "1 direct message, mention or invitation"

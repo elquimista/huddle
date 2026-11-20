@@ -35,19 +35,23 @@ extension AccountSession {
     /// Reads the setting now, every 15 seconds after, and whenever Huddle comes to the front
     /// (from changing it in Element, say). It's read from the account's own copy of its data,
     /// which sync keeps current, so it costs nothing: the SDK can't say when one of Element's
-    /// settings changes.
+    /// settings changes. The account's label (AccountLabel.swift) is read along with it.
     func followTypingSetting() {
         typingSettingTask?.cancel()
         typingSettingTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.readTypingSetting()
+                await self?.readLabel()
                 try? await Task.sleep(for: .seconds(15))
             }
         }
         if typingSettingObserver == nil {
             typingSettingObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in await self?.readTypingSetting() }
+                Task { @MainActor in
+                    await self?.readTypingSetting()
+                    await self?.readLabel()
+                }
             }
         }
     }
