@@ -134,6 +134,10 @@ struct SettingsView: View {
     static let tabKey = "settingsTab"
 
     @AppStorage(Self.tabKey) private var tab = Tab.notifications
+    /// The height the tabs are given, which the window follows: the tab's own, reached in
+    /// steps when it changes (WindowHeightAnimation).
+    @State private var shownHeight: CGFloat?
+    @State private var resize = WindowHeightAnimation()
 
     var body: some View {
         TabView(selection: $tab) {
@@ -153,6 +157,50 @@ struct SettingsView: View {
                 .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
                 .tag(Tab.updates)
         }
+        .environment(\.settingsFormHeight) { height in
+            // The first height at once; a new tab's, or a tab growing, in steps.
+            guard let from = shownHeight else { shownHeight = height; return }
+            resize.run(from: from, to: height) { shownHeight = $0 }
+        }
+        .frame(height: shownHeight, alignment: .top)
+    }
+}
+
+extension EnvironmentValues {
+    /// Told a settings tab's height as it's laid out.
+    @Entry var settingsFormHeight: (CGFloat) -> Void = { _ in }
+}
+
+/// Moves the Settings window from one height to another as Mac preference windows do, eased
+/// in and out over a quarter of a second. SwiftUI sizes the window to its content at once, and
+/// a SwiftUI animation only moves what's drawn inside it: so the height is stepped, about once
+/// a screen refresh, each step a size the window takes.
+@MainActor
+final class WindowHeightAnimation {
+    private static let duration: TimeInterval = 0.25
+    private var task: Task<Void, Never>?
+    private var target: CGFloat?
+
+    func run(from start: CGFloat, to end: CGFloat, step: @escaping (CGFloat) -> Void) {
+        guard end != target else { return }
+        target = end
+        task?.cancel()
+        // With Reduce Motion, straight there.
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, abs(end - start) > 1 else {
+            step(end)
+            return
+        }
+        let began = Date()
+        task = Task { @MainActor in
+            while !Task.isCancelled {
+                let t = min(1, Date().timeIntervalSince(began) / Self.duration)
+                // Ease in and out: slow to start, quick through the middle, settling at the end.
+                let eased = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
+                step((start + (end - start) * eased).rounded())
+                if t >= 1 { break }
+                try? await Task.sleep(for: .milliseconds(8))
+            }
+        }
     }
 }
 
@@ -160,11 +208,14 @@ struct SettingsView: View {
 private struct SettingsForm<Content: View>: View {
     @ViewBuilder let content: Content
 
+    @Environment(\.settingsFormHeight) private var reportHeight
+
     var body: some View {
         Form { content }
             .formStyle(.grouped)
             .frame(width: 500)
             .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { reportHeight($0) }
     }
 }
 

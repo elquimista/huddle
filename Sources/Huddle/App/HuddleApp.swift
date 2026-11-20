@@ -201,7 +201,11 @@ struct RootView: View {
         }
         .background { CallPages() }
         .overlay {
-            if store.isGoingToRoom { GoToRoomPanel() }
+            // Fades in and out quickly, as Spotlight or Open Quickly do.
+            ZStack {
+                if store.isGoingToRoom { GoToRoomPanel().transition(.opacity) }
+            }
+            .animation(.easeOut(duration: store.isGoingToRoom ? 0.12 : 0.1), value: store.isGoingToRoom)
         }
         // The full-size image viewer covers the whole window, title bar included, which an
         // overlay here can't reach. `ImageViewerPresenter` puts it above everything, where it

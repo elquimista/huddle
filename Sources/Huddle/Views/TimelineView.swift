@@ -111,6 +111,12 @@ struct TimelineView: View {
     @State private var historyEdgeInView = false
     private static let bottomID = "timeline-bottom"
     @Environment(\.timelineWidth) private var timelineWidth
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// How the ways back to the newest messages come and go.
+    private var jumpTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.7, anchor: .bottomTrailing).combined(with: .opacity)
+    }
 
     /// Whether the conversation is in front of the user: its window the one in front, and no
     /// picture open over it. Messages arriving otherwise (the app in the background, Settings
@@ -508,6 +514,8 @@ struct TimelineView: View {
                 if timeline.focusedEvent != nil, isAtBottom, timeline.hasMoreNewer { await timeline.loadNewer() }
             }
             .overlay(alignment: .bottomTrailing) {
+                // Each fades in growing a little (only fading, with Reduce Motion), and out again.
+                ZStack(alignment: .bottomTrailing) {
                 if timeline.focusedEvent != nil, let room {
                     // Looking at an older stretch of the room: the way back to now.
                     Button(action: room.returnToLive) {
@@ -522,6 +530,7 @@ struct TimelineView: View {
                     .buttonStyle(.plain)
                     .padding(12)
                     .help("Back to the newest messages")
+                    .transition(jumpTransition)
                 } else if !isAtBottom, !followsNewest, !timeline.rows.isEmpty {
                     Button {
                         scrollToBottom(proxy)
@@ -535,7 +544,12 @@ struct TimelineView: View {
                     .buttonStyle(.plain)
                     .padding(12)
                     .help("Jump to latest")
+                    .accessibilityLabel("Jump to Latest")
+                    .transition(jumpTransition)
                 }
+                }
+                .animation(.snappy(duration: 0.2), value: timeline.focusedEvent != nil)
+                .animation(.snappy(duration: 0.2), value: !isAtBottom && !followsNewest)
             }
             .overlay {
                 if timeline.isLoading { ProgressView() }

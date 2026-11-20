@@ -210,7 +210,10 @@ private struct RoomListSection: View {
     private var isExpanded: Binding<Bool> {
         Binding(get: { !account.searchText.isEmpty || !account.collapsedSections.contains(section.id) },
                 set: { expanded in
-                    if expanded { account.collapsedSections.remove(section.id) } else { account.collapsedSections.insert(section.id) }
+                    // Its rooms slide in and out, as a Finder sidebar's do.
+                    withAnimation(.snappy(duration: 0.25)) {
+                        if expanded { account.collapsedSections.remove(section.id) } else { account.collapsedSections.insert(section.id) }
+                    }
                 })
     }
 
