@@ -163,6 +163,7 @@ final class AudioPlayback {
 
     private func start(id: String, source: MediaSource, media: MediaLoader, owner: AnyObject, at fraction: Double) {
         stop()
+        VideoPlayback.shared.pause()
         let session = session
         currentID = id
         phase = .loading

@@ -3,8 +3,8 @@ import AVFoundation
 import MatrixRustSDK
 import UniformTypeIdentifiers
 
-/// A file in a message, shown as a tile to open or save: a document, an archive, a video, or
-/// anything else that isn't drawn in place.
+/// A file in a message: a video, played in place where macOS can play it (VideoMessageView), or
+/// a document, an archive or anything else, shown as a tile to open or save.
 struct FileAttachment: Equatable {
     /// Where it is on the server; nil for one still waiting to be sent from here.
     let media: MediaRef?
@@ -12,7 +12,10 @@ struct FileAttachment: Equatable {
     let caption: String?
     let mimetype: String?
     let size: UInt64?
-    let isVideo: Bool
+    /// What is known of a video before it is downloaded; nil for any other file.
+    let video: VideoDetails?
+
+    var isVideo: Bool { video != nil }
 
     init(_ content: FileMessageContent) {
         media = MediaRef(source: content.source)
@@ -20,7 +23,7 @@ struct FileAttachment: Equatable {
         caption = content.caption
         mimetype = content.info?.mimetype
         size = content.info?.size
-        isVideo = false
+        video = nil
     }
 
     init(_ content: VideoMessageContent) {
@@ -29,7 +32,14 @@ struct FileAttachment: Equatable {
         caption = content.caption
         mimetype = content.info?.mimetype
         size = content.info?.size
-        isVideo = true
+        let info = content.info
+        video = VideoDetails(
+            thumbnail: info?.thumbnailSource.map(MediaRef.init(source:)),
+            thumbnailPixelSize: VideoDetails.size(info?.thumbnailInfo?.width, info?.thumbnailInfo?.height),
+            pixelSize: VideoDetails.size(info?.width, info?.height),
+            duration: info?.duration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil },
+            blurhash: info?.blurhash,
+            localURL: nil)
     }
 
     /// One of ours, waiting in the queue to be sent.
@@ -39,7 +49,12 @@ struct FileAttachment: Equatable {
         self.caption = caption
         mimetype = staged.mimetype
         size = staged.size
-        isVideo = staged.kind.isVideo
+        if case .video(let duration, let pixelSize, let poster) = staged.kind {
+            video = VideoDetails(thumbnail: nil, thumbnailPixelSize: poster?.pixelSize, pixelSize: pixelSize,
+                                 duration: duration, blurhash: poster?.blurhash, localURL: staged.url)
+        } else {
+            video = nil
+        }
     }
 
     /// What kind of file it is: by its name, or failing that, by its MIME type.
@@ -53,6 +68,34 @@ struct FileAttachment: Equatable {
         let size = size.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
         return [size, type?.localizedDescription].compactMap { $0 }.joined(separator: " · ")
     }
+
+    /// Whether this Mac can play it in place: a video in a format macOS knows (MP4 and QuickTime
+    /// films, say, but not WebM or Matroska, which show as a file to open in another app).
+    var isPlayableVideo: Bool {
+        guard isVideo else { return false }
+        guard let mimetype = mimetype?.lowercased(), !mimetype.isEmpty, mimetype != "application/octet-stream"
+        else { return type.map { Self.playableTypes.contains($0.identifier) } ?? true }
+        return Self.playableMIMETypes.contains(mimetype)
+    }
+
+    private static let playableMIMETypes = Set(AVURLAsset.audiovisualMIMETypes().map { $0.lowercased() })
+    private static let playableTypes = Set(AVURLAsset.audiovisualTypes().map(\.rawValue))
+
+    /// "Open in QuickTime Player": Open, naming the app macOS opens files of its kind with, as
+    /// Safari's menus do. Just "Open" when there's no telling.
+    @MainActor var openTitle: String {
+        guard let type else { return "Open" }
+        if let known = Self.openingApps[type.identifier] { return known.map { "Open in \($0)" } ?? "Open" }
+        let name = NSWorkspace.shared.urlForApplication(toOpen: type).map { app in
+            let shown = FileManager.default.displayName(atPath: app.path)
+            return shown.hasSuffix(".app") ? String(shown.dropLast(4)) : shown
+        }
+        Self.openingApps[type.identifier] = .some(name)
+        return name.map { "Open in \($0)" } ?? "Open"
+    }
+
+    /// The app that opens each kind of file, by name, once looked up.
+    @MainActor private static var openingApps: [String: String?] = [:]
 
     /// The icon Finder shows for files of its kind.
     var icon: NSImage { NSWorkspace.shared.icon(for: type ?? (isVideo ? .movie : .data)) }
@@ -72,8 +115,9 @@ struct FileAttachment: Equatable {
 struct StagedFile: Identifiable, Sendable {
     enum Kind: Sendable {
         case file
-        /// Sent as a video or audio message, so other apps can play it in place.
-        case video(duration: TimeInterval?, size: CGSize?)
+        /// Sent as a video or audio message, so other apps can play it in place. A video goes
+        /// with a still from it, which apps show until it's played.
+        case video(duration: TimeInterval?, size: CGSize?, poster: VideoPoster?)
         case audio(duration: TimeInterval?)
 
         var isVideo: Bool { if case .video = self { true } else { false } }
@@ -137,7 +181,9 @@ enum FilePreparer {
                     dimensions = CGSize(width: abs(turned.width), height: abs(turned.height))
                 }
                 // A movie the system can't read (or one with no picture) still goes, as a file.
-                if track != nil { kind = .video(duration: seconds, size: dimensions) }
+                if track != nil {
+                    kind = .video(duration: seconds, size: dimensions, poster: await VideoPoster.make(from: asset))
+                }
             } else if seconds != nil {
                 kind = .audio(duration: seconds)
             }
@@ -151,7 +197,23 @@ extension MediaLoader {
     /// Downloads a file to a folder of Huddle's own, only this user can read, marked as
     /// downloaded (so macOS checks it before anything opens it), and opens it in its usual app.
     func open(_ file: FileAttachment) async throws {
-        guard let media = file.media else { return }
+        let url = try await downloadedCopy(of: file)
+        _ = await MainActor.run { NSWorkspace.shared.open(url) }
+    }
+
+    /// Puts a file on the pasteboard as Finder copies one, to paste in Finder, Mail or another
+    /// conversation: downloaded first, to where Open puts it.
+    func copy(_ file: FileAttachment) async throws {
+        let url = try await downloadedCopy(of: file)
+        await MainActor.run {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.writeObjects([url as NSURL])
+        }
+    }
+
+    /// The file downloaded, decrypted, to a folder of its own among those cleared after a day.
+    private func downloadedCopy(of file: FileAttachment) async throws -> URL {
+        guard let media = file.media else { throw AudioLoadError.download }
         let manager = FileManager.default
         let folder = manager.temporaryDirectory
             .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".files", isDirectory: true)
@@ -159,7 +221,7 @@ extension MediaLoader {
         try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let url = folder.appendingPathComponent(file.safeFilename)
         try await download(media, mimetype: file.mimetype, to: url)
-        _ = await MainActor.run { NSWorkspace.shared.open(url) }
+        return url
     }
 
     /// Downloads a file, decrypted, to `destination`, marked as downloaded.

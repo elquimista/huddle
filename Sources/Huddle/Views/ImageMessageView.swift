@@ -83,8 +83,8 @@ struct ImageMessageView: View {
 
             if hasFailed {
                 failureNote
-            } else if sendState != nil {
-                uploadOverlay
+            } else if let sendState {
+                UploadOverlay(sendState: sendState, uploadProgress: uploadProgress, cancel: cancelUpload)
             } else if image.isAnimated, animation == nil, still != nil {
                 // Too large to play unasked: say what it is; opening it plays it.
                 badge { Text("GIF").font(.caption2.weight(.bold)).foregroundStyle(.white) }
@@ -181,8 +181,28 @@ struct ImageMessageView: View {
         .allowsHitTesting(false)
     }
 
-    /// While sending: the picture dimmed, a ring filling as it uploads, and a way to call it off.
-    private var uploadOverlay: some View {
+    private func badge<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.black.opacity(0.55), in: Capsule())
+    }
+
+    private var accessibilityLabel: String {
+        let what = image.isSticker ? "Sticker" : (image.isAnimated ? "Animated image" : "Image")
+        let name = image.caption ?? image.filename
+        return name.isEmpty ? what : "\(what): \(name)"
+    }
+}
+
+/// While a picture or video is sent: it dimmed, a ring filling as it uploads, and a way to call
+/// it off.
+struct UploadOverlay: View {
+    let sendState: MessageRow.SendState
+    let uploadProgress: Double?
+    let cancel: (() -> Void)?
+
+    var body: some View {
         ZStack {
             Color.black.opacity(0.35)
             if sendState == .failed {
@@ -192,7 +212,7 @@ struct ImageMessageView: View {
             } else {
                 // Waiting its turn looks the same as uploading that hasn't got anywhere yet.
                 Button {
-                    cancelUpload?()
+                    cancel?()
                 } label: {
                     ZStack {
                         Circle().fill(.black.opacity(0.45))
@@ -216,19 +236,6 @@ struct ImageMessageView: View {
                 .accessibilityValue(uploadProgress.map { "\(Int($0 * 100)) percent" } ?? "Starting")
             }
         }
-    }
-
-    private func badge<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        content()
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(.black.opacity(0.55), in: Capsule())
-    }
-
-    private var accessibilityLabel: String {
-        let what = image.isSticker ? "Sticker" : (image.isAnimated ? "Animated image" : "Image")
-        let name = image.caption ?? image.filename
-        return name.isEmpty ? what : "\(what): \(name)"
     }
 }
 
@@ -257,7 +264,7 @@ struct AnimatedImage: NSViewRepresentable {
 }
 
 /// Decoded blurs, kept so each is worked out once however often its row is redrawn.
-private enum BlurCache {
+enum BlurCache {
     private static let cache = NSCache<NSString, CGImage>()
 
     static func image(for hash: String) -> CGImage? {

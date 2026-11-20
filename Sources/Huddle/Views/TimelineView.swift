@@ -643,6 +643,7 @@ struct TimelineView: View {
             pasteInterceptor.stop()
             typeToCompose.stop()
             AudioPlayback.shared.stop(owner: timeline)
+            VideoPlayback.shared.stop(owner: timeline)
             timeline.setTyping(false)
             let timeline = timeline
             Task { await timeline.leave() }
@@ -1809,8 +1810,13 @@ private struct MessageView: View {
         case .audio(let audio):
             share.append(.init("Save Audio As…") { AttachmentSaver.save(audio, media: media) })
         case .file(let file) where message.sendState == nil && file.media != nil:
-            share.append(.init("Open") { Task { try? await media.open(file) } })
-            share.append(.init("Save File As…") { AttachmentSaver.save(file, media: media) })
+            share.append(.init(file.openTitle) { Task { try? await media.open(file) } })
+            if file.isVideo {
+                share.append(.init("Copy Video") { Task { try? await media.copy(file) } })
+            }
+            share.append(.init(file.isVideo ? "Save Video As…" : "Save File As…") {
+                AttachmentSaver.save(file, media: media)
+            })
         default:
             break
         }
@@ -2111,11 +2117,7 @@ private struct MessageView: View {
         case .file(let file):
             VStack(alignment: side, spacing: 3) {
                 replyQuote.padding(bubbleSide, Bubble.tailWidth)
-                FileMessageView(file: file, media: media, sendState: message.sendState,
-                                uploadProgress: message.uploadProgress,
-                                cancelUpload: message.sendState == nil ? nil : {
-                                    Task { await timeline.discard(message.itemID) }
-                                })
+                attachedFile(file)
                     .padding(bubbleSide, Bubble.tailWidth)
                     .help(message.date.formatted(date: .abbreviated, time: .shortened))
                 if let caption = file.caption {
@@ -2278,11 +2280,7 @@ private struct MessageView: View {
             }
         case .file(let file):
             VStack(alignment: .leading, spacing: 4) {
-                FileMessageView(file: file, media: media, sendState: message.sendState,
-                                uploadProgress: message.uploadProgress,
-                                cancelUpload: message.sendState == nil ? nil : {
-                                    Task { await timeline.discard(message.itemID) }
-                                })
+                attachedFile(file)
                 if let caption = file.caption {
                     (Text(styled(caption)) + editedLabel).textSelection(.enabled)
                 }
@@ -3306,5 +3304,22 @@ private struct MarkedUnreadBar: View {
         .overlay(alignment: .bottom) { Rectangle().fill(.separator).frame(height: 1) }
         .accessibilityElement(children: .combine)
         .accessibilityAction(named: "Mark as Read", markRead)
+    }
+}
+
+extension MessageView {
+    /// A file sent in a message: a video macOS can play, played in place, or a tile to open.
+    @ViewBuilder func attachedFile(_ file: FileAttachment) -> some View {
+        let cancel: (() -> Void)? = message.sendState == nil ? nil : {
+            Task { await timeline.discard(message.itemID) }
+        }
+        if let video = file.video, file.isPlayableVideo, file.media != nil || video.localURL != nil {
+            VideoMessageView(id: message.eventID ?? file.media?.source.url() ?? file.filename, file: file,
+                             video: video, media: media, owner: timeline, sendState: message.sendState,
+                             uploadProgress: message.uploadProgress, cancelUpload: cancel)
+        } else {
+            FileMessageView(file: file, media: media, sendState: message.sendState,
+                            uploadProgress: message.uploadProgress, cancelUpload: cancel)
+        }
     }
 }

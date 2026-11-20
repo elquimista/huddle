@@ -11,6 +11,8 @@ final class MediaLoader: @unchecked Sendable {
     private let playableFiles = NSCache<NSString, NSData>()
     /// Images as sent, for the full-size viewer and for animations.
     private let imageFiles = NSCache<NSString, NSData>()
+    /// Videos downloaded for playing (VideoPlayback.swift).
+    let videoFiles = VideoFiles()
     private let knownUploadLimit = Locked<UInt64?>(nil)
 
     init(client: Client) {
@@ -143,6 +145,14 @@ final class MediaLoader: @unchecked Sendable {
         let playable = try AudioPreparer.playableData(from: try await audioFile(source: source))
         playableFiles.setObject(playable as NSData, forKey: key, cost: playable.count)
         return playable
+    }
+
+    func cachedImage(forKey key: String) -> NSImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    func storeImage(_ image: NSImage, forKey key: String, cost: Int) {
+        cache.setObject(image, forKey: key as NSString, cost: cost)
     }
 
     func cached(url: String, size: Int) -> NSImage? {

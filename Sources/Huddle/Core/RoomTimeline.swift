@@ -1035,12 +1035,16 @@ final class RoomTimeline {
             case .file:
                 return .file(fileInfo: FileInfo(mimetype: file.mimetype, size: file.size,
                                                 thumbnailInfo: nil, thumbnailSource: nil))
-            case .video(let duration, let size):
+            case .video(let duration, let size, let poster):
+                let thumbnail = poster.map {
+                    ThumbnailInfo(height: UInt64($0.pixelSize.height), width: UInt64($0.pixelSize.width),
+                                  mimetype: "image/jpeg", size: UInt64($0.data.count))
+                }
                 return .video(videoInfo: VideoInfo(duration: duration, height: size.map { UInt64($0.height) },
                                                    width: size.map { UInt64($0.width) }, mimetype: file.mimetype,
-                                                   size: file.size, thumbnailInfo: nil, thumbnailSource: nil,
-                                                   blurhash: nil),
-                              thumbnailSource: nil)
+                                                   size: file.size, thumbnailInfo: thumbnail, thumbnailSource: nil,
+                                                   blurhash: poster?.blurhash),
+                              thumbnailSource: poster.map { .data(bytes: $0.data, filename: "thumbnail.jpg") })
             case .audio(let duration):
                 return .audio(audioInfo: AudioInfo(duration: duration, size: file.size, mimetype: file.mimetype))
             }

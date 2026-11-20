@@ -85,12 +85,20 @@ struct ImageAttachment: Equatable {
     /// a sliver.
     /// - Parameter maxWidth: the width there is room for, if less than the usual box.
     func displaySize(for pixelSize: CGSize?, maxWidth: CGFloat = .infinity) -> CGSize {
+        Self.fitted(pixelSize, maxWidth: maxWidth, isSticker: isSticker)
+    }
+
+    /// How big to draw a picture (or a video) of this many pixels, as `displaySize(for:)` says.
+    /// One of unknown size gets a frame of `unknownShape`, width to height.
+    static func fitted(_ pixelSize: CGSize?, maxWidth: CGFloat = .infinity, isSticker: Bool = false,
+                       unknownShape: CGFloat = 4 / 3, maxHeight: CGFloat = maximumSize.height) -> CGSize {
         let roomy = max(min(maxWidth, Self.maximumSize.width), 120)
         guard let pixelSize, pixelSize.width > 0, pixelSize.height > 0 else {
-            return CGSize(width: min(280, roomy), height: (min(280, roomy) * 0.75).rounded())
+            let width = min(unknownShape > 1.5 ? 320 : 280, roomy)
+            return CGSize(width: width, height: (width / unknownShape).rounded())
         }
         let limit = isSticker ? CGSize(width: Self.stickerSide, height: Self.stickerSide)
-                              : CGSize(width: roomy, height: Self.maximumSize.height)
+                              : CGSize(width: roomy, height: maxHeight)
         let scale = min(1, limit.width / pixelSize.width, limit.height / pixelSize.height)
         let fitted = CGSize(width: pixelSize.width * scale, height: pixelSize.height * scale)
         // Small images keep their size; only large ones squeezed thin by the box are widened.
