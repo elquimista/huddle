@@ -307,18 +307,19 @@ struct AddRoomsSheet: View {
     @State private var isBusy = false
     @State private var failure: String?
 
-    /// The account's rooms and spaces not yet in this one, by name. A space this one is in
-    /// can't go inside it.
-    private var candidates: (rooms: [RoomSummary], spaces: [RoomSummary]) {
+    /// The account's chats, rooms and spaces not yet in this one, by name, in the room list's
+    /// order: people, then rooms. A space this one is in can't go inside it.
+    private var candidates: (people: [RoomSummary], rooms: [RoomSummary], spaces: [RoomSummary]) {
         let inSpace = account.roomIDs(inSpace: spaceID)
         let needle = query.trimmingCharacters(in: .whitespaces)
         let all = account.allRooms
             .filter { !$0.isInvite && $0.id != spaceID && !inSpace.contains($0.id) }
             .filter { needle.isEmpty || $0.name.localizedCaseInsensitiveContains(needle) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        let rooms = all.filter { !$0.isSpace && $0.directUserID == nil }
+        let people = all.filter { !$0.isSpace && $0.isDirect }
+        let rooms = all.filter { !$0.isSpace && !$0.isDirect }
         let spaces = all.filter { $0.isSpace && !account.roomIDs(inSpace: $0.id).contains(spaceID) }
-        return (rooms, spaces)
+        return (people, rooms, spaces)
     }
 
     var body: some View {
@@ -326,13 +327,13 @@ struct AddRoomsSheet: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 SheetTitle(title: "Add Rooms to \(account.spaceName(spaceID))",
-                           detail: "They stay where they are for everyone already in them, and members of the space can find them here too.")
-                SearchField(text: $query, prompt: "Find a room")
+                           detail: "They stay where they are for everyone already in them, and members of the space can find them here too. A direct chat stays private to the people in it.")
+                SearchField(text: $query, prompt: "Find a room or person")
             }
             .padding(16)
             Divider()
             Group {
-                if candidates.rooms.isEmpty && candidates.spaces.isEmpty {
+                if candidates.people.isEmpty && candidates.rooms.isEmpty && candidates.spaces.isEmpty {
                     if query.isEmpty {
                         ContentUnavailableView("Nothing to Add", systemImage: "square.stack",
                                                description: Text("Every room you’re in is already in this space."))
@@ -341,6 +342,11 @@ struct AddRoomsSheet: View {
                     }
                 } else {
                     List {
+                        if !candidates.people.isEmpty {
+                            Section("People") {
+                                ForEach(candidates.people) { row($0) }
+                            }
+                        }
                         if !candidates.rooms.isEmpty {
                             Section("Rooms") {
                                 ForEach(candidates.rooms) { row($0) }
@@ -390,7 +396,7 @@ struct AddRoomsSheet: View {
         failure = nil
         // In list order, so they appear in the space as they were chosen from.
         let all = candidates
-        let ordered = (all.rooms + all.spaces).map(\.id).filter(chosen.contains)
+        let ordered = (all.people + all.rooms + all.spaces).map(\.id).filter(chosen.contains)
         Task {
             defer { isBusy = false }
             do {

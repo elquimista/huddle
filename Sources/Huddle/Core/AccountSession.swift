@@ -1057,8 +1057,33 @@ final class AccountSession: Identifiable {
     func addRooms(_ roomIDs: [String], toSpace spaceID: String) async throws {
         guard let spaceService else { return }
         for roomID in roomIDs {
-            try await spaceService.addChildToSpace(childId: roomID, spaceId: spaceID)
+            if let chat = allRooms.first(where: { $0.id == roomID }), chat.isDirect {
+                try await addDirectChat(chat, toSpace: spaceID)
+            } else {
+                try await spaceService.addChildToSpace(childId: roomID, spaceId: spaceID)
+            }
         }
+    }
+
+    /// Files a direct chat in a space: the space says it holds the chat, and the chat itself is
+    /// left alone. The SDK would also mark the chat as in the space, a change the others in it
+    /// would get, naming a space of yours they may not be in.
+    private func addDirectChat(_ chat: RoomSummary, toSpace spaceID: String) async throws {
+        guard let space = room(id: spaceID) else { throw SpaceNotFound() }
+        // Servers that can lead someone to the chat: this account's, and the other person's.
+        var servers = [Self.server(of: userID)]
+        if let other = chat.directUserID.map(Self.server(of:)), !servers.contains(other) { servers.append(other) }
+        let content = try JSONSerialization.data(withJSONObject: ["via": servers])
+        _ = try await space.sendStateEventRaw(eventType: "m.space.child", stateKey: chat.id,
+                                              content: String(decoding: content, as: UTF8.self))
+    }
+
+    private static func server(of userID: String) -> String {
+        userID.split(separator: ":", maxSplits: 1).last.map(String.init) ?? userID
+    }
+
+    struct SpaceNotFound: LocalizedError {
+        var errorDescription: String? { "The space isn’t available on this Mac yet. Try again in a moment." }
     }
 
     func removeRoom(_ roomID: String, fromSpace spaceID: String) async throws {

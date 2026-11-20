@@ -661,9 +661,14 @@ private struct SpaceLevelView: View {
             }
         } else {
             LazyVStack(alignment: .leading, spacing: 0) {
+                // Anything here can be taken out by someone who can change the space: a space
+                // within it too, which goes back to the rail (the only place to do that, as the
+                // room list doesn't show the spaces in a space).
+                let canRemove = invite == nil && account.editableSpaceIDs.contains(spaceID)
                 ForEach(rooms, id: \.roomId) { room in
                     SpaceRoomRow(account: account, room: room, isJoining: joining.contains(room.roomId),
-                                 isPreview: invite != nil, open: { open(room) }, join: { join(room) })
+                                 isPreview: invite != nil, open: { open(room) }, join: { join(room) },
+                                 removal: canRemove ? ("Remove from \(account.spaceName(spaceID))", { remove(room) }) : nil)
                         .onAppear {
                             if room.roomId == rooms.last?.roomId { Task { await directory.loadMore() } }
                         }
@@ -706,6 +711,15 @@ private struct SpaceLevelView: View {
         }
     }
 
+    /// Takes a room or space out of this one, for everyone in it. It stays as it is otherwise:
+    /// a space taken out is in the rail again, if the account is in it.
+    private func remove(_ room: SpaceRoom) {
+        FailureAlert.run("Couldn’t Remove “\(room.displayName)”") {
+            try await account.removeRoom(room.roomId, fromSpace: spaceID)
+            await directory?.reload()
+        }
+    }
+
     private func act(_ work: @escaping () async throws -> Void) {
         failure = nil
         Task {
@@ -723,6 +737,8 @@ private struct SpaceRoomRow: View {
     let isPreview: Bool
     let open: () -> Void
     let join: () -> Void
+    /// Taking it out of the space shown, where that's allowed: the menu item's title, and doing it.
+    var removal: (title: String, perform: () -> Void)?
     @State private var isHovering = false
 
     private var isSpace: Bool { room.roomType == .space }
@@ -770,6 +786,9 @@ private struct SpaceRoomRow: View {
         .contentShape(Rectangle())
         .onTapGesture { if opens { open() } }
         .onHoverInFrontWindow { isHovering = $0 }
+        .contextMenu {
+            if let removal { Button(removal.title, action: removal.perform) }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isPreview ? [] : .isButton)
         .accessibilityAction(.default) {
@@ -779,6 +798,7 @@ private struct SpaceRoomRow: View {
             if !isPreview, !isJoined, !isJoining {
                 Button(room.state == .invited ? "Accept" : "Join", action: join)
             }
+            if let removal { Button(removal.title, action: removal.perform) }
         }
     }
 
