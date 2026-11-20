@@ -188,8 +188,7 @@ struct RoomView: View {
             account.roomWasLeft(roomID)
         }
         .navigationTitle(title)
-        // In a direct chat, whether the other person is around; and whether the room isn't
-        // encrypted, which the lock in the composer also shows.
+        // In a direct chat, whether the other person is around; in a room, its topic.
         .navigationSubtitle(subtitle)
     }
 
@@ -295,9 +294,17 @@ struct RoomView: View {
             onReset: { preferredPanelWidth = 0 })
     }
 
+    /// Whether the room is encrypted isn't said here: the lock at the start of the message
+    /// field says so where it matters, as what's typed is sent, and Room Info says more.
     private var subtitle: String {
-        let notEncrypted = if case .notEncrypted = account.timeline(for: roomID)?.encryption { "Not encrypted" } else { "" }
-        return [presenceLine, notEncrypted].filter { !$0.isEmpty }.joined(separator: " · ")
+        [presenceLine, topicLine].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// A room's topic, as Slack and Element show it under a room's name: what it's for, where
+    /// it can be seen. A direct chat has the person's whereabouts there instead.
+    private var topicLine: String {
+        guard summary?.directUserID == nil else { return "" }
+        return summary?.topic ?? ""
     }
 
     private var presenceLine: String {

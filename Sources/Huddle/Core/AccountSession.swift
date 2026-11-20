@@ -3,6 +3,16 @@ import MatrixRustSDK
 import Observation
 
 struct RoomSummary: Identifiable, Equatable {
+    /// A topic as a line: its first one with anything in it, its spaces evened out. Nil for one
+    /// with nothing in it.
+    static func oneLine(_ text: String) -> String? {
+        let line = text.split(whereSeparator: \.isNewline)
+            .lazy
+            .map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+            .first { !$0.isEmpty }
+        return line.map { String($0.prefix(240)) }
+    }
+
     let id: String
     var name: String
     var avatarURL: String?
@@ -39,6 +49,8 @@ struct RoomSummary: Identifiable, Equatable {
     /// Which default it follows otherwise: the push rules tell these apart.
     var isEncrypted = false
     var isOneToOne = false
+    /// What the room is about, on one line, as its window's subtitle shows it.
+    var topic: String?
 
     var isMuted: Bool { notificationMode == .mute }
     /// Shown as unread: anything new, except that a muted room is only when marked unread.
@@ -1605,6 +1617,7 @@ extension RoomSummary {
             summary.isFavourite = info.isFavourite
             summary.isLowPriority = info.isLowPriority
             summary.isEncrypted = info.encryptionState == .encrypted
+            summary.topic = info.topic.flatMap(RoomSummary.oneLine)
             summary.isOneToOne = info.activeMembersCount == 2
             summary.hasCall = info.hasRoomCall
             summary.callParticipantCount = info.activeRoomCallParticipants.count

@@ -1526,7 +1526,11 @@ extension TimelineItemContent {
         case .state(_, let content):
             switch content {
             case .roomName(let name): return "\(who) renamed the room to \(name ?? "nothing")"
-            case .roomTopic: return "\(who) changed the topic"
+            case .roomTopic(let topic):
+                // What it says now, as far as a line goes.
+                guard let line = topic.flatMap(RoomSummary.oneLine) else { return "\(who) removed the topic" }
+                let shown = line.count > 80 ? line.prefix(79).trimmingCharacters(in: .whitespaces) + "…" : line
+                return "\(who) changed the topic to “\(shown)”"
             case .roomAvatar: return "\(who) changed the room picture"
             case .roomCreate: return "\(who) created the room"
             case .roomEncryption: return "Encryption enabled"
