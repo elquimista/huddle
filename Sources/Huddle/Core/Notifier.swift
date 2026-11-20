@@ -39,11 +39,20 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app") ? .current() : nil
     }
 
+    /// Takes answers to alerts from the start. The answer that launched Huddle (a click, or a
+    /// reply typed while it was closed) goes only to a delegate set before launching ends.
+    func attach() {
+        guard let center else { return }
+        center.delegate = self
+        center.setNotificationCategories(Self.categories)
+    }
+
     /// Asks for permission the first time an account starts syncing.
     func activate() {
         guard !isActivated, let center else { return }
         isActivated = true
         center.delegate = self
+        center.setNotificationCategories(Self.categories)
         // Alerts left over from before they were turned off.
         if !NotificationSettings.isEnabled { center.removeAllDeliveredNotifications() }
         // `.badge` matters even though the Dock badge is set directly: once an app uses
@@ -141,13 +150,24 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
         content.body = body
         content.threadIdentifier = Self.group(accountID: account.id, roomID: roomID)
-        content.userInfo = ["account": account.id, "room": roomID, "thread": threadRoot ?? ""]
+        content.userInfo = ["account": account.id, "room": roomID, "thread": threadRoot ?? "",
+                            "roomName": item.roomInfo.displayName]
         if item.isNoisy == true, NotificationSettings.playsSound { content.sound = .default }
+        // A message can be answered from its alert; an invitation is answered in the app.
+        if case .timeline = item.event { content.categoryIdentifier = Self.messageCategory }
 
         // Logged even when alerts are off, so the Dev build can be tested without showing any.
         if AppEnvironment.isDev {
-            print("DEV_NOTIFY \(content.title) | \(content.subtitle) | \(content.body) | sound=\(item.isNoisy == true) shown=\(NotificationSettings.isEnabled)")
+            print("DEV_NOTIFY \(content.title) | \(content.subtitle) | \(content.body) | sound=\(item.isNoisy == true) shown=\(NotificationSettings.isEnabled) category=\(content.categoryIdentifier)")
             fflush(stdout)
+            // Dev testing: answers the alert as if typed into its Reply field. Only on the account
+            // showing, so two test accounts never answer each other back and forth.
+            if let text = DevHooks.notificationReply, content.categoryIdentifier == Self.messageCategory,
+               store?.selected?.id == account.id {
+                let thread = threadRoot
+                let roomName = item.roomInfo.displayName
+                Task { await self.reply(text, accountID: account.id, roomID: roomID, thread: thread, roomName: roomName) }
+            }
         }
         guard NotificationSettings.isEnabled else { return }
         center?.add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
@@ -275,10 +295,21 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let roomID = info["room"] as? String
         let thread = info["thread"] as? String
         let verify = info["verify"] as? Bool ?? false
+        let roomName = info["roomName"] as? String ?? ""
+        let replyText = response.actionIdentifier == Self.replyAction
+            ? (response as? UNTextInputNotificationResponse)?.userText : nil
+        let identifier = response.notification.request.identifier
         Task { @MainActor in
-            if let accountID, verify {
+            if let replyText, let accountID, let roomID {
+                // Answered: the alert has done its job.
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+                await self.reply(replyText, accountID: accountID, roomID: roomID, thread: thread, roomName: roomName)
+            } else if let accountID, verify {
+                await self.waitForAccount(accountID)
                 self.openVerification(accountID: accountID)
             } else if let accountID, let roomID {
+                // Clicked while Huddle was closed: it opens the room once the account is back.
+                await self.waitForAccount(accountID)
                 self.open(accountID: accountID, roomID: roomID, thread: thread)
             }
             completionHandler()

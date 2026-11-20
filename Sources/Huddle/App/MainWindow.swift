@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // One window, without tabs: a second, from a tab bar's "+", would show the same account.
         NSWindow.allowsAutomaticWindowTabbing = false
+        Notifier.shared.attach()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

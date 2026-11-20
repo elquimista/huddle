@@ -137,6 +137,10 @@ enum DevHooks {
         && ProcessInfo.processInfo.environment["HUDDLE_DEV_ASSUME_ACTIVE"] != nil
     static let deniesMicrophone = AppEnvironment.isDev
         && ProcessInfo.processInfo.environment["HUDDLE_DEV_NO_MIC"] != nil
+    /// Answers each message's alert as if this was typed into its Reply field
+    /// (HUDDLE_DEV_NOTIFY_REPLY): the system's own alert can't be driven from a test.
+    static let notificationReply: String? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_NOTIFY_REPLY"] : nil
     /// A sound file that voice messages record instead of the microphone (HUDDLE_DEV_FAKE_MIC),
     /// so tests never listen to the room.
     static let fakeMicrophone: URL? = AppEnvironment.isDev
