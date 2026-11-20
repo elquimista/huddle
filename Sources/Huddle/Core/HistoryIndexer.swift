@@ -1,5 +1,6 @@
 import Foundation
 import MatrixRustSDK
+import Perception
 
 /// Makes the whole history of encrypted rooms searchable. The server can't search those, and
 /// the SDK's own background pass stops at about three months, so this goes through each
@@ -16,7 +17,7 @@ import MatrixRustSDK
 /// a room in view in the list has its reactions probe stopped while it's gone through. The
 /// timeline used here builds no items: it only drives the paging. It goes on only while Huddle
 /// isn't in use (`IndexingSchedule`).
-@MainActor @Observable
+@MainActor @Perceptible
 final class HistoryIndexer {
     /// Settings ▸ Privacy can turn it off; on unless it has been.
     static let defaultsKey = "indexFullHistory"
@@ -29,8 +30,8 @@ final class HistoryIndexer {
     private(set) var roomsDone = 0
     private(set) var roomsTotal = 0
 
-    @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private weak var account: AccountSession?
+    @PerceptionIgnored private var task: Task<Void, Never>?
+    @PerceptionIgnored private weak var account: AccountSession?
 
     /// Rooms are gone through this many messages at a time, with this long between pages.
     private static let pageSize: UInt16 = 100

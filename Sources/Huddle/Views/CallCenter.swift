@@ -1,12 +1,12 @@
 import AppKit
 import MatrixRustSDK
-import Observation
 import SwiftUI
 import WebKit
+import Perception
 
 /// The calls going on, shown at the foot of the room list (`CallStrip`) with their pages out of
 /// sight in Huddle's window (`CallPages`), and one ringing in, in a panel of its own.
-@MainActor @Observable
+@MainActor @Perceptible
 final class CallCenter {
     static let shared = CallCenter()
 
@@ -15,13 +15,13 @@ final class CallCenter {
     private(set) var calls: [any HuddleCall] = []
     private(set) var incoming: IncomingCall?
 
-    @ObservationIgnored private var incomingPanel: NSPanel?
-    @ObservationIgnored private var ringTask: Task<Void, Never>?
-    @ObservationIgnored private var declineHandle: TaskHandle?
+    @PerceptionIgnored private var incomingPanel: NSPanel?
+    @PerceptionIgnored private var ringTask: Task<Void, Never>?
+    @PerceptionIgnored private var declineHandle: TaskHandle?
     /// Rooms a call is being placed in, while it's worked out which kind.
-    @ObservationIgnored private var placing: Set<String> = []
+    @PerceptionIgnored private var placing: Set<String> = []
     /// Whether each account's server runs Element Call's backend, and when that was found out.
-    @ObservationIgnored private var matrixRTCSupport: [ObjectIdentifier: (supported: Bool, checked: Date)] = [:]
+    @PerceptionIgnored private var matrixRTCSupport: [ObjectIdentifier: (supported: Bool, checked: Date)] = [:]
 
     var current: (any HuddleCall)? { calls.last }
 
@@ -115,7 +115,7 @@ final class CallCenter {
         // In sight even if Huddle can't be brought forward (answered from the ring panel with
         // another app in front): WebKit lets the call's page have the microphone only then.
         MainWindow.window?.orderFrontRegardless()
-        NSApp.activate()
+        NSApp.activateApp()
     }
 
     /// Leaves every call, as the app quits: Element Call's leave goes out if it can in a moment,
@@ -307,7 +307,7 @@ private struct IncomingCallView: View {
     let call: IncomingCall
     let center: CallCenter
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 12) {
             AvatarView(media: call.account.media, url: call.callerAvatarURL, name: call.callerName,
                        seed: call.callerID, size: 40)
@@ -354,5 +354,5 @@ private struct IncomingCallView: View {
         .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.separator, lineWidth: 0.5) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Call from \(call.callerName)")
-    }
+    } }
 }

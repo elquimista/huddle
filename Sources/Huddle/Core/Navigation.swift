@@ -1,9 +1,9 @@
 import AppKit
-import Observation
+import Perception
 
 /// The rooms visited, across accounts and spaces, for Go ▸ Back and Forward (⌘[ and ⌘]), as a
 /// browser keeps the pages visited.
-@MainActor @Observable
+@MainActor @Perceptible
 final class RoomHistory {
     static let shared = RoomHistory()
 
@@ -15,9 +15,9 @@ final class RoomHistory {
     private(set) var visits: [Visit] = []
     private(set) var index = -1
 
-    @ObservationIgnored weak var store: AccountStore?
-    @ObservationIgnored private var isPending = false
-    @ObservationIgnored private var isMoving = false
+    @PerceptionIgnored weak var store: AccountStore?
+    @PerceptionIgnored private var isPending = false
+    @PerceptionIgnored private var isMoving = false
 
     private static let mostVisits = 100
 

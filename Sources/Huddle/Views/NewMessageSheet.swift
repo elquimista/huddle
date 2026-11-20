@@ -1,5 +1,6 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 /// Starting a chat with one person or several. People are found by name or Matrix ID and
 /// gathered in the To field; then going takes the user to the chat already had with them
@@ -150,7 +151,7 @@ struct NewMessageSheet: View {
     /// The height of a row in the To field: a chip's.
     private static let rowHeight: CGFloat = 20
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let people = people
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
@@ -218,10 +219,10 @@ struct NewMessageSheet: View {
             if let inviteRoomID { memberships = await account.memberships(in: inviteRoomID) }
         }
         // Only someone who can be chosen is highlighted.
-        .onChange(of: people.filter { $0.unavailable == nil }.map(\.id)) { _, ids in
+        .onChanged(of: people.filter { $0.unavailable == nil }.map(\.id)) { _, ids in
             if !ids.contains(highlighted ?? "") { highlighted = ids.first }
         }
-    }
+    } }
 
     // MARK: The To field
 
@@ -234,9 +235,9 @@ struct NewMessageSheet: View {
                 .foregroundStyle(.secondary)
                 .frame(height: Self.rowHeight)
             FlowLayout(spacing: 4) {
-                ForEach(chosen) { person in
+                ForEach(chosen) { person in WithPerceptionTracking {
                     PersonChip(account: account, person: person) { remove(person) }
-                }
+                } }
                 CommandTextField(text: $query, placeholder: chosen.isEmpty ? "Name or Matrix ID" : "",
                                  focusRequest: focusRequest,
                                  onSubmit: { submit(people) },
@@ -321,7 +322,7 @@ struct NewMessageSheet: View {
         if people.isEmpty {
             if trimmed.isEmpty {
                 if chosen.isEmpty {
-                    ContentUnavailableView {
+                    EmptyState {
                         Label(inviteRoomID == nil ? "Message Someone" : "Invite Someone",
                               systemImage: "person.crop.circle.badge.plus")
                     } description: {
@@ -338,7 +339,7 @@ struct NewMessageSheet: View {
             } else if matchesAreAllChosen {
                 Color.clear
             } else {
-                ContentUnavailableView {
+                EmptyState {
                     Label("Nobody Found", systemImage: "person.crop.circle.badge.questionmark")
                 } description: {
                     Text(searchFailed
@@ -347,9 +348,9 @@ struct NewMessageSheet: View {
                 }
             }
         } else {
-            ScrollViewReader { proxy in
+            ScrollViewReader { proxy in WithPerceptionTracking {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) { WithPerceptionTracking {
                         if trimmed.isEmpty {
                             Text("Recent")
                                 .font(.subheadline.weight(.semibold))
@@ -358,25 +359,25 @@ struct NewMessageSheet: View {
                                 .padding(.top, 10)
                                 .padding(.bottom, 4)
                         }
-                        ForEach(people) { person in
+                        ForEach(people) { person in WithPerceptionTracking {
                             PersonRow(account: account, person: person, isHighlighted: person.id == highlighted) {
                                 add(person)
                             }
                             .id(person.id)
-                        }
+                        } }
                         if isSearching {
                             ProgressView()
                                 .controlSize(.small)
                                 .frame(maxWidth: .infinity)
                                 .padding(10)
                         }
-                    }
+                    } }
                     .padding(.vertical, 4)
                 }
-                .onChange(of: highlighted) { _, id in
+                .onChanged(of: highlighted) { _, id in
                     if let id { proxy.scrollTo(id) }
                 }
-            }
+            } }
         }
     }
 
@@ -495,7 +496,7 @@ private struct PersonChip: View {
     let person: NewMessageSheet.Person
     let remove: () -> Void
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 4) {
             AvatarView(media: account.media, url: person.avatarURL, name: person.name, seed: person.userID, size: 16)
                 .accessibilityHidden(true)
@@ -518,7 +519,7 @@ private struct PersonChip: View {
         .background(Color.accentColor.opacity(0.15), in: Capsule())
         .transition(.scale(scale: 0.8).combined(with: .opacity))
         .help(person.userID)
-    }
+    } }
 }
 
 /// Someone to message: their picture, name and Matrix ID.
@@ -529,7 +530,7 @@ private struct PersonRow: View {
     let add: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: add) {
             HStack(spacing: 10) {
                 AvatarView(media: account.media, url: person.avatarURL, name: person.name, seed: person.userID, size: 32)
@@ -563,7 +564,7 @@ private struct PersonRow: View {
         .help(person.unavailable == nil ? "Add \(person.name)" : "")
         .accessibilityLabel([person.name, person.name == person.userID ? nil : person.userID, person.unavailable]
             .compactMap { $0 }.joined(separator: ", "))
-    }
+    } }
 
     private var background: some ShapeStyle {
         if isHighlighted { return AnyShapeStyle(Color.accentColor.opacity(0.14)) }

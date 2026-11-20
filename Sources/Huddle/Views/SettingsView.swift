@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// How messages are laid out in a room.
 enum MessageLayout: String, CaseIterable, Identifiable {
@@ -97,7 +98,7 @@ enum IRCNameColumn {
 /// The rooms' names column widths, by room ID, read from the defaults once and kept in memory:
 /// looking one up as a conversation draws costs nothing, and a room open in two places (the
 /// conversation and a thread beside it) follows a change made in either.
-@MainActor @Observable
+@MainActor @Perceptible
 final class IRCNameWidths {
     static let shared = IRCNameWidths()
     private static let key = "ircNameColumnWidths"
@@ -139,7 +140,7 @@ struct SettingsView: View {
     @State private var shownHeight: CGFloat?
     @State private var resize = WindowHeightAnimation()
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         TabView(selection: $tab) {
             NotificationSettingsTab()
                 .tabItem { Label("Notifications", systemImage: "bell.badge") }
@@ -163,7 +164,7 @@ struct SettingsView: View {
             resize.run(from: from, to: height) { shownHeight = $0 }
         }
         .frame(height: shownHeight, alignment: .top)
-    }
+    } }
 }
 
 extension EnvironmentValues {
@@ -210,13 +211,13 @@ private struct SettingsForm<Content: View>: View {
 
     @Environment(\.settingsFormHeight) private var reportHeight
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Form { content }
             .formStyle(.grouped)
             .frame(width: 500)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self, of: \.size.height) { reportHeight($0) }
-    }
+    } }
 }
 
 /// A note under a section, sized and coloured like the rows' own descriptions and lined up with
@@ -224,14 +225,14 @@ private struct SettingsForm<Content: View>: View {
 private struct SectionNote: View {
     let text: String
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Text(text)
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 10)
-    }
+    } }
 }
 
 /// A row with its name and a line about it on the left and its control on the right, like a
@@ -244,7 +245,7 @@ private struct SettingRow<Control: View>: View {
     var detailLines: Int? = nil
     @ViewBuilder let control: Control
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -256,7 +257,7 @@ private struct SettingRow<Control: View>: View {
             Spacer(minLength: 8)
             control
         }
-    }
+    } }
 }
 
 // MARK: - Notifications
@@ -265,7 +266,7 @@ private struct NotificationSettingsTab: View {
     @AppStorage(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault
     @AppStorage(NotificationSettings.soundKey) private var notificationSound = true
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         SettingsForm {
             Section {
                 Toggle(isOn: $notificationsEnabled) {
@@ -284,7 +285,7 @@ private struct NotificationSettingsTab: View {
                 SectionNote(text: "Your Matrix account’s notification rules decide which rooms notify.")
             }
         }
-    }
+    } }
 }
 
 // MARK: - Appearance
@@ -293,14 +294,14 @@ private struct AppearanceSettingsTab: View {
     @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
     @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         SettingsForm {
             Section {
                 SettingRow(title: "Layout", detail: layout.summary) {
                     Picker("Layout", selection: $layout) {
-                        ForEach(MessageLayout.allCases) { option in
+                        ForEach(MessageLayout.allCases) { option in WithPerceptionTracking {
                             Text(option.title).tag(option)
-                        }
+                        } }
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
@@ -308,9 +309,9 @@ private struct AppearanceSettingsTab: View {
                 }
                 SettingRow(title: "Emoji-only messages", detail: "Just a few emoji, drawn bigger.") {
                     Picker("Emoji-only messages", selection: $emojiSize) {
-                        ForEach(EmojiSize.allCases) { size in
+                        ForEach(EmojiSize.allCases) { size in WithPerceptionTracking {
                             Text(size.title).tag(size)
-                        }
+                        } }
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
@@ -326,7 +327,7 @@ private struct AppearanceSettingsTab: View {
             }
             QuickReactionsSection(layout: layout)
         }
-    }
+    } }
 }
 
 /// The six quick reactions, each a button that opens the emoji picker to put another in its
@@ -337,17 +338,17 @@ private struct QuickReactionsSection: View {
 
     private var reactions: QuickReactions { .shared }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Section {
             SettingRow(title: "Quick reactions", detail: "At the top of the reaction picker. Click one to choose another.",
                        detailLines: 2) {
                 HStack(spacing: 3) {
-                    ForEach(Array(reactions.emoji.enumerated()), id: \.offset) { index, emoji in
+                    ForEach(Array(reactions.emoji.enumerated()), id: \.offset) { index, emoji in WithPerceptionTracking {
                         if index == reactions.onBarCount {
                             Divider().frame(height: 18).padding(.horizontal, 3)
                         }
                         slot(emoji, at: index)
-                    }
+                    } }
                 }
             }
             SettingRow(title: "On a message’s bar", detail: barDetail, detailLines: 2) {
@@ -373,7 +374,7 @@ private struct QuickReactionsSection: View {
                 .disabled(reactions.areDefaults)
             }
         }
-    }
+    } }
 
     /// Bubbles have no bar of their own; a thread's messages, always in the modern layout, do.
     private var barDetail: String {
@@ -385,12 +386,12 @@ private struct QuickReactionsSection: View {
     private func slot(_ emoji: String, at index: Int) -> some View {
         QuickReactionSlot(emoji: emoji, index: index, isEditing: editing == index) { editing = index }
             .popover(isPresented: Binding(get: { editing == index }, set: { if !$0 { editing = nil } }),
-                     arrowEdge: .bottom) {
+                     arrowEdge: .bottom) { WithPerceptionTracking {
                 EmojiPicker(recordsUse: false) { picked in
                     editing = nil
                     withAnimation(.snappy(duration: 0.2)) { reactions.set(picked, at: index) }
                 }
-            }
+            } }
     }
 }
 
@@ -403,7 +404,7 @@ private struct QuickReactionSlot: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             Text(emoji)
                 .font(.system(size: 17))
@@ -423,7 +424,7 @@ private struct QuickReactionSlot: View {
         .accessibilityLabel("Quick reaction \(index + 1)")
         .accessibilityValue(emoji)
         .accessibilityHint("Chooses another emoji")
-    }
+    } }
 }
 
 /// A few messages as a room would show them with the choices above: the layout, and an
@@ -451,15 +452,15 @@ private struct ConversationPreview: View {
         Line(id: 2, sender: "Alice", color: 3, time: "9:42 AM", text: "🎉🙌", isEmoji: true, startsGroup: false),
     ]
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(lines) { line in
+            ForEach(lines) { line in WithPerceptionTracking {
                 switch layout {
                 case .modern: modernRow(line)
                 case .bubbles: bubbleRow(line, next: lines.first { $0.id == line.id + 1 })
                 case .irc: ircRow(line)
                 }
-            }
+            } }
         }
         // The section's own box frames it: a card of its own inside would be a box in a box.
         .padding(.bottom, 6)
@@ -468,7 +469,7 @@ private struct ConversationPreview: View {
         .animation(.snappy(duration: 0.25), value: emojiSize)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Preview of messages in the \(layout.title) layout, with emoji \(emojiSize.title.lowercased())")
-    }
+    } }
 
     private func text(_ line: Line) -> some View {
         Text(line.text)
@@ -562,7 +563,7 @@ private struct PrivacySettingsTab: View {
         return (running.reduce(0) { $0 + $1.roomsDone }, running.reduce(0) { $0 + $1.roomsTotal })
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         SettingsForm {
             Section {
                 Toggle(isOn: $sharesPresence) {
@@ -604,12 +605,12 @@ private struct PrivacySettingsTab: View {
                 SectionNote(text: "People whose apps don’t verify their devices won’t be able to read what you send, and this Mac must be verified to send encrypted messages. Element calls this “exclude insecure devices”.")
             }
         }
-        .onChange(of: indexesFullHistory) { _, on in
+        .onChanged(of: indexesFullHistory) { _, on in
             for account in store.accounts {
                 if on { account.historyIndexer.start(for: account) } else { account.historyIndexer.stop() }
             }
         }
-    }
+    } }
 }
 
 /// Element's own setting, kept with each account on the server: one switch for one account, or
@@ -617,7 +618,7 @@ private struct PrivacySettingsTab: View {
 private struct TypingSharingRows: View {
     let accounts: [AccountSession]
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         if accounts.count == 1, let account = accounts.first {
             TypingSharingToggle(account: account) {
                 Text("Show when I’m typing")
@@ -630,7 +631,7 @@ private struct TypingSharingRows: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            ForEach(accounts) { account in
+            ForEach(accounts) { account in WithPerceptionTracking {
                 TypingSharingToggle(account: account) {
                     HStack(spacing: 8) {
                         AvatarView(media: account.media, url: account.avatarURL,
@@ -642,9 +643,9 @@ private struct TypingSharingRows: View {
                             .truncationMode(.middle)
                     }
                 }
-            }
+            } }
         }
-    }
+    } }
 }
 
 private struct TypingSharingToggle<Label: View>: View {
@@ -652,14 +653,14 @@ private struct TypingSharingToggle<Label: View>: View {
     @ViewBuilder let label: Label
     @State private var failure: String?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Toggle(isOn: Binding(get: { account.sharesTyping }, set: save)) {
             label
             if let failure {
                 Text(failure).foregroundStyle(.red)
             }
         }
-    }
+    } }
 
     private func save(_ shares: Bool) {
         failure = nil
@@ -684,10 +685,10 @@ private struct AccountsSettingsTab: View {
     @State private var accountToChangePassword: AccountSession?
     @State private var accountForDevices: AccountSession?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         SettingsForm {
             Section {
-                ForEach(store.accounts) { account in
+                ForEach(store.accounts) { account in WithPerceptionTracking {
                     AccountSettingsRow(account: account,
                                        editProfile: { accountToEdit = account },
                                        changePassword: { accountToChangePassword = account },
@@ -695,7 +696,7 @@ private struct AccountsSettingsTab: View {
                                        verify: { accountToVerify = account },
                                        recoveryKey: { accountForRecoveryKey = account },
                                        signOut: { accountToSignOut = account })
-                }
+                } }
             } footer: {
                 HStack {
                     Spacer()
@@ -703,33 +704,33 @@ private struct AccountsSettingsTab: View {
                 }
             }
         }
-        .sheet(item: $accountToVerify) { account in
+        .sheet(item: $accountToVerify) { account in WithPerceptionTracking {
             VerificationSheet(account: account)
-        }
-        .sheet(item: $accountForRecoveryKey) { account in
+        } }
+        .sheet(item: $accountForRecoveryKey) { account in WithPerceptionTracking {
             RecoveryKeySheet(account: account)
-        }
-        .sheet(item: $accountToEdit) { account in
+        } }
+        .sheet(item: $accountToEdit) { account in WithPerceptionTracking {
             ProfileSheet(account: account)
-        }
-        .sheet(item: $accountToChangePassword) { account in
+        } }
+        .sheet(item: $accountToChangePassword) { account in WithPerceptionTracking {
             ChangePasswordSheet(account: account)
-        }
-        .sheet(item: $accountForDevices) { account in
+        } }
+        .sheet(item: $accountForDevices) { account in WithPerceptionTracking {
             DevicesSheet(account: account)
-        }
+        } }
         .confirmationDialog("Sign out of \(accountToSignOut?.userID ?? "")?",
                             isPresented: Binding(get: { accountToSignOut != nil },
-                                                 set: { if !$0 { accountToSignOut = nil } })) {
+                                                 set: { if !$0 { accountToSignOut = nil } })) { WithPerceptionTracking {
             Button("Sign Out", role: .destructive) {
                 if let account = accountToSignOut {
                     Task { await store.signOut(account) }
                 }
             }
-        } message: {
+        } } message: {
             Text("Local message history and encryption keys for this account will be removed from this Mac.")
         }
-    }
+    } }
 }
 
 extension AccountsSettingsTab {
@@ -755,7 +756,7 @@ private struct AccountSettingsRow: View {
     let signOut: () -> Void
     @State private var accountToLabel: AccountSession?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(alignment: .center, spacing: 12) {
             AvatarView(media: account.media,
                        url: account.avatarURL,
@@ -786,9 +787,9 @@ private struct AccountSettingsRow: View {
             Spacer(minLength: 8)
             // Signing out is rare and can't be undone: in a menu, not a button on every row. The
             // account's own items, as the title bar's menu has them (AccountMenu).
-            Menu {
+            Menu { WithPerceptionTracking {
                 AccountMenuContent(sections: { menuSections })
-            } label: {
+            } } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
@@ -808,7 +809,7 @@ private struct AccountSettingsRow: View {
             }
         }
         .accountLabelPrompt(for: $accountToLabel)
-    }
+    } }
 
     /// The account's menu, its sheets opening here in Settings.
     private var menuSections: [[AccountMenuItem]] {
@@ -871,9 +872,9 @@ private struct TintedIconLabel: LabelStyle {
 // MARK: - Updates
 
 private struct UpdateSettingsTab: View {
-    @Bindable private var updater = AppUpdater.shared
+    @Perception.Bindable private var updater = AppUpdater.shared
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         SettingsForm {
             Section {
                 SettingRow(title: "Huddle \(AppUpdater.version)", detail: lastChecked) {
@@ -905,7 +906,7 @@ private struct UpdateSettingsTab: View {
             }
             .disabled(!updater.isAvailable)
         }
-    }
+    } }
 
     private var lastChecked: String {
         guard let date = updater.lastChecked else { return "Not checked for updates yet." }

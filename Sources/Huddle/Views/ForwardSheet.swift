@@ -1,5 +1,6 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 /// Sends a message on to other rooms: the message at the top, the account's rooms below, each
 /// with its own Send button, so it can go to several before the sheet is closed.
@@ -31,7 +32,7 @@ struct ForwardSheet: View {
 
     private var sentCount: Int { states.values.filter { $0 == .sent }.count }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Forward Message")
@@ -63,14 +64,14 @@ struct ForwardSheet: View {
             Divider()
             Group {
                 if rooms.isEmpty {
-                    ContentUnavailableView.search(text: query)
+                    SearchEmptyState(text: query)
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(rooms) { room in
+                        LazyVStack(spacing: 0) { WithPerceptionTracking {
+                            ForEach(rooms) { room in WithPerceptionTracking {
                                 row(room)
-                            }
-                        }
+                            } }
+                        } }
                         .padding(.vertical, 6)
                     }
                 }
@@ -98,7 +99,7 @@ struct ForwardSheet: View {
             order = Dictionary(account.rooms.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
             isSearching = true
         }
-    }
+    } }
 
     /// The message being forwarded, as a quote.
     private var quote: some View {

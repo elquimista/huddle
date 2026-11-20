@@ -1,12 +1,12 @@
 import Foundation
 import MatrixRustSDK
-import Observation
+import Perception
 
 /// Emoji verification for one account, through the SDK's verification controller: this Mac
 /// asking the account's other devices to vouch for it, and other devices, or other people,
 /// asking to verify with it. Both sides show the same seven emoji; once the person checking
 /// says they match on both, each side trusts the other.
-@MainActor @Observable
+@MainActor @Perceptible
 final class VerificationFlow {
     enum Step: Equatable {
         case idle
@@ -96,20 +96,20 @@ final class VerificationFlow {
 
     /// Whether this Mac is verified: a request from the account's own device then asks to verify
     /// that device, not this one.
-    @ObservationIgnored var isThisMacVerified: () -> Bool = { false }
+    @PerceptionIgnored var isThisMacVerified: () -> Bool = { false }
     /// Called when a request comes in from elsewhere.
-    @ObservationIgnored var onIncoming: () -> Void = {}
+    @PerceptionIgnored var onIncoming: () -> Void = {}
     /// Called with someone's user ID once they are verified.
-    @ObservationIgnored var onVerifiedPerson: (String) -> Void = { _ in }
+    @PerceptionIgnored var onVerifiedPerson: (String) -> Void = { _ in }
 
-    @ObservationIgnored private let client: Client
-    @ObservationIgnored private let userID: String
-    @ObservationIgnored private var controller: SessionVerificationController?
-    @ObservationIgnored private var connectTask: Task<Void, Never>?
-    @ObservationIgnored private var eventsTask: Task<Void, Never>?
-    @ObservationIgnored private var startTask: Task<Void, Never>?
+    @PerceptionIgnored private let client: Client
+    @PerceptionIgnored private let userID: String
+    @PerceptionIgnored private var controller: SessionVerificationController?
+    @PerceptionIgnored private var connectTask: Task<Void, Never>?
+    @PerceptionIgnored private var eventsTask: Task<Void, Never>?
+    @PerceptionIgnored private var startTask: Task<Void, Never>?
     /// Whether the emoji exchange itself has begun, which decides whose reason for stopping counts.
-    @ObservationIgnored private var sasStarted = false
+    @PerceptionIgnored private var sasStarted = false
 
     init(client: Client, userID: String) {
         self.client = client

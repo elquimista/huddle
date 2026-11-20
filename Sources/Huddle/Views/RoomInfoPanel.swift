@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// A room's details in the panel beside it: its picture, name and topic (changeable where this
 /// account may), whether it's encrypted, when it notifies you, who is in it (with inviting people and, for admins
@@ -9,7 +10,7 @@ struct RoomInfoPanelView: View {
     let roomID: String
     @State private var details: RoomDetails?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Group {
             if let details {
                 RoomInfoContent(account: account, details: details)
@@ -26,7 +27,7 @@ struct RoomInfoPanelView: View {
             details?.stop()
             details = nil
         }
-    }
+    } }
 }
 
 private struct RoomInfoContent: View {
@@ -80,7 +81,9 @@ private struct RoomInfoContent: View {
     }
     private var noun: String { details.isDirect ? "Chat" : "Room" }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking { content } }
+
+    private var content: some View {
         ScrollView {
             VStack(spacing: 0) {
                 header
@@ -110,43 +113,43 @@ private struct RoomInfoContent: View {
                 .padding(.vertical, 12)
             }
         }
-        .alert("Turn On Encryption?", isPresented: $asksToTurnOnEncryption) {
+        .alert("Turn On Encryption?", isPresented: $asksToTurnOnEncryption) { WithPerceptionTracking {
             Button("Turn On") { run { try await details.turnOnEncryption() } }
             Button("Cancel", role: .cancel) {}
-        } message: {
+        } } message: {
             Text("From now on, only the people in this \(noun.lowercased()) can read its messages. Encryption can’t be turned off again.")
         }
-        .confirmationDialog("Leave “\(details.name)”?", isPresented: $asksToLeave) {
+        .confirmationDialog("Leave “\(details.name)”?", isPresented: $asksToLeave) { WithPerceptionTracking {
             Button("Leave", role: .destructive) { run { try await account.leave(roomID: details.roomID) } }
-        } message: {
+        } } message: {
             Text("You’ll stop getting its messages, and may need an invitation to come back.")
         }
         .confirmationDialog(removalQuestion, isPresented: Binding(
             get: { removing != nil }, set: { if !$0 { removing = nil } }
-        ), presenting: removing) { member in
+        ), presenting: removing) { member in WithPerceptionTracking {
             Button(member.isInvited ? "Withdraw Invitation" : "Remove", role: .destructive) { remove(member) }
-        } message: { member in
+        } } message: { member in
             Text(member.isInvited
                  ? "They won’t be able to join with it."
                  : "They’ll stop getting its messages, and will see that you removed them.")
         }
         .confirmationDialog(roleChangeQuestion, isPresented: Binding(
             get: { roleChange != nil }, set: { if !$0 { roleChange = nil } }
-        ), presenting: roleChange) { change in
+        ), presenting: roleChange) { change in WithPerceptionTracking {
             Button("Make \(change.isOwnAccount ? "Yourself" : change.member.name) \(Self.withArticle(change.choice.title))",
                    role: change.isOwnAccount ? .destructive : nil) {
                 apply(change.choice, to: change.member)
             }
-        } message: { change in
+        } } message: { change in
             Text(change.isOwnAccount
                  ? "You can’t undo this. Only someone whose role is above \(change.choice.title) could change it back."
                  : "\(change.member.name) will have as much power as you, so you won’t be able to change their role or remove them later.")
         }
         .alert(actionFailure?.title ?? "", isPresented: Binding(
             get: { actionFailure != nil }, set: { if !$0 { actionFailure = nil } }
-        ), presenting: actionFailure) { _ in
+        ), presenting: actionFailure) { _ in WithPerceptionTracking {
             Button("OK") {}
-        } message: { failure in
+        } } message: { failure in
             Text(failure.message)
         }
     }
@@ -448,7 +451,7 @@ private struct RoomInfoContent: View {
                     .padding(12)
             } else {
                 let shown = showsAllMembers ? details.members : Array(details.members.prefix(50))
-                ForEach(shown) { member in
+                ForEach(shown) { member in WithPerceptionTracking {
                     MemberRow(account: account, member: member, noun: noun,
                               identity: account.peopleIdentities[member.userID],
                               verify: !member.isInvited && account.canVerify(member.userID)
@@ -456,7 +459,7 @@ private struct RoomInfoContent: View {
                               roles: details.roleChoices(for: member),
                               setRole: { choose($0, for: member) },
                               remove: details.canRemove(member) ? { removing = member } : nil)
-                }
+                } }
                 // Where each of them stands, asking the server about anyone this Mac doesn't keep
                 // track of, so it shows in an unencrypted room too.
                 .task(id: shown.map(\.userID)) {
@@ -564,7 +567,7 @@ private struct MemberRow: View {
 
     private var removeTitle: String { member.isInvited ? "Withdraw Invitation…" : "Remove from \(noun)…" }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 10) {
             AvatarView(media: account.media, url: member.avatarURL, name: nickname ?? member.name,
                        seed: member.userID, size: 28)
@@ -621,7 +624,7 @@ private struct MemberRow: View {
         .padding(.vertical, 5)
         .contentShape(Rectangle())
         .onHoverInFrontWindow { isHovering = $0 }
-        .contextMenu {
+        .contextMenu { WithPerceptionTracking {
             Button("Copy User ID", action: copyUserID)
             if canName {
                 Button("Set Name…", action: startRenaming)
@@ -631,17 +634,17 @@ private struct MemberRow: View {
             }
             if roles != nil || remove != nil { Divider() }
             if let roles {
-                Menu("Role") {
-                    ForEach(roles) { choice in
+                Menu("Role") { WithPerceptionTracking {
+                    ForEach(roles) { choice in WithPerceptionTracking {
                         Toggle(choice.title, isOn: Binding(get: { choice.isCurrent }, set: { _ in setRole(choice) }))
                             .disabled(!choice.isAllowed)
-                    }
-                }
+                    } }
+                } }
             }
             if let remove {
                 Button(removeTitle, role: .destructive, action: remove)
             }
-        }
+        } }
         .accessibilityElement(children: .combine)
         // While naming, Escape is the field's, not the panel's to close.
         .preference(key: PanelTakesEscape.self, value: isRenaming)
@@ -653,14 +656,14 @@ private struct MemberRow: View {
             if let verify {
                 Button("Verify \(member.name)", action: verify)
             }
-            ForEach(roles?.filter { $0.isAllowed && !$0.isCurrent } ?? []) { choice in
+            ForEach(roles?.filter { $0.isAllowed && !$0.isCurrent } ?? []) { choice in WithPerceptionTracking {
                 Button("Make \(choice.title)") { setRole(choice) }
-            }
+            } }
             if let remove {
                 Button(member.isInvited ? "Withdraw Invitation" : "Remove from \(noun)", action: remove)
             }
         }
-    }
+    } }
 
     private var hasActions: Bool { roles != nil || remove != nil || verify != nil || canName }
 
@@ -674,11 +677,11 @@ private struct MemberRow: View {
             .controlSize(.small)
             .focused($nameFocused)
             .onSubmit(finishRenaming)
-            .onKeyPress(.escape) {
+            .onKeyDown(.escape, focused: nameFocused) { _ in
                 isRenaming = false
                 return .handled
             }
-            .onChange(of: nameFocused) {
+            .onChanged(of: nameFocused) {
                 if !nameFocused { finishRenaming() }
             }
             .task { await RoomInfoContent.focus { nameFocused = true } }

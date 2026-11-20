@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 extension View {
     /// Turns off AppKit's title-bar separator. SwiftUI counts a bar along the top of a scroll

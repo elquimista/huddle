@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// Which image the full-size viewer is showing, if any. One viewer for the whole window.
-@MainActor @Observable
+@MainActor @Perceptible
 final class ImageViewerState {
     static let shared = ImageViewerState()
 
@@ -43,8 +44,8 @@ final class ImageViewerPresenter {
         let view = NSHostingView(rootView: ImageViewer(item: item) { ImageViewerState.shared.close() })
         // A plain view over the window: it draws under the title bar instead of keeping clear
         // of it, and it leaves the window's toolbar and title to the main content.
-        view.safeAreaRegions = []
-        view.sceneBridgingOptions = []
+        if #available(macOS 13.3, *) { view.safeAreaRegions = [] }
+        if #available(macOS 14, *) { view.sceneBridgingOptions = [] }
         // The SwiftUI view sits inside a plain one. Added to the window's frame directly, a
         // hosting view is taken for window content, and the sidebar loses its place under the
         // toolbar.
@@ -101,7 +102,7 @@ struct ImageViewer: View {
     /// Space kept clear around the picture for the bars at the top and bottom.
     private static let margin = CGSize(width: 48, height: 76)
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         // Everything that isn't the picture or a control is "outside": clicking it closes.
         Color.black.opacity(0.84)
             .contentShape(Rectangle())
@@ -131,7 +132,7 @@ struct ImageViewer: View {
             .onDisappear { input.stop() }
             .task(id: attempt) { await load() }
             .accessibilityAddTraits(.isModal)
-    }
+    } }
 
     private var bars: some View {
             VStack(spacing: 0) {
@@ -212,7 +213,7 @@ struct ImageViewer: View {
                     if case .active = phase { isPointing = true } else { isPointing = false }
                     showZoomCursor()
                 }
-                .onChange(of: zoom) { showZoomCursor() }
+                .onChanged(of: zoom) { showZoomCursor() }
                 // VoiceOver's press does what a click does, about the middle.
                 .accessibilityAction { clickZoom(at: .zero) }
                 .gesture(
@@ -462,7 +463,7 @@ private struct ViewerButton: View {
     @State private var isHovering = false
     @Environment(\.isEnabled) private var isEnabled
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 14, weight: .medium))
@@ -477,7 +478,7 @@ private struct ViewerButton: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .help(help)
         .accessibilityLabel(help.components(separatedBy: " (").first ?? help)
-    }
+    } }
 }
 
 /// Keys, the scroll wheel and pinches while the viewer is open. Everything is taken here, so

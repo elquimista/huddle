@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// Verifying this Mac, by comparing emoji with another of the account's devices or with the
 /// recovery key, and answering requests to verify from elsewhere. One sheet for every step of
@@ -16,18 +17,18 @@ struct VerificationSheet: View {
 
     private var flow: VerificationFlow { account.verificationFlow }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 20) {
             content
         }
         .centredSheetLayout()
         .onAppear { flow.windowOpened() }
         .onDisappear { flow.windowClosed() }
-        .onChange(of: flow.step) { _, step in
+        .onChanged(of: flow.step) { _, step in
             // A request that went away by itself, on a Mac with nothing else to verify.
             if step == .idle, account.verification == .verified { dismiss() }
         }
-    }
+    } }
 
     @ViewBuilder private var content: some View {
         switch flow.step {
@@ -274,7 +275,7 @@ struct SheetHeader: View {
     let message: String
     @State private var hasAppeared = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 8) {
             if let symbol {
                 Group {
@@ -289,7 +290,7 @@ struct SheetHeader: View {
                     }
                 }
                 .font(.system(size: 40))
-                .symbolEffect(.bounce, value: isFilled && hasAppeared)
+                .symbolBounce(value: isFilled && hasAppeared)
                 .onAppear { hasAppeared = true }
                 .frame(height: 50)
                     .padding(.bottom, 2)
@@ -305,7 +306,7 @@ struct SheetHeader: View {
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
-    }
+    } }
 }
 
 /// Along the bottom: what's happening, if anything, then the buttons, trailing.
@@ -313,14 +314,14 @@ struct SheetBar<Leading: View, Trailing: View>: View {
     @ViewBuilder let leading: Leading
     @ViewBuilder let trailing: Trailing
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             leading
             Spacer(minLength: 8)
             trailing
         }
         .padding(.top, 4)
-    }
+    } }
 }
 
 extension SheetBar where Leading == EmptyView {
@@ -338,7 +339,7 @@ private struct ChoiceRow: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: symbol)
@@ -374,14 +375,14 @@ private struct ChoiceRow: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .accessibilityLabel(title)
         .accessibilityHint(detail)
-    }
+    } }
 }
 
 /// The seven emoji, or three numbers, both sides show.
 private struct CodeView: View {
     let code: VerificationFlow.Code
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         switch code {
         case .emoji(let emoji):
             // Four, then three: big enough to tell apart at a glance, in reading order.
@@ -391,19 +392,19 @@ private struct CodeView: View {
             }
         case .numbers(let numbers):
             HStack(spacing: 20) {
-                ForEach(Array(numbers.enumerated()), id: \.offset) { _, number in
+                ForEach(Array(numbers.enumerated()), id: \.offset) { _, number in WithPerceptionTracking {
                     Text(String(number))
                         .font(.system(size: 34, weight: .medium, design: .rounded))
                         .monospacedDigit()
-                }
+                } }
             }
             .accessibilityElement(children: .combine)
         }
-    }
+    } }
 
     private func row(_ emoji: [(offset: Int, element: VerificationFlow.Emoji)]) -> some View {
         HStack(spacing: 10) {
-            ForEach(emoji, id: \.offset) { index, emoji in
+            ForEach(emoji, id: \.offset) { index, emoji in WithPerceptionTracking {
                 VStack(spacing: 4) {
                     Text(emoji.symbol)
                         .font(.system(size: 40))
@@ -422,7 +423,7 @@ private struct CodeView: View {
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(index + 1): \(emoji.name)")
-            }
+            } }
         }
     }
 }
@@ -440,7 +441,7 @@ private struct DeviceDetails: View {
         return formatter
     }()
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
             if let name = request.deviceName {
                 GridRow {
@@ -465,7 +466,7 @@ private struct DeviceDetails: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .detailsBackground()
-    }
+    } }
 }
 
 /// The person a request came from.
@@ -473,7 +474,7 @@ private struct PersonDetails: View {
     let request: VerificationFlow.Request
     let media: MediaLoader
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 10) {
             AvatarView(media: media, url: request.senderAvatarURL,
                        name: request.senderName ?? request.senderID, seed: request.senderID, size: 32)
@@ -490,7 +491,7 @@ private struct PersonDetails: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .detailsBackground()
-    }
+    } }
 }
 
 extension View {
@@ -514,7 +515,7 @@ private struct RecoveryKeyForm: View {
     @State private var error: String?
     @FocusState private var isFocused: Bool
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         SheetHeader(symbol: "key.horizontal",
                     title: "Enter Your Recovery Key",
                     message: "You were given it when you set up encryption, on this Mac or another device.")
@@ -541,7 +542,7 @@ private struct RecoveryKeyForm: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(key.isEmpty || isBusy)
         }
-    }
+    } }
 
     private func submit() {
         guard !key.isEmpty, !isBusy else { return }

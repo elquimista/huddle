@@ -46,7 +46,7 @@ done
 } > .build/.cargo/config.toml
 
 (cd "$SRC" && cargo xtask swift build-framework --release \
-    --target aarch64-apple-darwin --target x86_64-apple-darwin --macos-deployment-target 14.0)
+    --target aarch64-apple-darwin --target x86_64-apple-darwin --macos-deployment-target 13.0)
 
 GENERATED="$SRC/bindings/apple/generated"
 rm -rf "$OUT/MatrixSDKFFI.xcframework" "$OUT/Sources/MatrixRustSDK"

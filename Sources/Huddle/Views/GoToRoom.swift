@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// Go ▸ Go to Room… (⌘K): any room by name, from any account and space. Before anything is
 /// typed, the rooms visited lately. The arrow keys choose, Return goes there; Escape, or a
@@ -17,7 +18,7 @@ struct GoToRoomPanel: View {
         var id: String { "\(account.id)|\(room.id)" }
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let matches = self.matches
         ZStack(alignment: .top) {
             // Anywhere else in the window: put it away.
@@ -34,8 +35,8 @@ struct GoToRoomPanel: View {
                         .font(.system(size: 17))
                         .focused($isFocused)
                         .onSubmit { open(matches, at: selection) }
-                        .onKeyPress(.downArrow) { move(1, in: matches) }
-                        .onKeyPress(.upArrow) { move(-1, in: matches) }
+                        .onKeyDown(.downArrow, focused: isFocused) { _ in move(1, in: matches) }
+                        .onKeyDown(.upArrow, focused: isFocused) { _ in move(-1, in: matches) }
                         .onExitCommand { close() }
                         .accessibilityLabel("Go to room")
                 }
@@ -44,12 +45,12 @@ struct GoToRoomPanel: View {
                 if !matches.isEmpty {
                     Divider()
                     VStack(spacing: 1) {
-                        ForEach(Array(matches.enumerated()), id: \.element.id) { index, match in
+                        ForEach(Array(matches.enumerated()), id: \.element.id) { index, match in WithPerceptionTracking {
                             GoToRoomRow(match: match, isSelected: index == selection,
                                         showsAccount: store.accounts.count > 1)
                                 .contentShape(Rectangle())
                                 .onTapGesture { open(matches, at: index) }
-                        }
+                        } }
                     }
                     .padding(6)
                 } else if !query.isEmpty {
@@ -67,8 +68,8 @@ struct GoToRoomPanel: View {
             .padding(.top, 72)
         }
         .onAppear { DispatchQueue.main.async { isFocused = true } }
-        .onChange(of: query) { selection = 0 }
-    }
+        .onChanged(of: query) { selection = 0 }
+    } }
 
     /// Before anything is typed, the rooms visited lately (not the one showing); after, those
     /// whose name starts with it, then those with a word that does, then any that have it.
@@ -108,7 +109,7 @@ struct GoToRoomPanel: View {
         return Array(ranked.sorted { $0.1 != $1.1 ? $0.1 < $1.1 : byRecency($0.0, $1.0) }.map(\.0).prefix(Self.mostShown))
     }
 
-    private func move(_ step: Int, in matches: [Match]) -> KeyPress.Result {
+    private func move(_ step: Int, in matches: [Match]) -> KeyResult {
         guard !matches.isEmpty else { return .handled }
         selection = (selection + step + matches.count) % matches.count
         return .handled
@@ -134,7 +135,7 @@ private struct GoToRoomRow: View {
     let isSelected: Bool
     let showsAccount: Bool
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 10) {
             AvatarView(media: match.account.media, url: match.room.avatarURL, name: match.room.name,
                        seed: match.room.avatarSeed, size: 24)
@@ -160,5 +161,5 @@ private struct GoToRoomRow: View {
         .background(isSelected ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
+    } }
 }

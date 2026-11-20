@@ -1,11 +1,12 @@
 import SwiftUI
+import Perception
 
 /// The colour of pins wherever they appear: a pushpin's.
 private let pinTint = Color.orange
 
 /// "Pinned", beside a pinned message's time or above its text.
 struct PinnedMark: View {
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 3) {
             Image(systemName: "pin.fill")
                 .font(.system(size: 9, weight: .semibold))
@@ -15,7 +16,7 @@ struct PinnedMark: View {
                 .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
-    }
+    } }
 }
 
 /// Along the top of a room with pinned messages: one of them, and a way to all of them.
@@ -31,7 +32,7 @@ struct PinnedBanner: View {
     @State private var isHovering = false
     @Environment(\.nameColorRoom) private var nameColorRoom
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let message = messages[index]
         let preview = ReplyPreview(replyingTo: message, contactName: contactName)
         HStack(spacing: 10) {
@@ -79,7 +80,7 @@ struct PinnedBanner: View {
         .background(.bar)
         .overlay(alignment: .bottom) { Rectangle().fill(.separator).frame(height: 1) }
         .onHoverInFrontWindow { isHovering = $0 }
-    }
+    } }
 
     private func snippet(_ message: MessageRow, _ preview: ReplyPreview?) -> some View {
         HStack(spacing: 4) {
@@ -106,19 +107,19 @@ private struct PinIndicator: View {
     let count: Int
     let index: Int
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let shown = min(count, 3)
         let first = count <= 3 ? 0 : min(max(index - 1, 0), count - 3)
         VStack(spacing: 2) {
-            ForEach(0..<shown, id: \.self) { offset in
+            ForEach(0..<shown, id: \.self) { offset in WithPerceptionTracking {
                 Capsule()
                     .fill(first + offset == index ? AnyShapeStyle(pinTint) : AnyShapeStyle(.quaternary))
-            }
+            } }
         }
         .frame(width: 3, height: 30)
         .animation(.snappy(duration: 0.25), value: index)
         .accessibilityHidden(true)
-    }
+    } }
 }
 
 /// All of a room's pinned messages, in the side panel. Clicking one goes to it in the
@@ -128,14 +129,14 @@ struct PinnedListView: View {
     let roomID: String
     @State private var pins: RoomTimeline?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Group {
             if let pins {
                 let messages = ordered(pins)
                 if !messages.isEmpty {
                     ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(messages, id: \.itemID) { message in
+                        LazyVStack(spacing: 0) { WithPerceptionTracking {
+                            ForEach(messages, id: \.itemID) { message in WithPerceptionTracking {
                                 PinnedRow(message: message, media: account.media,
                                           contactName: { account.contactName(for: $0) },
                                           canUnpin: pins.permissions.canPin) {
@@ -146,13 +147,13 @@ struct PinnedListView: View {
                                     Task { await pins.setPinned(false, eventID: eventID) }
                                 }
                                 Divider().padding(.leading, 50)
-                            }
-                        }
+                            } }
+                        } }
                     }
                 } else if pins.isLoading || !pins.pinnedEventIDs.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ContentUnavailableView("No Pinned Messages",
+                    EmptyState("No Pinned Messages",
                                            systemImage: "pin",
                                            description: Text("Pin a message from its \u{22EF} menu to keep it here, where everyone in the room can find it."))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -168,7 +169,7 @@ struct PinnedListView: View {
             pins?.stop()
             pins = nil
         }
-    }
+    } }
 
     /// Most recently pinned first.
     private func ordered(_ pins: RoomTimeline) -> [MessageRow] {
@@ -191,7 +192,7 @@ private struct PinnedRow: View {
     @State private var isHovering = false
     @Environment(\.nameColorRoom) private var nameColorRoom
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let preview = ReplyPreview(replyingTo: message, contactName: contactName)
         Button(action: open) {
             HStack(alignment: .top, spacing: 10) {
@@ -241,5 +242,5 @@ private struct PinnedRow: View {
         .help("Go to this message")
         .accessibilityElement(children: .combine)
         .accessibilityAction(named: "Unpin") { if canUnpin { unpin() } }
-    }
+    } }
 }

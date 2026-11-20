@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// The panel beside a room's timeline: one thread, or the list of the room's threads.
 struct ThreadPanel: View {
@@ -33,7 +34,7 @@ struct ThreadPanel: View {
     @State private var pageTakesEscape = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
             header
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: content)
@@ -41,16 +42,16 @@ struct ThreadPanel: View {
             // Moving between pages slides the strip they sit in, by layout rather than by
             // shifting its picture: the scrolling parts of a page are drawn by AppKit, and
             // a shifted picture leaves them behind, one page showing through the other.
-            GeometryReader { proxy in
+            GeometryReader { proxy in WithPerceptionTracking {
                 HStack(spacing: 0) {
-                    ForEach(pages, id: \.self) { page in
+                    ForEach(pages, id: \.self) { page in WithPerceptionTracking {
                         self.page(page)
                             .frame(width: proxy.size.width, height: proxy.size.height)
-                    }
+                    } }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height,
                        alignment: showsLast ? .trailing : .leading)
-            }
+            } }
             // Whatever it shows (a thread, the list, a short "No Threads Yet"), the panel is the
             // full height of the room: shrunk to its content, it would float mid-column.
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -66,8 +67,8 @@ struct ThreadPanel: View {
             if pages.isEmpty { pages = [content] }
             withAnimation(reduceMotion ? .easeOut(duration: 0.2) : Motion.panelContent) { hasSettled = true }
         }
-        .onChange(of: content) { _, new in move(to: new) }
-    }
+        .onChanged(of: content) { _, new in move(to: new) }
+    } }
 
     @ViewBuilder private func page(_ page: Content) -> some View {
         switch page {
@@ -126,7 +127,7 @@ struct ThreadPanel: View {
         DispatchQueue.main.async {
             guard count == moveCount else { return }
             // Tidied only once the strip has come fully to rest, or the swap could nudge it.
-            withAnimation(Motion.panelPush, completionCriteria: .removed) {
+            withAnimationThen(Motion.panelPush, untilRemoved: true) {
                 showsLast = forward
             } completion: {
                 // Only the new page stays; it doesn't move as the strip loses the old one.
@@ -202,7 +203,7 @@ private struct ThreadTimelineHost: View {
     @State private var timeline: RoomTimeline?
     @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Group {
             if let timeline {
                 TimelineView(timeline: timeline, media: account.media, placeholder: "Reply in thread")
@@ -220,7 +221,7 @@ private struct ThreadTimelineHost: View {
             timeline?.stop()
             timeline = nil
         }
-    }
+    } }
 }
 
 private struct ThreadListView: View {
@@ -229,35 +230,35 @@ private struct ThreadListView: View {
     let open: (String) -> Void
     @State private var list: RoomThreadList?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Group {
             if let list {
                 if list.entries.isEmpty {
                     if list.isLoading {
                         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        ContentUnavailableView("No Threads Yet",
+                        EmptyState("No Threads Yet",
                                                systemImage: "bubble.left.and.text.bubble.right",
                                                description: Text("Hover over a message and choose Reply in thread to start one."))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 0) {
+                        LazyVStack(spacing: 0) { WithPerceptionTracking {
                             let new = Set(account.openTimeline(for: roomID)?.newThreads.map(\.id) ?? [])
-                            ForEach(list.entries) { entry in
+                            ForEach(list.entries) { entry in WithPerceptionTracking {
                                 ThreadListRow(entry: entry, isNew: new.contains(entry.id), media: account.media) {
                                     open(entry.id)
                                 }
                                 Divider().padding(.leading, 50)
-                            }
+                            } }
                             if list.hasMore {
                                 ProgressView()
                                     .controlSize(.small)
                                     .padding(12)
                                     .task(id: list.entries.count) { await list.loadMore() }
                             }
-                        }
+                        } }
                     }
                 }
             } else {
@@ -271,7 +272,7 @@ private struct ThreadListView: View {
             list?.stop()
             list = nil
         }
-    }
+    } }
 }
 
 private struct ThreadListRow: View {
@@ -282,7 +283,7 @@ private struct ThreadListRow: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             HStack(alignment: .top, spacing: 10) {
                 AvatarView(media: media,
@@ -334,7 +335,7 @@ private struct ThreadListRow: View {
         }
         .buttonStyle(.plain)
         .onHoverInFrontWindow { isHovering = $0 }
-    }
+    } }
 }
 
 /// Set by a panel page while Escape is its own (to cancel an edit), so the panel's close

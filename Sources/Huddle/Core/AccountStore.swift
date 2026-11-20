@@ -1,10 +1,10 @@
 import AppKit
 import Foundation
 import MatrixRustSDK
-import Observation
+import Perception
 
 /// All logged-in accounts. Every account syncs concurrently.
-@MainActor @Observable
+@MainActor @Perceptible
 final class AccountStore {
     private(set) var accounts: [AccountSession] = []
     private(set) var isRestoring = true

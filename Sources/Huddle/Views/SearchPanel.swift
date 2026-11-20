@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// Searching messages, in the panel beside a room: this room's or every room's. Clicking a
 /// result goes to it; the arrow keys (or ⌘G and ⇧⌘G) go through them in turn.
@@ -8,8 +9,8 @@ struct SearchPanelView: View {
 
     private var search: MessageSearch { account.search }
 
-    var body: some View {
-        @Bindable var search = search
+    var body: some View { WithPerceptionTracking {
+        @Perception.Bindable var search = search
         VStack(spacing: 0) {
             VStack(spacing: 10) {
                 SearchField(text: $search.query, prompt: "Search messages", focusRequest: search.focusRequest,
@@ -37,12 +38,12 @@ struct SearchPanelView: View {
             }
         }
         .onAppear { search.roomID = roomID }
-    }
+    } }
 
     @ViewBuilder private var results: some View {
         let shown = search.shown
         if !search.isSearching {
-            ContentUnavailableView {
+            EmptyState {
                 Label("Search Messages", systemImage: "magnifyingglass")
             } description: {
                 Text("Find messages by the words in them, in encrypted rooms too: they’re searched right here on this Mac.")
@@ -52,16 +53,16 @@ struct SearchPanelView: View {
                 ProgressView()
                     .controlSize(.small)
             } else if let failure = search.failure {
-                ContentUnavailableView("Can’t Search", systemImage: "exclamationmark.triangle",
+                EmptyState("Can’t Search", systemImage: "exclamationmark.triangle",
                                        description: Text(failure))
             } else {
-                ContentUnavailableView.search(text: search.trimmedQuery)
+                SearchEmptyState(text: search.trimmedQuery)
             }
         } else {
-            ScrollViewReader { proxy in
+            ScrollViewReader { proxy in WithPerceptionTracking {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(shown) { hit in
+                    LazyVStack(spacing: 0) { WithPerceptionTracking {
+                        ForEach(shown) { hit in WithPerceptionTracking {
                             SearchResultRow(account: account, hit: hit,
                                             query: ([search.trimmedQuery] + search.highlights).joined(separator: " "),
                                             showsRoom: search.scope == .all,
@@ -71,19 +72,19 @@ struct SearchPanelView: View {
                             .id(hit.eventID)
                             .onAppear { if hit.eventID == shown.last?.eventID { search.loadMore() } }
                             Divider().padding(.leading, 50)
-                        }
+                        } }
                         if search.isLoading {
                             ProgressView()
                                 .controlSize(.small)
                                 .padding(12)
                         }
-                    }
+                    } }
                 }
-                .onChange(of: search.selectedEventID) { _, id in
+                .onChanged(of: search.selectedEventID) { _, id in
                     guard let id else { return }
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) }
                 }
-            }
+            } }
         }
     }
 
@@ -117,7 +118,7 @@ private struct SearchResultRow: View {
         return account.allRooms.first { $0.id == hit.roomID }?.name
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: open) {
             HStack(alignment: .top, spacing: 10) {
                 AvatarView(media: account.media, url: hit.senderAvatarURL, name: senderName,
@@ -166,7 +167,7 @@ private struct SearchResultRow: View {
         .help("Go to this message")
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
+    } }
 
     private var background: some ShapeStyle {
         if isSelected { return AnyShapeStyle(Color.accentColor.opacity(0.14)) }
@@ -239,7 +240,7 @@ enum SearchSnippet {
 private struct IndexingNote: View {
     let indexer: HistoryIndexer
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             ProgressView(value: Double(indexer.roomsDone), total: Double(max(indexer.roomsTotal, 1)))
                 .progressViewStyle(.circular)
@@ -257,5 +258,5 @@ private struct IndexingNote: View {
         .overlay(alignment: .top) { Divider() }
         .help("Older messages in encrypted rooms are being downloaded and indexed on this Mac, so search can find them. Settings ▸ Privacy can turn this off.")
         .accessibilityElement(children: .combine)
-    }
+    } }
 }

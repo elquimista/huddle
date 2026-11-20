@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// A picture in the timeline: a blurred stand-in while it loads, then the picture itself, sized
 /// to fit without being enlarged. Animations play in place. Clicking opens it at full size.
@@ -25,6 +26,8 @@ struct ImageMessageView: View {
     @State private var attempt = 0
     @State private var isOnScreen = false
     @Environment(\.displayScale) private var displayScale
+    /// The scroll view's size, for what's in view on macOS 13 (Compat.swift).
+    @Environment(\.scrollViewport) private var scrollViewport
 
     private struct LoadKey: Equatable {
         let url: String
@@ -41,7 +44,7 @@ struct ImageMessageView: View {
                           maxWidth: contentWidth)
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let size = displaySize
         // Rounded like everything else in the timeline, but gently on an image that is itself small.
         let radius = image.isSticker ? 0 : min(10, min(size.width, size.height) * 0.18)
@@ -102,12 +105,12 @@ struct ImageMessageView: View {
         }
         .animation(.easeOut(duration: 0.2), value: still != nil)
         // An animation only runs while it can be seen.
-        .onGeometryChange(for: Bool.self) { proxy in
-            guard let visible = proxy.bounds(of: .scrollView) else { return true }
+        .onGeometryChange(for: Bool.self) { [scrollViewport] proxy in
+            guard let visible = ScrollSpace.visibleBounds(proxy, viewport: scrollViewport) else { return true }
             return visible.intersects(proxy.frame(in: .local))
         } action: { isOnScreen = $0 }
         .task(id: LoadKey(url: image.media.source.url(), attempt: attempt, isLocal: sendState != nil)) { await load() }
-    }
+    } }
 
     // MARK: Loading
 
@@ -202,7 +205,7 @@ struct UploadOverlay: View {
     let uploadProgress: Double?
     let cancel: (() -> Void)?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         ZStack {
             Color.black.opacity(0.35)
             if sendState == .failed {
@@ -236,7 +239,7 @@ struct UploadOverlay: View {
                 .accessibilityValue(uploadProgress.map { "\(Int($0 * 100)) percent" } ?? "Starting")
             }
         }
-    }
+    } }
 }
 
 /// Plays an animated image (a GIF). SwiftUI's own `Image` shows only the first frame.

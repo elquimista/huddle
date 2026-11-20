@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// What a click on a link may open. Links in messages are written by whoever sent them: one
 /// can name any app's URL scheme (smb:, file:, ssh:, a settings pane, another app's), or read as

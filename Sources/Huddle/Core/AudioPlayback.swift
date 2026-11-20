@@ -1,7 +1,7 @@
 import AVFoundation
 import CoreAudio
 import MatrixRustSDK
-import Observation
+import Perception
 
 /// Plays audio messages, one at a time, for the whole app.
 ///
@@ -10,7 +10,7 @@ import Observation
 /// the interface must stay responsive through that. So the player lives on its own queue
 /// (`AudioVoice`), and this class keeps a clock of its own for drawing progress, corrected against
 /// the real player a couple of times a second.
-@MainActor @Observable
+@MainActor @Perceptible
 final class AudioPlayback {
     static let shared = AudioPlayback()
 
@@ -41,19 +41,19 @@ final class AudioPlayback {
         return AudioPlayback.rates.contains(stored) ? stored : 1
     }()
 
-    @ObservationIgnored private var voice: AudioVoice?
-    @ObservationIgnored private var loading: Task<Void, Never>?
-    @ObservationIgnored private var monitor: Task<Void, Never>?
+    @PerceptionIgnored private var voice: AudioVoice?
+    @PerceptionIgnored private var loading: Task<Void, Never>?
+    @PerceptionIgnored private var monitor: Task<Void, Never>?
     /// The timeline the audio was started from, so leaving it can stop the sound.
-    @ObservationIgnored private var owner: ObjectIdentifier?
+    @PerceptionIgnored private var owner: ObjectIdentifier?
     /// Goes up whenever what is loaded changes; late answers about older audio are dropped.
-    @ObservationIgnored private var session = 0
+    @PerceptionIgnored private var session = 0
     /// Goes up on every pause, resume, seek and speed change; a position report that was asked
     /// for before the latest of them is out of date.
-    @ObservationIgnored private var revision = 0
+    @PerceptionIgnored private var revision = 0
     /// Position at `clockStart`, and when that was; nil while not advancing.
-    @ObservationIgnored private var clockPosition: TimeInterval = 0
-    @ObservationIgnored private var clockStart: Date?
+    @PerceptionIgnored private var clockPosition: TimeInterval = 0
+    @PerceptionIgnored private var clockStart: Date?
 
     /// Where the audio has got to. Not observed: read it once per frame while playing.
     var currentTime: TimeInterval {

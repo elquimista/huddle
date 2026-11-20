@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// A plain one-line text field that hands the keys a search or picker field needs (Return,
 /// the up and down arrows, Backspace with nothing typed, Escape) to its owner. A SwiftUI

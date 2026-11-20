@@ -1,5 +1,6 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 struct RoomView: View {
     let account: AccountSession
@@ -39,14 +40,14 @@ struct RoomView: View {
         account.rooms.first { $0.id == roomID }
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Group {
             if let room = account.room(id: roomID), room.membership() == .invited || summary?.isInvite == true {
                 InviteView(account: account, roomID: roomID, name: title)
             } else if let timeline = account.timeline(for: roomID) {
                 // Read here rather than in the toolbar's content, whose changes aren't followed.
                 let isInCall = CallCenter.shared.isInCall(account: account, roomID: roomID)
-                GeometryReader { geometry in
+                GeometryReader { geometry in WithPerceptionTracking {
                     let layout = PanelLayout(width: geometry.size.width, preferred: CGFloat(preferredPanelWidth))
                     ZStack(alignment: .trailing) {
                         HStack(spacing: 0) {
@@ -84,16 +85,16 @@ struct RoomView: View {
                             panelSlot(width: layout.overlayWidth, layout: layout)
                         }
                     }
-                }
+                } }
                 .onAppear {
                     shownPanel = panel
                     isPanelOut = panel != nil
                     roomForPanel = panel != nil
                 }
-                .onChange(of: timeline.pinnedEventIDs.isEmpty) { _, none in
+                .onChanged(of: timeline.pinnedEventIDs.isEmpty) { _, none in
                     if none { account.dropBannerPins(for: roomID) }
                 }
-                .onChange(of: panel) { _, new in panelChanged(to: new) }
+                .onChanged(of: panel) { _, new in panelChanged(to: new) }
                 // People's colours as this room has them, everywhere inside it (NameColors).
                 .environment(\.nameColorRoom, roomID)
                 .toolbar {
@@ -178,7 +179,7 @@ struct RoomView: View {
                     }
                 }
             } else {
-                ContentUnavailableView("Room Unavailable", systemImage: "questionmark.bubble")
+                EmptyState("Room Unavailable", systemImage: "questionmark.bubble")
             }
         }
         .environment(\.accountSession, account)
@@ -190,7 +191,7 @@ struct RoomView: View {
         .navigationTitle(title)
         // In a direct chat, whether the other person is around; in a room, its topic.
         .navigationSubtitle(subtitle)
-    }
+    } }
 
     /// The panel's place at the room's trailing edge. Closed, it is no width at all, and the
     /// panel, pinned to its leading edge, waits beyond the window's edge; opening gives it its
@@ -240,7 +241,7 @@ struct RoomView: View {
             DispatchQueue.main.async {
                 guard panel == nil else { return }
                 // Gone once it is out of sight, without waiting for the spring's last fraction.
-                withAnimation(Motion.panelOut) {
+                withAnimationThen(Motion.panelOut) {
                     isPanelOut = false
                 } completion: {
                     if panel == nil { shownPanel = nil }
@@ -324,7 +325,7 @@ private struct InviteView: View {
     @State private var isBusy = false
     @State private var error: String?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 14) {
             Image(systemName: "envelope.open")
                 .font(.system(size: 40))
@@ -342,7 +343,7 @@ private struct InviteView: View {
             .disabled(isBusy)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
+    } }
 
     private func run(_ work: @escaping () async throws -> Void) {
         isBusy = true
@@ -396,7 +397,7 @@ private struct PanelResizeHandle: View {
     @State private var isHovering = false
     @State private var isDragging = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Rectangle()
             .fill(.separator)
             .frame(width: 1)
@@ -435,7 +436,7 @@ private struct PanelResizeHandle: View {
             .accessibilityLabel("Thread panel divider")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction(named: "Standard width", onReset)
-    }
+    } }
 
     @State private var cursorShown = false
 

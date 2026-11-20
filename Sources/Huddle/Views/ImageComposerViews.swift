@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import Perception
 
 /// Pictures and files waiting in the composer to be sent, each with a button to take it out
 /// again: pictures as thumbnails, files as tiles with their icon, name and size.
@@ -12,13 +13,13 @@ struct StagedImagesRow: View {
 
     private static let side: CGFloat = 64
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
-                ForEach(files) { file in
+                ForEach(files) { file in WithPerceptionTracking {
                     StagedFileTile(file: file, height: Self.side) { removeFile(file) }
-                }
-                ForEach(images) { image in
+                } }
+                ForEach(images) { image in WithPerceptionTracking {
                     Image(nsImage: image.preview)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -56,7 +57,7 @@ struct StagedImagesRow: View {
                             .accessibilityLabel("Remove \(image.filename)")
                         }
                         .help(Self.describe(image))
-                }
+                } }
             }
             // Room for the remove buttons, which sit on the corners.
             .padding(.top, 7)
@@ -64,7 +65,7 @@ struct StagedImagesRow: View {
             .padding(.leading, 2)
         }
         .frame(height: Self.side + 7)
-    }
+    } }
 
     private static func describe(_ image: StagedImage) -> String {
         let size = ByteCountFormatter.string(fromByteCount: Int64(image.data.count), countStyle: .file)
@@ -77,7 +78,7 @@ struct AttachButton: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             Image(systemName: "plus")
                 .font(.system(size: 13, weight: .semibold))
@@ -90,12 +91,12 @@ struct AttachButton: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .help("Attach pictures or files")
         .accessibilityLabel("Attach pictures or files")
-    }
+    } }
 }
 
 /// Shown over the conversation while images are dragged across it.
 struct DropTargetOverlay: View {
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.accentColor.opacity(0.12))
@@ -111,7 +112,7 @@ struct DropTargetOverlay: View {
         }
         .padding(10)
         .allowsHitTesting(false)
-    }
+    } }
 }
 
 /// Catches ⌘V in a composer when the clipboard holds a picture, which a text field would ignore.
@@ -291,7 +292,7 @@ private struct StagedFileTile: View {
     let height: CGFloat
     let remove: () -> Void
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             Image(nsImage: NSWorkspace.shared.icon(for: file.type ?? .data))
                 .resizable()
@@ -333,5 +334,5 @@ private struct StagedFileTile: View {
         .help(file.filename)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("File to send: \(file.filename)")
-    }
+    } }
 }

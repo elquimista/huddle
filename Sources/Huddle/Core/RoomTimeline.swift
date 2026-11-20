@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import MatrixRustSDK
-import Observation
+import Perception
 
 struct TimelineRow: Identifiable, Equatable {
     enum Kind: Equatable {
@@ -220,7 +220,7 @@ extension String {
     }
 }
 
-@MainActor @Observable
+@MainActor @Perceptible
 final class RoomTimeline {
     let room: Room
     let roomID: String
@@ -238,12 +238,12 @@ final class RoomTimeline {
     private(set) var hasMoreNewer = true
     /// Focused timeline only: counts finished requests for newer messages.
     private(set) var newerRequests = 0
-    @ObservationIgnored private var isPaginatingForwards = false
+    @PerceptionIgnored private var isPaginatingForwards = false
     /// Set when the user marks the room unread while it is open: it stays unread (nothing is
     /// marked read, here or on leaving) until it is opened again or they write in it.
-    @ObservationIgnored var holdsUnread = false
+    @PerceptionIgnored var holdsUnread = false
     /// Changes whenever a name is learned, so text naming people by their ID is drawn again.
-    @ObservationIgnored private(set) var nameVersion = 0
+    @PerceptionIgnored private(set) var nameVersion = 0
     /// The room's pinned messages, by event ID, in the order they were pinned (oldest first).
     private(set) var pinnedEventIDs: [String] = []
     /// What this account may do to messages here.
@@ -264,67 +264,67 @@ final class RoomTimeline {
     private(set) var prependAnchorID: String?
     private(set) var error: String?
 
-    @ObservationIgnored private var timeline: Timeline?
-    @ObservationIgnored private var items: [TimelineItem] = []
-    @ObservationIgnored private var listenerHandle: TaskHandle?
-    @ObservationIgnored private var updatesTask: Task<Void, Never>?
-    @ObservationIgnored private(set) var ownUserID: String
+    @PerceptionIgnored private var timeline: Timeline?
+    @PerceptionIgnored private var items: [TimelineItem] = []
+    @PerceptionIgnored private var listenerHandle: TaskHandle?
+    @PerceptionIgnored private var updatesTask: Task<Void, Never>?
+    @PerceptionIgnored private(set) var ownUserID: String
     /// Room timeline only. Replies newer than this are new: when you had last marked the room
     /// read, as of opening it.
-    @ObservationIgnored private var unreadHorizon: Date?
+    @PerceptionIgnored private var unreadHorizon: Date?
     /// Room timeline only. When each thread was last read here, by root event ID.
-    @ObservationIgnored private var threadSeen: [String: Date] = [:]
+    @PerceptionIgnored private var threadSeen: [String: Date] = [:]
     /// Live room timeline only. The room's threads, most recently active first, followed so a
     /// reply to one whose root is far back, or not loaded at all, is known about.
-    @ObservationIgnored private var threadActivity: RoomThreadList?
+    @PerceptionIgnored private var threadActivity: RoomThreadList?
     /// Live room timeline only. Threads someone else has replied to since you last read the
     /// room or the thread, most recently active first.
     private(set) var newThreads: [ThreadListEntry] = []
     /// Live room timeline only. Told the date of the newest reply in any thread, so the room
     /// list can say when the room's newest message is one.
-    @ObservationIgnored var onLatestThreadReply: ((Date?) -> Void)?
+    @PerceptionIgnored var onLatestThreadReply: ((Date?) -> Void)?
     /// Thread timeline only. Tells the room's timeline that this thread has been read.
     /// Everyone else in the room, for mention suggestions. Empty until `loadMembers()`.
     private(set) var members: [MentionCandidate] = []
-    @ObservationIgnored private var membersRequested = false
-    @ObservationIgnored private var requestedReplyDetails: Set<String> = []
-    @ObservationIgnored private var imageQueue: [QueuedImage] = []
-    @ObservationIgnored private var imageQueueTask: Task<Void, Never>?
+    @PerceptionIgnored private var membersRequested = false
+    @PerceptionIgnored private var requestedReplyDetails: Set<String> = []
+    @PerceptionIgnored private var imageQueue: [QueuedImage] = []
+    @PerceptionIgnored private var imageQueueTask: Task<Void, Never>?
     /// The queued image just given to the SDK, and which unsent image rows existed before it.
-    @ObservationIgnored private var handover: (id: UUID, before: Set<String>)?
-    @ObservationIgnored var onRead: (() -> Void)?
-    @ObservationIgnored var onLatestReaction: ((ReactionPreview?) -> Void)?
-    @ObservationIgnored private var latestReaction: ReactionPreview?
-    @ObservationIgnored private var lastRoomReceipt: String?
+    @PerceptionIgnored private var handover: (id: UUID, before: Set<String>)?
+    @PerceptionIgnored var onRead: (() -> Void)?
+    @PerceptionIgnored var onLatestReaction: ((ReactionPreview?) -> Void)?
+    @PerceptionIgnored private var latestReaction: ReactionPreview?
+    @PerceptionIgnored private var lastRoomReceipt: String?
     /// A two-person direct chat shows ticks on your messages; other rooms show who has read.
-    @ObservationIgnored private(set) var isOneToOne = false
+    @PerceptionIgnored private(set) var isOneToOne = false
     /// Just two people in the room, direct chat or not: a call there is one person calling the other.
-    @ObservationIgnored private var hasTwoPeople = false
+    @PerceptionIgnored private var hasTwoPeople = false
     /// One-to-one calls' events met so far, by event ID: read once each from the event itself.
-    @ObservationIgnored private var callEvents: [String: CallEvent] = [:]
+    @PerceptionIgnored private var callEvents: [String: CallEvent] = [:]
     /// Names and avatars for read receipts, learned from messages and fetched for the rest.
-    @ObservationIgnored private var profiles: [String: (name: String, avatarURL: String?)] = [:]
-    @ObservationIgnored private var requestedProfiles: Set<String> = []
-    @ObservationIgnored private var infoHandle: TaskHandle?
-    @ObservationIgnored private var infoTask: Task<Void, Never>?
+    @PerceptionIgnored private var profiles: [String: (name: String, avatarURL: String?)] = [:]
+    @PerceptionIgnored private var requestedProfiles: Set<String> = []
+    @PerceptionIgnored private var infoHandle: TaskHandle?
+    @PerceptionIgnored private var infoTask: Task<Void, Never>?
     /// Room timeline only: members whose identity changed, as the room's identity stream says.
     private(set) var identityWarnings: [IdentityWarning] = []
-    @ObservationIgnored private var identityStates: [String: IdentityState] = [:]
-    @ObservationIgnored private var identityHandle: TaskHandle?
-    @ObservationIgnored private var identityTask: Task<Void, Never>?
+    @PerceptionIgnored private var identityStates: [String: IdentityState] = [:]
+    @PerceptionIgnored private var identityHandle: TaskHandle?
+    @PerceptionIgnored private var identityTask: Task<Void, Never>?
     /// Told of each change to a member's identity, so what is known of who is verified follows.
-    @ObservationIgnored var onIdentityChanges: (([IdentityStatusChange]) -> Void)?
+    @PerceptionIgnored var onIdentityChanges: (([IdentityStatusChange]) -> Void)?
     /// Room timeline only: who else is writing a message here now, as the account hears it.
     private(set) var typists: [Typist] = []
-    @ObservationIgnored private var typingUserIDs: [String] = []
+    @PerceptionIgnored private var typingUserIDs: [String] = []
     /// While this account is said to be typing here: when the user last typed.
-    @ObservationIgnored private var lastKeystroke: Date?
+    @PerceptionIgnored private var lastKeystroke: Date?
     /// Keeps saying this account is typing, until the user stops.
-    @ObservationIgnored private var typingKeeper: Task<Void, Never>?
+    @PerceptionIgnored private var typingKeeper: Task<Void, Never>?
     /// Whether the account shares when it's typing. Nothing is said until the account says so.
-    @ObservationIgnored var sharesTyping: () -> Bool = { false }
+    @PerceptionIgnored var sharesTyping: () -> Bool = { false }
     /// The typing notices sent so far, each after the one before, so the room hears them in order.
-    @ObservationIgnored private var typingNotice: Task<Void, Never>?
+    @PerceptionIgnored private var typingNotice: Task<Void, Never>?
 
     init(room: Room, threadRoot: String? = nil, isPinnedList: Bool = false, focusedOn focusedEvent: String? = nil) {
         self.room = room
@@ -678,7 +678,7 @@ final class RoomTimeline {
     func knownName(for userID: String) -> String? { contactName(userID) ?? profiles[userID]?.name }
 
     /// The user's own name for someone (ContactNames.swift), set by the account.
-    @ObservationIgnored var contactName: (String) -> String? = { _ in nil }
+    @PerceptionIgnored var contactName: (String) -> String? = { _ in nil }
 
     /// The user's names for people changed: everything naming them, drawn again.
     func namesChanged() {
@@ -812,7 +812,7 @@ final class RoomTimeline {
 
     /// Loads the room's members for mention suggestions, once.
     /// How many people were in the room when names' colours were last worked out.
-    @ObservationIgnored private var nameColorMembers: Int?
+    @PerceptionIgnored private var nameColorMembers: Int?
 
     /// Works out names' colours for a room of up to six again (NameColors), when the number of
     /// people in it has changed: someone joined or left.

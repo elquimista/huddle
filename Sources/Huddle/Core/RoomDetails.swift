@@ -1,10 +1,11 @@
 import Foundation
 import MatrixRustSDK
+import Perception
 
 /// What the Room Info panel shows and changes: a room's name, topic and picture, whether it is
 /// encrypted, and who is in it. Follows the room as it changes (here or on another device), and
 /// knows what this account may change.
-@MainActor @Observable
+@MainActor @Perceptible
 final class RoomDetails {
     struct Member: Identifiable, Equatable {
         var id: String { userID }
@@ -51,12 +52,12 @@ final class RoomDetails {
     private(set) var joinedCount = 0
     private(set) var invitedCount = 0
 
-    @ObservationIgnored private let room: Room
-    @ObservationIgnored private let ownUserID: String
-    @ObservationIgnored private var handle: TaskHandle?
-    @ObservationIgnored private var memberTask: Task<Void, Never>?
+    @PerceptionIgnored private let room: Room
+    @PerceptionIgnored private let ownUserID: String
+    @PerceptionIgnored private var handle: TaskHandle?
+    @PerceptionIgnored private var memberTask: Task<Void, Never>?
     /// The power levels given to people, last seen: when they change, so do roles.
-    @ObservationIgnored private var userLevels: [String: Int64] = [:]
+    @PerceptionIgnored private var userLevels: [String: Int64] = [:]
 
     init(room: Room, ownUserID: String) {
         self.room = room

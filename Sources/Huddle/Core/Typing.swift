@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import MatrixRustSDK
+import Perception
 
 /// Someone writing a message in a room right now.
 struct Typist: Identifiable, Equatable {
@@ -13,7 +14,7 @@ struct Typist: Identifiable, Equatable {
 
 /// Who is typing in one room, by name, for its row in the room list. Each room has its own, so
 /// a row redraws for its room's typing and no other's.
-@MainActor @Observable
+@MainActor @Perceptible
 final class RoomTypists {
     var names: [String] = []
 }

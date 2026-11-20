@@ -107,7 +107,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>$BUILD</string>
     <key>HuddleCommit</key><string>$COMMIT</string>
     <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Felix-Andre Lee</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.social-networking</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>

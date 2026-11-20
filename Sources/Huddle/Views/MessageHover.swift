@@ -1,5 +1,5 @@
-import Observation
 import SwiftUI
+import Perception
 
 /// Which message in a conversation shows its hover actions: one at a time, the one under the
 /// pointer, unless the pointer is on a message's action bar, when that message keeps them.
@@ -13,7 +13,7 @@ import SwiftUI
 /// Each message watches only its own flag, so a move from one message to the next redraws those
 /// two and no others.
 final class MessageHoverState {
-    @Observable final class Row {
+    @Perceptible final class Row {
         fileprivate(set) var isActive = false
     }
 
@@ -104,14 +104,14 @@ private struct FrontWindowHover: ViewModifier {
     /// A popover of the window's own (an emoji picker) leaves it active, not inactive.
     private var isInFront: Bool { windowState != .inactive || DevHooks.assumesActive }
 
-    func body(content: Content) -> some View {
+    func body(content: Content) -> some View { WithPerceptionTracking {
         content
             .onHover { over in
                 isOver = over
                 action(over && isInFront)
             }
-            .onChange(of: isInFront) { _, inFront in
+            .onChanged(of: isInFront) { _, inFront in
                 if isOver { action(inFront) }
             }
-    }
+    } }
 }

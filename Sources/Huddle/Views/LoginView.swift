@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 struct LoginView: View {
     let isFirstAccount: Bool
@@ -8,7 +9,7 @@ struct LoginView: View {
 
     private enum Field { case server, username, password }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
             header
                 .padding(.bottom, flow.error == nil ? 26 : 16)
@@ -29,12 +30,12 @@ struct LoginView: View {
             .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 8)),
                                     removal: .opacity))
 
-            ForEach(store.restoreErrors, id: \.self) { error in
+            ForEach(store.restoreErrors, id: \.self) { error in WithPerceptionTracking {
                 Text("Couldn’t restore \(error)")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 8)
-            }
+            } }
         }
         // Fixed height, pinned to the top, so the icon and title stay put as the steps change.
         .frame(width: 300, height: 460, alignment: .top)
@@ -61,7 +62,7 @@ struct LoginView: View {
                 .padding(14)
             }
         }
-    }
+    } }
 
     // MARK: Header
 
@@ -101,7 +102,7 @@ struct LoginView: View {
     // MARK: Steps
 
     private var serverStep: some View {
-        @Bindable var flow = flow
+        @Perception.Bindable var flow = flow
         return VStack(spacing: 14) {
             FieldGroup {
                 FieldRow(icon: "globe") {
@@ -122,7 +123,7 @@ struct LoginView: View {
     }
 
     private var passwordStep: some View {
-        @Bindable var flow = flow
+        @Perception.Bindable var flow = flow
         return VStack(spacing: 14) {
             FieldGroup {
                 FieldRow(icon: "person") {
@@ -198,7 +199,7 @@ struct LoginView: View {
 private struct FieldGroup<Content: View>: View {
     @ViewBuilder var content: Content
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) { content }
             .background(.background.opacity(0.55), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
@@ -206,14 +207,14 @@ private struct FieldGroup<Content: View>: View {
                     .strokeBorder(.separator.opacity(0.7))
             }
             .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
-    }
+    } }
 }
 
 private struct FieldRow<Content: View>: View {
     let icon: String
     @ViewBuilder var content: Content
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .medium))
@@ -225,7 +226,7 @@ private struct FieldRow<Content: View>: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 40)
-    }
+    } }
 }
 
 private struct PrimaryButton: View {
@@ -233,7 +234,7 @@ private struct PrimaryButton: View {
     let isBusy: Bool
     let action: () -> Void
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             ZStack {
                 Text(title).opacity(isBusy ? 0 : 1)
@@ -247,11 +248,11 @@ private struct PrimaryButton: View {
         .controlSize(.large)
         .keyboardShortcut(.defaultAction)
         .allowsHitTesting(!isBusy)
-    }
+    } }
 }
 
 private struct OrDivider: View {
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 10) {
             line
             Text("or")
@@ -259,7 +260,7 @@ private struct OrDivider: View {
                 .foregroundStyle(.tertiary)
             line
         }
-    }
+    } }
 
     private var line: some View {
         Rectangle().fill(.separator).frame(height: 1)
@@ -269,7 +270,7 @@ private struct OrDivider: View {
 private struct ErrorNote: View {
     let text: String
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Image(systemName: "exclamationmark.circle.fill")
             Text(text)
@@ -281,7 +282,7 @@ private struct ErrorNote: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
+    } }
 }
 
 /// Translucent backdrop with a soft accent glow behind the icon. On the first-run screen it
@@ -289,7 +290,7 @@ private struct ErrorNote: View {
 private struct LoginBackdrop: View {
     let coversWindow: Bool
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         ZStack {
             VisualEffect(material: coversWindow ? .underWindowBackground : .sheet,
                          blending: coversWindow ? .behindWindow : .withinWindow)
@@ -300,7 +301,7 @@ private struct LoginBackdrop: View {
         }
         .ignoresSafeArea()
         .background { if coversWindow { TitleBarBlender() } }
-    }
+    } }
 }
 
 private struct VisualEffect: NSViewRepresentable {

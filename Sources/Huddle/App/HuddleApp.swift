@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 @main
 struct HuddleApp: App {
@@ -10,27 +11,37 @@ struct HuddleApp: App {
 
     var body: some Scene {
         // Under a fixed name, so macOS finds it again whatever changes inside it (MainWindow).
-        WindowGroup(id: MainWindow.id) {
+        WindowGroup(id: MainWindow.id) { WithPerceptionTracking {
             RootView()
                 .environment(store)
                 .frame(minWidth: 720, minHeight: 540)
                 .task { await store.restore() }
-                .onChange(of: store.totalBadgeCount, initial: true) { _, count in
+                .onChanged(of: store.totalBadgeCount, initial: true) { _, count in
                     NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
                 }
-        }
+        } }
         .defaultSize(width: 1040, height: 680)
-        .commands {
-            CommandGroup(replacing: .appInfo) {
+        .commands { menus }
+
+        Settings {
+            SettingsView()
+                .environment(store)
+        }
+    }
+
+    /// The menu bar's menus: kept apart from `body`, where the compiler can't work out its
+    /// type in time.
+    @CommandsBuilder private var menus: some Commands {
+            CommandGroup(replacing: .appInfo) { WithPerceptionTracking {
                 Button("About \(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Huddle")") {
                     AboutPanel.show()
                 }
-            }
-            CommandGroup(after: .appInfo) {
+            } }
+            CommandGroup(after: .appInfo) { WithPerceptionTracking {
                 Button("Check for Updates…") { updater.checkForUpdates() }
                     .disabled(!updater.canCheck)
-            }
-            CommandGroup(replacing: .newItem) {
+            } }
+            CommandGroup(replacing: .newItem) { WithPerceptionTracking {
                 let account = store.selected
                 Button("New Message…") { account?.sheet = .newMessage }
                     .keyboardShortcut("n", modifiers: .command)
@@ -49,12 +60,12 @@ struct HuddleApp: App {
                 Divider()
                 Button("Add Account…") { store.isAddingAccount = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
-            }
-            CommandGroup(after: .pasteboard) {
+            } }
+            CommandGroup(after: .pasteboard) { WithPerceptionTracking {
                 let account = store.selected
                 let canSearch = account?.selectedRoomID != nil && account?.browsingSpaceID == nil
                 Divider()
-                Menu("Find") {
+                Menu("Find") { WithPerceptionTracking {
                     Button("Find…") { account?.showSearch(scope: .room) }
                         .keyboardShortcut("f", modifiers: .command)
                         .disabled(!canSearch)
@@ -68,21 +79,21 @@ struct HuddleApp: App {
                     Button("Find Previous") { account?.showSearchResult(after: -1) }
                         .keyboardShortcut("g", modifiers: [.command, .shift])
                         .disabled(!canSearch)
-                }
-            }
+                } }
+            } }
             // View ▸ Show/Hide Sidebar (⌃⌘S).
             SidebarCommands()
             // Window ▸ Huddle (⌘0): the window back after closing it.
-            CommandGroup(before: .windowList) {
+            CommandGroup(before: .windowList) { WithPerceptionTracking {
                 MainWindowCommand()
                 Divider()
-            }
+            } }
             // There is no help book: no Huddle Help item that only says so. The Help menu keeps
             // its search of the menus.
             CommandGroup(replacing: .help) {}
             // Moving around: rooms, spaces, accounts, and the way back. Paused while something is
             // over the conversation, which has keys of its own.
-            CommandMenu("Go") {
+            CommandMenu("Go") { WithPerceptionTracking {
                 let account = store.selected
                 let paused = store.navigationPaused
                 let history = RoomHistory.shared
@@ -117,13 +128,13 @@ struct HuddleApp: App {
                                                  set: { _ in account.choose(inRail: .home) }))
                         .keyboardShortcut(RailShortcut.home)
                         .disabled(paused)
-                    ForEach(Array(account.spaces.enumerated()), id: \.element.roomId) { index, space in
+                    ForEach(Array(account.spaces.enumerated()), id: \.element.roomId) { index, space in WithPerceptionTracking {
                         Toggle(space.displayName, isOn: Binding(
                             get: { account.selectedSpaceID == space.roomId },
                             set: { _ in account.choose(inRail: .space(space.roomId)) }))
                             .keyboardShortcut(RailShortcut.space(at: index))
                             .disabled(paused)
-                    }
+                    } }
                 }
                 Divider()
                 // Round the accounts; with two, back and forth. ⌥⌘→ and ⌥⌘← too (NavigationKeys).
@@ -135,15 +146,15 @@ struct HuddleApp: App {
                     .disabled(store.accounts.count < 2 || paused)
                 // The one showing ticked; ⌃1 to ⌃9 for the first nine, and no shortcut after that
                 // (rather than all of the rest sharing one).
-                ForEach(Array(store.accounts.enumerated()), id: \.element.id) { index, account in
+                ForEach(Array(store.accounts.enumerated()), id: \.element.id) { index, account in WithPerceptionTracking {
                     Toggle(account.displayName ?? account.userID, isOn: Binding(
                         get: { store.selectedID == account.id }, set: { _ in store.selectedID = account.id }))
                         .keyboardShortcut(index < 9 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 1)")),
                                                                        modifiers: .control) : nil)
                         .disabled(paused)
-                }
-            }
-            CommandMenu("Room") {
+                } }
+            } }
+            CommandMenu("Room") { WithPerceptionTracking {
                 let account = store.selected
                 let roomID = account?.selectedRoomID
                 Button("Room Info") {
@@ -175,28 +186,22 @@ struct HuddleApp: App {
                 Divider()
                 // The open room's, as its menu in the list has them.
                 let place = roomID.flatMap { id in account?.allRooms.first { $0.id == id } }.map { account?.place(of: $0) }
-                ForEach([("Favourite", SectionPlace.favourites), ("Low Priority", .lowPriority)], id: \.0) { title, target in
+                ForEach([("Favourite", SectionPlace.favourites), ("Low Priority", .lowPriority)], id: \.0) { title, target in WithPerceptionTracking {
                     Toggle(title, isOn: Binding(get: { place == target }, set: { isOn in
                         guard let account, let roomID else { return }
                         FailureAlert.run("Couldn’t Move the Room") { try await account.move(roomID, to: isOn ? target : .usual) }
                     }))
                     .disabled(roomID == nil || account?.browsingSpaceID != nil)
-                }
-            }
-        }
-
-        Settings {
-            SettingsView()
-                .environment(store)
-        }
+                } }
+            } }
     }
 }
 
 struct RootView: View {
     @Environment(AccountStore.self) private var store
 
-    var body: some View {
-        @Bindable var store = store
+    var body: some View { WithPerceptionTracking {
+        @Perception.Bindable var store = store
         Group {
             if store.isRestoring {
                 ProgressView()
@@ -221,29 +226,30 @@ struct RootView: View {
         // overlay here can't reach. `ImageViewerPresenter` puts it above everything, where it
         // takes every click. (Don't switch hit-testing off on this content instead: that makes
         // the sidebar lose its place under the toolbar and jump upward.)
-        .onChange(of: ImageViewerState.shared.item?.id) {
+        .onChanged(of: ImageViewerState.shared.item?.id) {
             ImageViewerPresenter.shared.show(ImageViewerState.shared.item)
         }
         .sheet(isPresented: Binding(
-            get: { store.isAddingAccount && !store.accounts.isEmpty },
-            set: { store.isAddingAccount = $0 })) {
+            // Read as the view is drawn, where it's tracked (macOS 13), not when SwiftUI asks.
+            get: { [isAdding = store.isAddingAccount && !store.accounts.isEmpty] in isAdding },
+            set: { store.isAddingAccount = $0 })) { WithPerceptionTracking {
             LoginView(isFirstAccount: false)
                 .frame(width: 440, height: 520)
-        }
+        } }
         // Links in messages open only web pages and email (LinkPolicy). Set here, inside the
         // window's view, not on it in the scene: macOS reopens the window by a name made from
         // the type of the scene's view, and a modifier added there would change it, so after an
         // update the window wouldn't come back.
         .environment(\.openURL, LinkPolicy.action)
-    }
+    } }
 }
 
 struct MainView: View {
     @Environment(AccountStore.self) private var store
-    @Bindable var account: AccountSession
+    @Perception.Bindable var account: AccountSession
     @State private var sidebar = SidebarWidth()
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         NavigationSplitView {
             HStack(spacing: 0) {
                 if SpaceRail.isShown(for: account) {
@@ -286,7 +292,7 @@ struct MainView: View {
                         RoomView(account: account, roomID: roomID)
                             .id(roomID)
                     } else {
-                        ContentUnavailableView("No Room Selected",
+                        EmptyState("No Room Selected",
                                                systemImage: "bubble.left.and.bubble.right",
                                                description: Text("Pick a conversation from the list."))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -295,9 +301,9 @@ struct MainView: View {
                 .id(account.id)
             }
         }
-        .sheet(item: $account.sheet) { sheet in
+        .sheet(item: $account.sheet) { sheet in WithPerceptionTracking {
             AccountSheetView(account: account, sheet: sheet)
-        }
+        } }
         .detailTitlebarSeparatorHidden()
-    }
+    } }
 }

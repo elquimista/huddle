@@ -1,5 +1,6 @@
 import Foundation
 import MatrixRustSDK
+import Perception
 
 /// A message found by a search, ready to show.
 struct SearchHit: Identifiable, Equatable {
@@ -47,7 +48,7 @@ struct SearchHit: Identifiable, Equatable {
 /// - the homeserver's own search, which covers the whole history of unencrypted rooms
 ///   without anything being downloaded.
 /// One search per account, so it carries on from room to room.
-@MainActor @Observable
+@MainActor @Perceptible
 final class MessageSearch {
     enum Scope: Hashable {
         case room
@@ -87,11 +88,11 @@ final class MessageSearch {
     private var serverLoading = false
     private var serverEnded = false
     private var serverStarted = false
-    @ObservationIgnored private var serverNextBatch: String?
+    @PerceptionIgnored private var serverNextBatch: String?
     /// Forms of the searched-for words the server matched, to pick out in its results.
     private(set) var highlights: [String] = []
     /// Counts server searches, so a page that arrives for an earlier one is dropped.
-    @ObservationIgnored private var serverGeneration = 0
+    @PerceptionIgnored private var serverGeneration = 0
 
     var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     var isSearching: Bool { !trimmedQuery.isEmpty }
@@ -118,11 +119,11 @@ final class MessageSearch {
         return merged.filter { $0.date >= cutoff }
     }
 
-    @ObservationIgnored private let service: SearchService
-    @ObservationIgnored private let server: ServerSearch
-    @ObservationIgnored private var handles: [TaskHandle] = []
-    @ObservationIgnored private var localResults: [SearchServiceResult] = []
-    @ObservationIgnored private var queryTask: Task<Void, Never>?
+    @PerceptionIgnored private let service: SearchService
+    @PerceptionIgnored private let server: ServerSearch
+    @PerceptionIgnored private var handles: [TaskHandle] = []
+    @PerceptionIgnored private var localResults: [SearchServiceResult] = []
+    @PerceptionIgnored private var queryTask: Task<Void, Never>?
 
     /// Enough results in view that the list fills the panel; more load as it scrolls.
     private static let pageTarget = 20

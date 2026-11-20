@@ -1,7 +1,7 @@
 import AppKit
 import AVFoundation
 import MatrixRustSDK
-import Observation
+import Perception
 
 /// What a video message says about the film before it's downloaded, as the sender reported it.
 struct VideoDetails: Equatable {
@@ -124,7 +124,7 @@ actor VideoFiles {
 
 /// Plays video messages in the conversation, one at a time, for the whole app: starting one
 /// stops another, and an audio message, which stops a video in turn.
-@MainActor @Observable
+@MainActor @Perceptible
 final class VideoPlayback {
     static let shared = VideoPlayback()
 
@@ -146,13 +146,13 @@ final class VideoPlayback {
     /// Likewise their length, for those sent without one.
     private(set) var durations: [String: TimeInterval] = [:]
 
-    @ObservationIgnored private var loading: Task<Void, Never>?
+    @PerceptionIgnored private var loading: Task<Void, Never>?
     /// The timeline the video was started from, so leaving it can stop it.
-    @ObservationIgnored private var owner: ObjectIdentifier?
+    @PerceptionIgnored private var owner: ObjectIdentifier?
     /// Goes up whenever what is loaded changes; late answers about older videos are dropped.
-    @ObservationIgnored private var session = 0
-    @ObservationIgnored private var observations: [NSKeyValueObservation] = []
-    @ObservationIgnored private var endObserver: NSObjectProtocol?
+    @PerceptionIgnored private var session = 0
+    @PerceptionIgnored private var observations: [NSKeyValueObservation] = []
+    @PerceptionIgnored private var endObserver: NSObjectProtocol?
 
     func phase(of id: String) -> Phase? { currentID == id ? phase : nil }
 

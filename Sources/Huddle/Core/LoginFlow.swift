@@ -2,11 +2,11 @@ import AppKit
 import Foundation
 import MatrixRustSDK
 import Network
-import Observation
+import Perception
 
 /// Drives adding an account: server discovery, then password login in the app where the
 /// homeserver accepts it, with OAuth in the browser as the alternative (or the only way).
-@MainActor @Observable
+@MainActor @Perceptible
 final class LoginFlow {
     enum Step: Equatable {
         case server
@@ -26,11 +26,11 @@ final class LoginFlow {
     /// The homeserver offers OAuth sign-in in the browser.
     private(set) var supportsBrowser = false
 
-    @ObservationIgnored private var client: Client?
-    @ObservationIgnored private var storeID = UUID().uuidString
-    @ObservationIgnored private var passphrase = makeStorePassphrase()
-    @ObservationIgnored private var loopback: LoopbackServer?
-    @ObservationIgnored private var oauthTask: Task<Void, Never>?
+    @PerceptionIgnored private var client: Client?
+    @PerceptionIgnored private var storeID = UUID().uuidString
+    @PerceptionIgnored private var passphrase = makeStorePassphrase()
+    @PerceptionIgnored private var loopback: LoopbackServer?
+    @PerceptionIgnored private var oauthTask: Task<Void, Never>?
 
     private static let deviceName = "Huddle (macOS)"
 

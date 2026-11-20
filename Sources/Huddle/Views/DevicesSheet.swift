@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// The devices signed in to an account: this Mac, then the others, most recently active first,
 /// with whether each is verified and when it was last active. Others can be renamed and signed
@@ -25,7 +26,7 @@ struct DevicesSheet: View {
     private var thisMac: AccountDevice? { devices.first { $0.id == account.currentDeviceID } }
     private var others: [AccountDevice] { devices.filter { $0.id != account.currentDeviceID } }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Devices")
@@ -68,10 +69,10 @@ struct DevicesSheet: View {
                             Text("No other devices are signed in.")
                                 .foregroundStyle(.secondary)
                         }
-                        ForEach(others) { device in
+                        ForEach(others) { device in WithPerceptionTracking {
                             DeviceRow(device: device, isThisMac: false, rename: { startRenaming(device) },
                                       signOut: { signOut([device]) })
-                        }
+                        } }
                     } header: {
                         Text(others.isEmpty ? "Other Devices" : "Other Devices (\(others.count))")
                     } footer: {
@@ -113,24 +114,24 @@ struct DevicesSheet: View {
         .frame(width: 540, height: 560)
         .task { await load() }
         .alert("Rename Device", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
-               presenting: renaming) { device in
+               presenting: renaming) { device in WithPerceptionTracking {
             TextField("Name", text: $newName)
             Button("Rename") { rename(device) }
                 .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
+        } } message: { _ in
             Text("Only you see your devices’ names.")
         }
         .alert("Couldn’t Rename the Device", isPresented: Binding(get: { renameFailure != nil },
-                                                                  set: { if !$0 { renameFailure = nil } })) {
+                                                                  set: { if !$0 { renameFailure = nil } })) { WithPerceptionTracking {
             Button("OK") {}
-        } message: {
+        } } message: {
             Text(renameFailure ?? "")
         }
-        .sheet(item: $signingOut) { request in
+        .sheet(item: $signingOut) { request in WithPerceptionTracking {
             SignOutSheet(account: account, devices: request.devices) { reload() }
-        }
-    }
+        } }
+    } }
 
     private func load() async {
         do {
@@ -209,7 +210,7 @@ private struct SignOutSheet: View {
             : "They will need your password to sign in again, and will lose the encryption keys they hold."
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
@@ -225,7 +226,7 @@ private struct SignOutSheet: View {
                     .focused($fieldFocused)
                     .disabled(isWorking)
                     .onSubmit(submit)
-                    .onChange(of: password) { if !password.isEmpty { failure = nil } }
+                    .onChanged(of: password) { if !password.isEmpty { failure = nil } }
                 if let failure {
                     Label(failure, systemImage: "exclamationmark.circle.fill")
                         .font(.callout)
@@ -249,7 +250,7 @@ private struct SignOutSheet: View {
         .animation(.snappy(duration: 0.2), value: failure)
         .background(WindowReader { window = $0 })
         .onAppear { fieldFocused = true }
-    }
+    } }
 
     private func submit() {
         guard !password.isEmpty, !isWorking else { return }
@@ -290,7 +291,7 @@ private struct DeviceRow: View {
     let rename: () -> Void
     let signOut: (() -> Void)?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 20))
@@ -310,13 +311,13 @@ private struct DeviceRow: View {
                     .textSelection(.enabled)
             }
             Spacer(minLength: 8)
-            Menu {
+            Menu { WithPerceptionTracking {
                 Button("Rename…", action: rename)
                 if let signOut {
                     Divider()
                     Button("Sign Out…", role: .destructive, action: signOut)
                 }
-            } label: {
+            } } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
@@ -333,7 +334,7 @@ private struct DeviceRow: View {
             Button("Rename", action: rename)
             if let signOut { Button("Sign Out", action: signOut) }
         }
-    }
+    } }
 
     @ViewBuilder private var trust: some View {
         switch device.trust {

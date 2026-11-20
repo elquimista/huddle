@@ -40,7 +40,9 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 
 ## Requirements
 
-- A Mac running macOS 14 or later, with Apple Silicon or an Intel processor: the release app is one app for both.
+- A Mac running macOS 13 or later, with Apple Silicon or an Intel processor: the release app is one app for both.
+
+This is the `legacy/macos-13` branch: Huddle for macOS 13 (Ventura), as 0.13.x, made from 1.0. Huddle 1.0 and later need macOS 14; this line keeps Macs that can't go past 13 (2017 models) going. It differs from main where macOS 13 lacks something: Point-Free's Perception stands in for Apple's Observation (views that read the app's state wrap their content in `WithPerceptionTracking`, which is how macOS 13 notices what they read), and `Sources/Huddle/Views/Compat.swift` has a macOS 13 stand-in for each newer SwiftUI piece, SwiftUI's own on macOS 14. Dev builds print `PERCEPTION_UNTRACKED` for any state a view reads without tracking it, on any macOS: a view macOS 13 wouldn't redraw. The release workflow lists each release with the macOS it needs, so Sparkle offers a Mac only what runs on it.
 - Xcode with Swift 5.10 or later (a release build, for both kinds of Mac at once, needs Xcode itself, not only its command line tools).
 - Rust, only to compile the Matrix SDK, with both Mac targets: `brew install rustup && rustup default stable && rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
 

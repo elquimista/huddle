@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// A file in the conversation: its icon, name, size and kind. Clicked, it downloads and opens in
 /// its usual app; its menu also saves it. While it is being sent, how far along it is, and a
@@ -19,7 +20,7 @@ struct FileMessageView: View {
     /// Wide enough for most names, and the same for every file, so they line up.
     private static let width: CGFloat = 300
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 4) {
             Button(action: open) {
                 HStack(spacing: 10) {
@@ -77,7 +78,7 @@ struct FileMessageView: View {
                                           to: folder.appendingPathComponent(file.safeFilename))
             }
         }
-    }
+    } }
 
     /// On the server, and not being fetched already.
     private var canOpen: Bool { file.media != nil && sendState == nil && !isOpening }

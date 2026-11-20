@@ -1,5 +1,6 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 /// A scrolling list of messages with a composer: a room's timeline, or one thread's.
 struct TimelineView: View {
@@ -199,8 +200,103 @@ struct TimelineView: View {
         return true
     }
 
-    var body: some View {
-        ScrollViewReader { proxy in
+    var body: some View { WithPerceptionTracking {
+        ScrollViewReader { proxy in WithPerceptionTracking { scrollContent(proxy) } }
+        // Runs when a new message arrives and when the newest one scrolls into view.
+        .task(id: ReadTrigger(lastRow: timeline.rows.last?.id, isAtBottom: isAtBottom, isInFrontOfUser: isInFrontOfUser)) {
+            if isAtBottom, isInFrontOfUser, !timeline.rows.isEmpty { await timeline.markAsRead() }
+        }
+        .onAppear {
+            restoreDraft()
+            // Ready to type in. Not when the room was reached with the arrow keys, though: the
+            // keyboard stays in the room list so the arrows keep moving through it (typing
+            // still lands here, by way of `typeToCompose`).
+            let chosenToWriteIn = account?.wantsComposerFocus == true && timeline.threadRoot == nil
+            if chosenToWriteIn { account?.wantsComposerFocus = false }
+            if NSApp.currentEvent?.type != .keyDown || chosenToWriteIn {
+                composerFocused = true
+                // Clicking a row in the list leaves the keyboard with the list for a moment.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { composerFocused = true }
+                // A draft put back is carried on with, not typed over: a field taking the keyboard
+                // selects all it holds.
+                if !draft.isEmpty {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { cursorToEnd() }
+                }
+            }
+            if timeline.threadRoot == nil {
+                typeToCompose.focus = { composerFocused = true }
+                typeToCompose.start()
+            }
+            input.onInput = { viewWillMove(for: 0.15) }
+            input.start()
+            pasteInterceptor.onImages = { stage($0) }
+            pasteInterceptor.onFiles = { attach($0) }
+            pasteInterceptor.start()
+            _ = media.uploadLimit       // learn the server's size limit before it is needed
+            if timeline.threadRoot == nil, DevHooks.stagesFiles(inRoomNamed: timeline.room.displayName()) {
+                DevHooks.didStageImages = true
+                attach(DevHooks.stagedImagePaths.map { URL(fileURLWithPath: $0) })
+            }
+        }
+        .onChanged(of: composerFocused, initial: true) { pasteInterceptor.isActive = composerFocused }
+        .alert(pendingDeletion?.isOwn == false ? "Remove this message?" : "Delete this message?",
+               isPresented: Binding(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }),
+               presenting: pendingDeletion) { message in WithPerceptionTracking {
+            Button(message.isOwn ? "Delete" : "Remove", role: .destructive) {
+                if editTarget?.itemID == message.itemID { finishEdit() }
+                Task { await timeline.delete(message.itemID) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } } message: { _ in
+            Text("It will be removed for everyone in the room. This can’t be undone.")
+        }
+        .sheet(item: $forwarding) { request in WithPerceptionTracking {
+            if let account {
+                ForwardSheet(account: account, request: request)
+            }
+        } }
+        .background { WindowReader { typeToCompose.window = $0 } }
+        .background { InputArea(tracker: input) }
+        // Images dragged anywhere over the conversation land in the composer.
+        .onDrop(of: ImageDrop.types, isTargeted: $isDropTarget) { providers in
+            Task {
+                let dropped = await ImageDrop.sources(from: providers)
+                stage(dropped.images)
+                attach(dropped.files)
+            }
+            return true
+        }
+        .overlay {
+            if isDropTarget { DropTargetOverlay() }
+        }
+        .animation(.easeOut(duration: 0.12), value: isDropTarget)
+        .onDisappear {
+            keepDraft()
+            searchTask?.cancel()
+            input.stop()
+            pasteInterceptor.stop()
+            typeToCompose.stop()
+            AudioPlayback.shared.stop(owner: timeline)
+            VideoPlayback.shared.stop(owner: timeline)
+            // A recording going on here stops and waits here, for coming back to, and the room
+            // list says it's waiting.
+            let key = draftKey
+            let account = account
+            Task {
+                await VoiceRecorder.shared.stop(key)
+                account?.voiceRecordingChanged(forDraftKey: key)
+            }
+            timeline.setTyping(false)
+            let timeline = timeline
+            Task { await timeline.leave() }
+        }
+    } }
+
+    /// What the scroll view reader holds: kept apart from `body`, where the compiler, with
+    /// macOS 13's tracking around it, can't work out its type in time.
+    @ViewBuilder private func scrollContent(_ proxy: ScrollViewProxy) -> some View {
+            // macOS 13 works out what's in view from the scroll view's size (Compat.swift).
+            ViewportReader { viewport in
             ScrollView {
                 // Not lazy on purpose. A lazy stack only estimates the height of rows it hasn't
                 // drawn, so scrolling to the newest message lands in the wrong place, gets
@@ -211,10 +307,10 @@ struct TimelineView: View {
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                             .padding(12)
-                            .onGeometryChange(for: Bool.self, of: Self.isOnScreen) { historyEdgeVisible = $0 }
-                            .onGeometryChange(for: Bool.self, of: Self.isInView) { historyEdgeInView = $0 }
+                            .onGeometryChange(for: Bool.self, of: { Self.isOnScreen($0, viewport: viewport) }) { historyEdgeVisible = $0 }
+                            .onGeometryChange(for: Bool.self, of: { Self.isInView($0, viewport: viewport) }) { historyEdgeInView = $0 }
                     }
-                    ForEach(shownRows) { row in
+                    ForEach(shownRows) { row in WithPerceptionTracking {
                         TimelineRowView(row: row, timeline: timeline, media: media,
                                         actions: MessageActions(openThread: onOpenThread,
                                                                 reply: { startReply(to: $0) },
@@ -232,7 +328,7 @@ struct TimelineView: View {
                             .equatable()
                             .id(row.id)
                             .onGeometryChange(for: CGRect?.self) { proxy in
-                                guard let visible = proxy.bounds(of: .scrollView) else { return nil }
+                                guard let visible = ScrollSpace.visibleBounds(proxy, viewport: viewport) else { return nil }
                                 let frame = proxy.frame(in: .local)
                                 return visible.intersects(frame) ? frame.offsetBy(dx: 0, dy: -visible.minY) : nil
                             } action: { frame in
@@ -242,7 +338,7 @@ struct TimelineView: View {
                         if row.id == threadRootRowID {
                             RepliesDivider(count: replyCount)
                         }
-                    }
+                    } }
                     // Under the newest message, like the next one on its way. Only for someone
                     // who shares their own typing, as in most messaging apps.
                     if account?.sharesTyping ?? true, !timeline.typists.isEmpty {
@@ -257,7 +353,7 @@ struct TimelineView: View {
                         .frame(height: 1)
                         .background { ScrollViewProbe(place: place) }
                         .id(Self.bottomID)
-                        .onGeometryChange(for: EndPlace.self, of: Self.endPlace) { end in
+                        .onGeometryChange(for: EndPlace.self, of: { Self.endPlace($0, viewport: viewport) }) { end in
                             let visible = end != .away
                             isAtBottom = visible
                             isAtEnd = end == .atEnd
@@ -310,7 +406,7 @@ struct TimelineView: View {
                 .environment(\.ircNameWidth, nameWidth)
                 .environment(\.messageHover, hoverState)
                 // A popover of the window's own (an emoji picker) leaves it active, not inactive.
-                .onChange(of: windowState, initial: true) { _, state in
+                .onChanged(of: windowState, initial: true) { _, state in
                     hoverState.isWindowActive = state != .inactive || DevHooks.assumesActive
                 }
                 // Laid out at the width the timeline is heading for, not at each width it passes
@@ -333,9 +429,11 @@ struct TimelineView: View {
                     }
                 }
             }
+            .coordinateSpace(name: ScrollSpace.name)
+            }
             // A room opens at its newest message. A thread starts at its root message, so a short
             // one sits under the header; a long one is then scrolled to its newest reply.
-            .defaultScrollAnchor(timeline.threadRoot == nil && timeline.focusedEvent == nil ? .bottom : .top)
+            .startsScrolled(at: timeline.threadRoot == nil && timeline.focusedEvent == nil ? .bottom : .top)
             .modifier(NewestMessageHold(isOn: followsNewest))
             // Under the banners, over the part of the conversation in view: with a panel beside
             // it, the conversation runs on under the panel.
@@ -370,7 +468,7 @@ struct TimelineView: View {
             .animation(bannerAnimates ? .snappy(duration: 0.25) : nil, value: pinnedMessages.isEmpty)
             // The message being edited stays in sight: Up arrow can reach one scrolled away, and
             // the editing bar, as the composer grows, can push one at the edge out of view.
-            .onChange(of: editTarget?.itemID) { _, itemID in
+            .onChanged(of: editTarget?.itemID) { _, itemID in
                 guard let itemID else { return }
                 // Once the composer has grown.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -389,7 +487,7 @@ struct TimelineView: View {
             }
             // Done editing, having started at the newest message: back there, once the composer
             // has shrunk again.
-            .onChange(of: returnsToNewest) { _, returns in
+            .onChanged(of: returnsToNewest) { _, returns in
                 guard returns else { return }
                 returnsToNewest = false
                 scrollToBottom(proxy)
@@ -400,13 +498,13 @@ struct TimelineView: View {
             // Asked for from elsewhere (the pinned messages in the side panel): through the room's
             // live timeline, so it reaches whichever view of the room is on screen.
             // Also when this view has only just appeared, sent back here to show one.
-            .onChange(of: (room?.live ?? timeline).requestedJump, initial: true) { _, eventID in
+            .onChanged(of: (room?.live ?? timeline).requestedJump, initial: true) { _, eventID in
                 guard let eventID else { return }
                 (room?.live ?? timeline).requestedJump = nil
                 // After the view has settled on its newest message.
                 DispatchQueue.main.async { jump(to: eventID, proxy) }
             }
-            .onChange(of: timeline.rows.last?.id) { previousLast, _ in
+            .onChanged(of: timeline.rows.last?.id) { previousLast, _ in
                 // The first content, or a new message while following the newest.
                 guard timeline.focusedEvent == nil else { return }
                 if previousLast == nil {
@@ -425,7 +523,7 @@ struct TimelineView: View {
                 }
             }
             // A view around an older message opens on that message, lit up.
-            .onChange(of: timeline.rows.count, initial: true) {
+            .onChanged(of: timeline.rows.count, initial: true) {
                 guard let focus = timeline.focusedEvent, !hasShownFocus,
                       let row = timeline.rows.first(where: { $0.eventID == focus }) else { return }
                 hasShownFocus = true
@@ -448,10 +546,10 @@ struct TimelineView: View {
                 }
             }
             .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.viewport = $0 }
-            .onChange(of: messagesWidth) { old, new in
+            .onChanged(of: messagesWidth) { old, new in
                 if old != nil, old != new { messagesWillRewrap(proxy) }
             }
-            .onChange(of: timeline.prependCount) {
+            .onChanged(of: timeline.prependCount) {
                 defer {
                     if AppEnvironment.isDev, timeline.threadRoot == nil {
                         print("DEV_TIMELINE_PREPEND rows=\(timeline.rows.count) drawn=\(shownRows.count) following=\(followsNewest) atTop=\(historyEdgeVisible)")
@@ -571,95 +669,6 @@ struct TimelineView: View {
                 .animation(.snappy(duration: 0.2), value: identityWarning?.userID)
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.bottomInset = $0 }
             }
-        }
-        // Runs when a new message arrives and when the newest one scrolls into view.
-        .task(id: ReadTrigger(lastRow: timeline.rows.last?.id, isAtBottom: isAtBottom, isInFrontOfUser: isInFrontOfUser)) {
-            if isAtBottom, isInFrontOfUser, !timeline.rows.isEmpty { await timeline.markAsRead() }
-        }
-        .onAppear {
-            restoreDraft()
-            // Ready to type in. Not when the room was reached with the arrow keys, though: the
-            // keyboard stays in the room list so the arrows keep moving through it (typing
-            // still lands here, by way of `typeToCompose`).
-            let chosenToWriteIn = account?.wantsComposerFocus == true && timeline.threadRoot == nil
-            if chosenToWriteIn { account?.wantsComposerFocus = false }
-            if NSApp.currentEvent?.type != .keyDown || chosenToWriteIn {
-                composerFocused = true
-                // Clicking a row in the list leaves the keyboard with the list for a moment.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { composerFocused = true }
-                // A draft put back is carried on with, not typed over: a field taking the keyboard
-                // selects all it holds.
-                if !draft.isEmpty {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { cursorToEnd() }
-                }
-            }
-            if timeline.threadRoot == nil {
-                typeToCompose.focus = { composerFocused = true }
-                typeToCompose.start()
-            }
-            input.onInput = { viewWillMove(for: 0.15) }
-            input.start()
-            pasteInterceptor.onImages = { stage($0) }
-            pasteInterceptor.onFiles = { attach($0) }
-            pasteInterceptor.start()
-            _ = media.uploadLimit       // learn the server's size limit before it is needed
-            if timeline.threadRoot == nil, DevHooks.stagesFiles(inRoomNamed: timeline.room.displayName()) {
-                DevHooks.didStageImages = true
-                attach(DevHooks.stagedImagePaths.map { URL(fileURLWithPath: $0) })
-            }
-        }
-        .onChange(of: composerFocused, initial: true) { pasteInterceptor.isActive = composerFocused }
-        .alert(pendingDeletion?.isOwn == false ? "Remove this message?" : "Delete this message?",
-               isPresented: Binding(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }),
-               presenting: pendingDeletion) { message in
-            Button(message.isOwn ? "Delete" : "Remove", role: .destructive) {
-                if editTarget?.itemID == message.itemID { finishEdit() }
-                Task { await timeline.delete(message.itemID) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("It will be removed for everyone in the room. This can’t be undone.")
-        }
-        .sheet(item: $forwarding) { request in
-            if let account {
-                ForwardSheet(account: account, request: request)
-            }
-        }
-        .background { WindowReader { typeToCompose.window = $0 } }
-        .background { InputArea(tracker: input) }
-        // Images dragged anywhere over the conversation land in the composer.
-        .onDrop(of: ImageDrop.types, isTargeted: $isDropTarget) { providers in
-            Task {
-                let dropped = await ImageDrop.sources(from: providers)
-                stage(dropped.images)
-                attach(dropped.files)
-            }
-            return true
-        }
-        .overlay {
-            if isDropTarget { DropTargetOverlay() }
-        }
-        .animation(.easeOut(duration: 0.12), value: isDropTarget)
-        .onDisappear {
-            keepDraft()
-            searchTask?.cancel()
-            input.stop()
-            pasteInterceptor.stop()
-            typeToCompose.stop()
-            AudioPlayback.shared.stop(owner: timeline)
-            VideoPlayback.shared.stop(owner: timeline)
-            // A recording going on here stops and waits here, for coming back to, and the room
-            // list says it's waiting.
-            let key = draftKey
-            let account = account
-            Task {
-                await VoiceRecorder.shared.stop(key)
-                account?.voiceRecordingChanged(forDraftKey: key)
-            }
-            timeline.setTyping(false)
-            let timeline = timeline
-            Task { await timeline.leave() }
-        }
     }
 
     /// Whether a view inside the scroll view is within, or just outside, the visible area.
@@ -667,20 +676,20 @@ struct TimelineView: View {
     /// nudge, or a jump that landed short), or out of sight.
     private enum EndPlace: Equatable { case atEnd, nearEnd, away }
 
-    private static func endPlace(_ geometry: GeometryProxy) -> EndPlace {
-        guard let visible = geometry.bounds(of: .scrollView) else { return .away }
+    private static func endPlace(_ geometry: GeometryProxy, viewport: CGSize) -> EndPlace {
+        guard let visible = ScrollSpace.visibleBounds(geometry, viewport: viewport) else { return .away }
         let marker = geometry.frame(in: .local)
         if visible.maxY >= marker.maxY - 0.5, visible.intersects(marker.insetBy(dx: 0, dy: -0.5)) { return .atEnd }
-        return isOnScreen(geometry) ? .nearEnd : .away
+        return isOnScreen(geometry, viewport: viewport) ? .nearEnd : .away
     }
 
-    private static func isInView(_ geometry: GeometryProxy) -> Bool {
-        guard let visible = geometry.bounds(of: .scrollView) else { return false }
+    private static func isInView(_ geometry: GeometryProxy, viewport: CGSize) -> Bool {
+        guard let visible = ScrollSpace.visibleBounds(geometry, viewport: viewport) else { return false }
         return visible.intersects(geometry.frame(in: .local))
     }
 
-    private static func isOnScreen(_ geometry: GeometryProxy) -> Bool {
-        guard let visible = geometry.bounds(of: .scrollView) else { return false }
+    private static func isOnScreen(_ geometry: GeometryProxy, viewport: CGSize) -> Bool {
+        guard let visible = ScrollSpace.visibleBounds(geometry, viewport: viewport) else { return false }
         return visible.insetBy(dx: 0, dy: -24).intersects(geometry.frame(in: .local))
     }
 
@@ -965,13 +974,13 @@ struct TimelineView: View {
                         // While suggestions (people or emoji) are showing, the arrows move through
                         // them and Return or Tab picks one instead of sending. Shift-Return starts a new line, as
                         // in Element and most chat apps (Option-Return does too, as in any field).
-                        .onKeyPress(.upArrow) { upArrow() }
-                        .onKeyPress(.downArrow) { moveSuggestion(1) }
-                        .onKeyPress(.return, phases: .down) { press in
-                            press.modifiers.contains(.shift) ? insertLineBreak() : pickSelectedSuggestion()
+                        .onKeyDown(.upArrow, focused: composerFocused) { _ in upArrow() }
+                        .onKeyDown(.downArrow, focused: composerFocused) { _ in moveSuggestion(1) }
+                        .onKeyDown(.return, focused: composerFocused) { modifiers in
+                            modifiers.contains(.shift) ? insertLineBreak() : pickSelectedSuggestion()
                         }
-                        .onKeyPress(.tab) { pickSelectedSuggestion() }
-                        .onKeyPress(.escape) {
+                        .onKeyDown(.tab, focused: composerFocused) { _ in pickSelectedSuggestion() }
+                        .onKeyDown(.escape, focused: composerFocused) { _ in
                             // Escape closes the suggestions if they are open; otherwise it cancels a reply.
                             if suggestionCount > 0 {
                                 dismissedQuery = activeQuery
@@ -985,7 +994,7 @@ struct TimelineView: View {
                             replyTarget = nil
                             return .handled
                         }
-                        .onChange(of: draft) { old, new in
+                        .onChanged(of: draft) { old, new in
                             completeShortcode(from: old, to: new)
                             keepDraft()
                             suggestionIndex = 0
@@ -1007,24 +1016,24 @@ struct TimelineView: View {
         .animation(.snappy(duration: 0.2), value: stagedImages.map(\.id))
         .animation(.snappy(duration: 0.2), value: stagedFiles.map(\.id))
         .animation(.snappy(duration: 0.2), value: hasVoiceMessage)
-        .onChange(of: hasVoiceMessage) {
+        .onChanged(of: hasVoiceMessage) {
             // The keys follow what's in the composer: Return sends the recording, Escape deletes it.
             if hasVoiceMessage { voiceFocused = true } else { composerFocused = true }
         }
-        .confirmationDialog("Delete this voice message?", isPresented: $asksToDeleteVoice) {
+        .confirmationDialog("Delete this voice message?", isPresented: $asksToDeleteVoice) { WithPerceptionTracking {
             Button("Delete", role: .destructive) { voice.discard(draftKey) }
-        } message: {
+        } } message: {
             Text("You can’t get it back.")
         }
         .alert(voice.failure?.reason.title ?? "", isPresented: Binding(
             get: { voice.failure?.key == draftKey },
             set: { if !$0 { voice.failure = nil } }
-        ), presenting: voice.failure?.reason) { reason in
+        ), presenting: voice.failure?.reason) { reason in WithPerceptionTracking {
             if let url = reason.settingsURL {
                 Button("Open System Settings") { NSWorkspace.shared.open(url) }
             }
             Button("OK", role: .cancel) {}
-        } message: { reason in
+        } } message: { reason in
             Text(reason.message)
         }
         .background(.bar)
@@ -1084,7 +1093,7 @@ struct TimelineView: View {
         } label: {
             Image(systemName: symbol)
                 .font(.system(size: records ? 17 : 24, weight: records ? .medium : .regular))
-                .contentTransition(.symbolEffect(.replace))
+                .symbolReplaceTransition()
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
@@ -1441,7 +1450,7 @@ struct TimelineView: View {
     }
 
     /// Up arrow: moves through suggestions; in an empty composer, edits your last message.
-    private func upArrow() -> KeyPress.Result {
+    private func upArrow() -> KeyResult {
         if suggestionCount > 0 { return moveSuggestion(-1) }
         guard draft.isEmpty, editTarget == nil, stagedImages.isEmpty, stagedFiles.isEmpty,
               let message = timeline.rows.reversed().lazy.compactMap(\.message)
@@ -1551,7 +1560,7 @@ struct TimelineView: View {
         return Array((starts + contains).prefix(6))
     }
 
-    private func moveSuggestion(_ step: Int) -> KeyPress.Result {
+    private func moveSuggestion(_ step: Int) -> KeyResult {
         let count = suggestionCount
         guard count > 0 else { return .ignored }
         suggestionIndex = (suggestionIndex + step + count) % count
@@ -1560,7 +1569,7 @@ struct TimelineView: View {
 
     /// A line break where the cursor is, put in by the field's own editor as Option-Return's is,
     /// so the field grows and the text stays where it was typed.
-    private func insertLineBreak() -> KeyPress.Result {
+    private func insertLineBreak() -> KeyResult {
         // The window the key went to: the key window, while Huddle is the app in front.
         let window = NSApp.currentEvent?.window ?? NSApp.keyWindow
         guard let editor = window?.firstResponder as? NSTextView else { return .ignored }
@@ -1568,7 +1577,7 @@ struct TimelineView: View {
         return .handled
     }
 
-    private func pickSelectedSuggestion() -> KeyPress.Result {
+    private func pickSelectedSuggestion() -> KeyResult {
         let people = suggestions
         if !people.isEmpty {
             pick(people[min(suggestionIndex, people.count - 1)])
@@ -1653,7 +1662,7 @@ struct TimelineView: View {
 private struct RepliesDivider: View {
     let count: Int
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             Text(count == 0 ? "No replies yet" : count == 1 ? "1 reply" : "\(count) replies")
                 .font(.caption)
@@ -1662,7 +1671,7 @@ private struct RepliesDivider: View {
         }
         .padding(.top, 10)
         .padding(.bottom, 4)
-    }
+    } }
 }
 
 private struct TimelineRowView: View, Equatable {
@@ -1687,7 +1696,7 @@ private struct TimelineRowView: View, Equatable {
     let searchingFor: String?
     let receipts: Namespace.ID
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         switch row.kind {
         case .message(let message):
             MessageView(rowID: row.id, message: message, timeline: timeline, media: media, actions: actions,
@@ -1715,7 +1724,7 @@ private struct TimelineRowView: View, Equatable {
             }
             .padding(.vertical, 4)
         }
-    }
+    } }
 }
 
 private struct MessageView: View {
@@ -1808,7 +1817,7 @@ private struct MessageView: View {
         return text == wanted.trimmingCharacters(in: ["!"])
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Group {
             switch layout {
             case .modern: modernRow
@@ -1875,7 +1884,7 @@ private struct MessageView: View {
         .onHover { hover.pointer(isOver: $0, message: rowID) }
         .modifier(MessageActionsMenus(sections: menuSections(includingReplies: true)))
         .animation(.easeOut(duration: 0.15), value: isBeingEdited)
-    }
+    } }
 
     /// How tall the hover bar is: its buttons and the padding around them.
     private static let actionBarHeight: CGFloat = 32
@@ -2052,11 +2061,11 @@ private struct MessageView: View {
             let addsFirst = layout == .bubbles && message.isOwn
             HStack(spacing: 4) {
                 if addsFirst, showsActions { addReactionChip }
-                ForEach(message.reactions) { reaction in
+                ForEach(message.reactions) { reaction in WithPerceptionTracking {
                     ReactionChipView(reaction: reaction, names: reactorNames(reaction)) {
                         Task { await timeline.toggleReaction(reaction.key, on: message.itemID) }
                     }
-                }
+                } }
                 if !addsFirst, showsActions { addReactionChip }
             }
         }
@@ -2081,13 +2090,13 @@ private struct MessageView: View {
 
     private var addReactionChip: some View {
         AddReactionChip { showsReactionPicker = true }
-            .popover(isPresented: $showsReactionPicker, arrowEdge: .bottom) {
+            .popover(isPresented: $showsReactionPicker, arrowEdge: .bottom) { WithPerceptionTracking {
                 // The same picker as the hover actions' add-reaction button.
                 QuickReactionPicker(reacted: ownReactions) { emoji in
                     showsReactionPicker = false
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }
-            }
+            } }
     }
 
     // MARK: Bubbles
@@ -2151,7 +2160,7 @@ private struct MessageView: View {
                 }
                 if !message.isOwn { Spacer(minLength: 56) }
             }
-            .coordinateSpace(.named(Self.bubbleRowSpace))
+            .coordinateSpace(name: Self.bubbleRowSpace)
             .onGeometryChange(for: CGFloat.self, of: \.size.width) { bubbleRowWidth = $0 }
         }
     }
@@ -2189,12 +2198,12 @@ private struct MessageView: View {
 
     private var reactButton: some View {
         RoundActionButton(help: "Add Reaction") { showsPicker = true } label: { AddReactionIcon() }
-            .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
+            .popover(isPresented: $showsPicker, arrowEdge: .bottom) { WithPerceptionTracking {
                 QuickReactionPicker(reacted: ownReactions) { emoji in
                     showsPicker = false
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }
-            }
+            } }
     }
 
     @ViewBuilder private var replyButton: some View {
@@ -2305,27 +2314,27 @@ private struct MessageView: View {
 
     private var actionBar: some View {
         HStack(spacing: 1) {
-            ForEach(barReactions, id: \.self) { emoji in
+            ForEach(barReactions, id: \.self) { emoji in WithPerceptionTracking {
                 ActionButton(help: "React with \(emoji)") {
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 } label: {
                     Text(emoji).font(.system(size: 15))
                 }
                 // In place of the message's own menu, as a toolbar's buttons offer to customize it.
-                .contextMenu { CustomizeQuickReactionsButton() }
-            }
+                .contextMenu { WithPerceptionTracking { CustomizeQuickReactionsButton() } }
+            } }
             ActionButton(help: "Add Reaction") {
                 showsPicker = true
             } label: {
                 AddReactionIcon()
             }
-            .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
+            .popover(isPresented: $showsPicker, arrowEdge: .bottom) { WithPerceptionTracking {
                 // All six on top, any not on the bar among them.
                 QuickReactionPicker(reacted: ownReactions) { emoji in
                     showsPicker = false
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }
-            }
+            } }
             Divider().frame(height: 16).padding(.horizontal, 3)
             if let reply {
                 ActionButton(help: "Reply", action: reply) {
@@ -2373,7 +2382,7 @@ private struct MessageView: View {
 
     /// " (edited)" after a message that has been changed since it was sent.
     private var editedLabel: Text {
-        Text(message.isEdited ? " (edited)" : "").font(.caption).foregroundStyle(.secondary)
+        Text(message.isEdited ? " (edited)" : "").font(.caption).foregroundColor(.secondary)
     }
 
     @ViewBuilder private var bodyView: some View {
@@ -2450,9 +2459,9 @@ private struct EmojiSuggestions: View {
     let selected: Int
     let onPick: (EmojiCatalog.Entry) -> Void
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
-            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in WithPerceptionTracking {
                 Button { onPick(entry) } label: {
                     HStack(spacing: 8) {
                         Text(entry.emoji)
@@ -2477,13 +2486,13 @@ private struct EmojiSuggestions: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(entry.emoji) \(entry.name)")
-            }
+            } }
         }
         .padding(4)
         .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.separator) }
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
-    }
+    } }
 }
 
 private struct MentionSuggestions: View {
@@ -2505,9 +2514,9 @@ private struct MentionSuggestions: View {
         return "\(candidate.name) · \(candidate.id)"
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
-            ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
+            ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in WithPerceptionTracking {
                 Button { onPick(candidate) } label: {
                     HStack(spacing: 8) {
                         if candidate.isRoom {
@@ -2535,13 +2544,13 @@ private struct MentionSuggestions: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-            }
+            } }
         }
         .padding(4)
         .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.separator) }
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
-    }
+    } }
 }
 
 /// One reaction under a message: the emoji and how many chose it. Yours are drawn in the accent
@@ -2554,7 +2563,7 @@ private struct ReactionChipView: View {
     let toggle: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: toggle) {
             HStack(spacing: 4) {
                 Text(reaction.key)
@@ -2580,7 +2589,7 @@ private struct ReactionChipView: View {
         .accessibilityValue(summary)
         .accessibilityHint(reaction.isOwn ? "Removes your reaction" : "Adds your reaction")
         .accessibilityAddTraits(reaction.isOwn ? .isSelected : [])
-    }
+    } }
 
     private var fill: Color {
         reaction.isOwn
@@ -2605,7 +2614,7 @@ private struct AddReactionChip: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             AddReactionIcon()
                 .foregroundStyle(.secondary)
@@ -2622,7 +2631,7 @@ private struct AddReactionChip: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .help("Add Reaction")
         .accessibilityLabel("Add Reaction")
-    }
+    } }
 }
 
 /// A smiling face with a plus at its top right: the icon chat apps use for adding a reaction.
@@ -2648,7 +2657,7 @@ struct AddReactionIcon: View {
         return outline
     }()
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Image(nsImage: Self.face)
             .mask {
                 ZStack(alignment: .topTrailing) {
@@ -2667,7 +2676,7 @@ struct AddReactionIcon: View {
                     .offset(x: Self.shift, y: -Self.shift)
             }
             .accessibilityHidden(true)
-    }
+    } }
 }
 
 /// One button in a message's floating action bar.
@@ -2677,7 +2686,7 @@ struct ActionButton<Label: View>: View {
     @ViewBuilder var label: Label
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             label
                 .font(.system(size: 13))
@@ -2692,7 +2701,7 @@ struct ActionButton<Label: View>: View {
         .help(help)
         // Its icon says nothing to VoiceOver; what it does, as the tooltip has it, does.
         .accessibilityLabel(help)
-    }
+    } }
 }
 
 /// What sits at the right of a message: who has read up to it (group rooms), or how far your
@@ -2707,13 +2716,13 @@ private struct ReceiptView: View {
     @State private var showsReaders = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         content
             // When someone reads further, their avatar glides down from the message they had
             // read to the new one; a newcomer pops in, and the ticks fill in.
             .animation(reduceMotion ? .easeOut(duration: 0.2) : Motion.receipt, value: message.readers.map(\.id))
             .animation(.easeOut(duration: 0.3 * Motion.slowdown), value: message.delivery)
-    }
+    } }
 
     @ViewBuilder private var content: some View {
         if !message.readers.isEmpty {
@@ -2730,21 +2739,21 @@ private struct ReceiptView: View {
                             .transition(.opacity)
                     }
                     HStack(spacing: -4) {
-                        ForEach(message.readers.prefix(Self.maxAvatars).reversed()) { reader in
+                        ForEach(message.readers.prefix(Self.maxAvatars).reversed()) { reader in WithPerceptionTracking {
                             AvatarView(media: media, url: reader.avatarURL, name: reader.name, seed: reader.id, size: 16)
                                 .overlay { Circle().strokeBorder(.background, lineWidth: 1.5) }
                                 .matchedGeometryEffect(id: reader.id, in: space, isSource: true)
                                 .transition(reduceMotion ? .opacity : .scale(scale: 0.3).combined(with: .opacity))
-                        }
+                        } }
                     }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Read by " + message.readers.map(\.name).formatted(.list(type: .and)))
-            .popover(isPresented: $showsReaders, arrowEdge: .trailing) {
+            .popover(isPresented: $showsReaders, arrowEdge: .trailing) { WithPerceptionTracking {
                 ReadersList(readers: message.readers, media: media)
-            }
+            } }
         } else if let delivery = message.delivery {
             DeliveryMark(delivery: delivery, readDate: message.readDate,
                          readDateIsExact: message.readDateIsExact)
@@ -2868,7 +2877,7 @@ private struct NameColumnHandle: View {
 
     private var isActive: Bool { isHovering || dragStart != nil }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Color.clear
             .frame(width: Self.width)
             .frame(maxHeight: .infinity)
@@ -2915,7 +2924,7 @@ private struct NameColumnHandle: View {
                 .accessibilityValue("\(Int(width)) points")
                 .accessibilityAction(named: "Fit to Longest Name") { commit(fitted()) }
             }
-    }
+    } }
 
     /// The resizing pointer while on the edge or dragging it; pushed and popped in pairs so the
     /// pointer underneath comes back as it was.
@@ -2987,7 +2996,7 @@ private struct DeliveryMark: View {
     var readDate: Date?
     var readDateIsExact = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         ZStack(alignment: .leading) {
             Image(systemName: "checkmark")
             if delivery != .sending {
@@ -3002,7 +3011,7 @@ private struct DeliveryMark: View {
         .foregroundStyle(delivery == .read ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
         .help(label)
         .accessibilityLabel(label)
-    }
+    } }
 
     /// The message's own time is already shown beside the sender, so this adds only what isn't:
     /// the state, and when it was read if that is actually known.
@@ -3035,12 +3044,12 @@ private struct ReadersList: View {
     let readers: [MessageRow.Reader]
     let media: MediaLoader
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 8) {
             Text("Read by")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            ForEach(readers) { reader in
+            ForEach(readers) { reader in WithPerceptionTracking {
                 HStack(spacing: 8) {
                     AvatarView(media: media, url: reader.avatarURL, name: reader.name, seed: reader.id, size: 22)
                     Text(reader.name)
@@ -3052,11 +3061,11 @@ private struct ReadersList: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-            }
+            } }
         }
         .padding(12)
         .frame(minWidth: 220)
-    }
+    } }
 }
 
 /// "3 replies · Last reply 2 hours ago" under a message, Slack style. Opens the thread.
@@ -3066,7 +3075,7 @@ private struct ThreadChip: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let sender = thread.latestSender {
@@ -3122,7 +3131,7 @@ private struct ThreadChip: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .padding(.leading, -6)
         .padding(.top, 1)
-    }
+    } }
 }
 
 extension String {
@@ -3179,9 +3188,9 @@ enum Motion {
 private struct LaidOutAtWidth: ViewModifier {
     let width: CGFloat?
 
-    func body(content: Content) -> some View {
+    func body(content: Content) -> some View { WithPerceptionTracking {
         FixedWidthLayout(width: width) { content }
-    }
+    } }
 
     private struct FixedWidthLayout: Layout {
         let width: CGFloat?
@@ -3206,13 +3215,13 @@ private struct LaidOutAtWidth: ViewModifier {
 private struct NewestMessageHold: ViewModifier {
     let isOn: Bool
 
-    func body(content: Content) -> some View {
+    func body(content: Content) -> some View { WithPerceptionTracking {
         if #available(macOS 15.0, *) {
             content.defaultScrollAnchor(isOn ? .bottom : nil, for: .sizeChanges)
         } else {
             content
         }
-    }
+    } }
 }
 
 /// Where each row on screen sits, measured from the top of the visible area. Not observed:
@@ -3321,20 +3330,20 @@ private struct MessageActionsMenus: ViewModifier {
     let sections: [[MessageMenuItem]]
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverIsOn
 
-    func body(content: Content) -> some View {
-        let menu = content.contextMenu { MessageContextMenu(sections: sections) }
+    func body(content: Content) -> some View { WithPerceptionTracking {
+        let menu = content.contextMenu { WithPerceptionTracking { MessageContextMenu(sections: sections) } }
         if voiceOverIsOn || DevHooks.accessibilityActions {
             menu
                 .accessibilityElement(children: .contain)
                 .accessibilityActions {
-                    ForEach(sections.flatMap { $0 }) { item in
+                    ForEach(sections.flatMap { $0 }) { item in WithPerceptionTracking {
                         Button(item.title.replacingOccurrences(of: "…", with: ""), action: item.action)
-                    }
+                    } }
                 }
         } else {
             menu
         }
-    }
+    } }
 }
 
 /// What a room's main conversation shares beyond its own timeline.
@@ -3365,7 +3374,7 @@ private struct NewThreadRepliesPill: View {
     let threads: [ThreadListEntry]
     let open: () -> Void
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: open) {
             HStack(spacing: 6) {
                 Image(systemName: "bubble.left.and.text.bubble.right")
@@ -3391,7 +3400,7 @@ private struct NewThreadRepliesPill: View {
         .buttonStyle(.plain)
         .help(threads.count == 1 ? "Open the thread" : "Show the room’s threads")
         .accessibilityLabel(threads.count == 1 ? "\(title): \(threads[0].preview)" : title)
-    }
+    } }
 
     private var title: String {
         guard threads.count == 1 else { return "New replies in \(threads.count) threads" }
@@ -3405,7 +3414,7 @@ private struct NewThreadRepliesPill: View {
 private struct MarkedUnreadBar: View {
     let markRead: () -> Void
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             Circle()
                 .fill(Color.accentColor)
@@ -3432,7 +3441,7 @@ private struct MarkedUnreadBar: View {
         .overlay(alignment: .bottom) { Rectangle().fill(.separator).frame(height: 1) }
         .accessibilityElement(children: .combine)
         .accessibilityAction(named: "Mark as Read", markRead)
-    }
+    } }
 }
 
 extension MessageView {
@@ -3460,14 +3469,14 @@ private struct ComposerField: ViewModifier {
     /// The field with one line in it: the line, and the padding above and below.
     static let oneLine = line + 14
 
-    func body(content: Content) -> some View {
+    func body(content: Content) -> some View { WithPerceptionTracking {
         content
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.background, in: RoundedRectangle(cornerRadius: 14))
             .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(.separator) }
-    }
+    } }
 }
 
 /// Return sends a voice message from the composer, and Escape deletes it, as they would a
@@ -3477,18 +3486,18 @@ private struct VoiceKeys: ViewModifier {
     let send: () -> Void
     let escape: () -> Void
 
-    func body(content: Content) -> some View {
+    func body(content: Content) -> some View { WithPerceptionTracking {
         content
             .focusable()
-            .focusEffectDisabled()
+            .noFocusEffect()
             .focused(focus)
-            .onKeyPress(.return) {
+            .onKeyDown(.return, focused: focus.wrappedValue) { _ in
                 send()
                 return .handled
             }
-            .onKeyPress(.escape) {
+            .onKeyDown(.escape, focused: focus.wrappedValue) { _ in
                 escape()
                 return .handled
             }
-    }
+    } }
 }

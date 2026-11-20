@@ -99,8 +99,9 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "Huddle-$version.zip" --clobber
           else
+            # The macOS 13 line, made after newer releases: never the one GitHub shows as latest.
             gh release create "$GITHUB_REF_NAME" "Huddle-$version.zip" --verify-tag \
-              --title "Huddle $version" --generate-notes $prerelease
+              --title "Huddle $version" --generate-notes --latest=false $prerelease
           fi
 
       - name: Publish the update
@@ -142,11 +143,14 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" \
-              --title "Huddle $version" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+              --title "Huddle $version" --notes-file "$RUNNER_TEMP/notes.md" --latest=false $prerelease
           fi
 
           # Listed in the appcast only now, so nobody is offered an archive that isn't there yet.
-          Scripts/appcast.py "$updates/appcast.xml" --version "$version" --build "$build" \
+          # Each release listed with the macOS it needs, so Sparkle offers a Mac only what runs on it:
+          # macOS 13 gets this line, macOS 14 and later the newer one.
+          minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/Huddle.app/Contents/Info.plist)"
+          Scripts/appcast.py "$updates/appcast.xml" --version "$version" --build "$build" --minimum-system "$minimum" \
             --url "https://github.com/$UPDATES_REPO/releases/download/$GITHUB_REF_NAME/$zip" \
             --length "$length" --signature "$signature" --changes "$RUNNER_TEMP/changes.txt" $beta
           git -C "$updates" add appcast.xml

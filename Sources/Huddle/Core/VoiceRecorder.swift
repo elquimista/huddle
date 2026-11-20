@@ -1,5 +1,5 @@
 import AVFoundation
-import Observation
+import Perception
 
 /// A voice message recorded and waiting in its composer to be sent.
 struct VoiceRecording: Equatable {
@@ -30,7 +30,7 @@ struct VoiceRecording: Equatable {
 /// recording belongs to a composer (by its draft key: a room's, or a thread's) and waits there
 /// once stopped, to be played back and sent, or deleted. Leaving the room stops a recording
 /// without losing it.
-@MainActor @Observable
+@MainActor @Perceptible
 final class VoiceRecorder {
     static let shared = VoiceRecorder()
 
@@ -67,9 +67,9 @@ final class VoiceRecorder {
     /// Why recording couldn't start, and in which composer, to say so there.
     var failure: (key: String, reason: Failure)?
 
-    @ObservationIgnored private var capture: VoiceCapture?
+    @PerceptionIgnored private var capture: VoiceCapture?
     /// Goes up whenever a recording starts or ends; late news of an earlier one is dropped.
-    @ObservationIgnored private var session = 0
+    @PerceptionIgnored private var session = 0
 
     func phase(for key: String) -> Phase? { self.key == key ? phase : nil }
 

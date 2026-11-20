@@ -1,7 +1,7 @@
 import AppKit
 import MatrixRustSDK
-import Observation
 import WebKit
+import Perception
 
 /// Element Call, the call screen: a web app bundled in Huddle (Scripts/fetch-element-call.sh),
 /// run in a web view as Element X runs it. The SDK's widget driver does the Matrix side: the
@@ -13,7 +13,7 @@ enum ElementCallApp {
 }
 
 /// One call: Element Call in a web view, joined to a room.
-@MainActor @Observable
+@MainActor @Perceptible
 final class CallSession {
     let account: AccountSession
     let roomID: String
@@ -37,14 +37,14 @@ final class CallSession {
 
     /// Called once the call is over (left from Element Call's own button, hung up, or failed to
     /// start).
-    @ObservationIgnored var onEnded: (() -> Void)?
-    @ObservationIgnored private var driver: WidgetDriverAndHandle?
-    @ObservationIgnored private var tasks: [Task<Void, Never>] = []
-    @ObservationIgnored private weak var webView: WKWebView?
+    @PerceptionIgnored var onEnded: (() -> Void)?
+    @PerceptionIgnored private var driver: WidgetDriverAndHandle?
+    @PerceptionIgnored private var tasks: [Task<Void, Never>] = []
+    @PerceptionIgnored private weak var webView: WKWebView?
     /// Messages for the page that came before it could take them.
-    @ObservationIgnored private var pending: [String] = []
-    @ObservationIgnored private var pageIsReady = false
-    @ObservationIgnored private var hasEnded = false
+    @PerceptionIgnored private var pending: [String] = []
+    @PerceptionIgnored private var pageIsReady = false
+    @PerceptionIgnored private var hasEnded = false
 
     init(account: AccountSession, roomID: String, title: String, isVoiceOnly: Bool) {
         self.account = account
@@ -135,7 +135,7 @@ final class CallSession {
         configuration.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         configuration.mediaTypesRequiringUserActionForPlayback = []
         // Out of sight, it goes on at full speed all the same.
-        configuration.preferences.inactiveSchedulingPolicy = .none
+        if #available(macOS 14, *) { configuration.preferences.inactiveSchedulingPolicy = .none }
         let content = configuration.userContentController
         let bridge = CallBridge(session: self)
         content.add(bridge, name: CallBridge.name)
@@ -151,7 +151,7 @@ final class CallSession {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = bridge
         webView.uiDelegate = bridge
-        if AppEnvironment.isDev { webView.isInspectable = true }
+        if AppEnvironment.isDev, #available(macOS 13.3, *) { webView.isInspectable = true }
         bridge.webView = webView
         self.webView = webView
         if let url, let folder = ElementCallApp.indexURL?.deletingLastPathComponent() {

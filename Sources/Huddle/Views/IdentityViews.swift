@@ -1,11 +1,12 @@
 import SwiftUI
+import Perception
 
 /// Under a message whose sender can't be fully trusted: what's wrong, in a few words, with what
 /// that means in its tooltip.
 struct ShieldNote: View {
     let shield: MessageRow.Shield
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 4) {
             Image(systemName: shield.isSerious ? "exclamationmark.shield.fill" : "exclamationmark.shield")
             Text(shield.label)
@@ -15,7 +16,7 @@ struct ShieldNote: View {
         .help(shield.detail)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(shield.label). \(shield.detail)")
-    }
+    } }
 }
 
 /// Above the composer while someone in the room has a changed identity: who, what it may mean,
@@ -26,7 +27,7 @@ struct IdentityWarningBar: View {
     @State private var isBusy = false
     @State private var failure: String?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "exclamationmark.shield.fill")
                 .symbolRenderingMode(.palette)
@@ -55,7 +56,7 @@ struct IdentityWarningBar: View {
         .background(.bar)
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
         .accessibilityElement(children: .contain)
-    }
+    } }
 
     private var tint: Color { warning.wasVerified ? .red : .orange }
 
@@ -93,7 +94,7 @@ struct IdentityWarningBar: View {
 struct IdentityBadge: View {
     let identity: PersonIdentity?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         switch identity {
         case .verified:
             Image(systemName: "checkmark.seal.fill")
@@ -116,7 +117,7 @@ struct IdentityBadge: View {
         case .unverified, .noIdentity, nil:
             EmptyView()
         }
-    }
+    } }
 }
 
 /// In a direct chat's Room Info: whether the other person is who they say, and what to do about
@@ -130,7 +131,7 @@ struct PersonIdentityRow: View {
     private var identity: PersonIdentity? { account.peopleIdentities[person.userID] }
     private var name: String { account.contactName(for: person.userID) ?? person.name }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(alignment: .top, spacing: 12) {
             icon
                 .font(.system(size: 15))
@@ -175,7 +176,7 @@ struct PersonIdentityRow: View {
         .task(id: person.userID) {
             await account.refreshIdentities(of: [person.userID], fromServer: true)
         }
-    }
+    } }
 
     @ViewBuilder private var icon: some View {
         switch identity {
@@ -247,7 +248,7 @@ struct EncryptionGlyph: View {
     let encryption: RoomEncryption
     let showInfo: (() -> Void)?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         switch encryption {
         case .unknown:
             EmptyView()
@@ -260,7 +261,7 @@ struct EncryptionGlyph: View {
                   help: "Not encrypted: your server can read what you send",
                   label: "Not encrypted")
         }
-    }
+    } }
 
     private func glyph(_ symbol: String, style: AnyShapeStyle, help: String, label: String) -> some View {
         Button {

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// In place of the message field while a voice message is recorded: a pulsing red dot and the
 /// time, the sound as it comes in, and a button to stop and play it back.
@@ -10,7 +11,7 @@ struct VoiceRecordingBar: View {
     let stop: () -> Void
     @State private var isHoveringStop = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 10) {
             RecordingDot(isRecording: phase == .recording)
             Text(Self.clock(elapsed))
@@ -36,7 +37,7 @@ struct VoiceRecordingBar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(phase == .starting ? "Starting to record" : "Recording voice message, \(Self.spoken(elapsed))")
-    }
+    } }
 
     /// "0:07", "12:30".
     static func clock(_ seconds: TimeInterval) -> String {
@@ -55,7 +56,7 @@ private struct RecordingDot: View {
     @State private var isDim = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Circle()
             .fill(isRecording ? Color.red : Color.secondary.opacity(0.5))
             .frame(width: 9, height: 9)
@@ -64,7 +65,7 @@ private struct RecordingDot: View {
                        value: isDim)
             .onAppear { isDim = true }
             .accessibilityHidden(true)
-    }
+    } }
 }
 
 /// The sound coming in, as bars: from the left at first, then moving along with the newest at
@@ -98,7 +99,7 @@ struct DeleteRecordingButton: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             Image(systemName: "trash")
                 .font(.system(size: 12, weight: .semibold))
@@ -111,7 +112,7 @@ struct DeleteRecordingButton: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .help("Delete voice message")
         .accessibilityLabel("Delete voice message")
-    }
+    } }
 }
 
 extension VoiceRecorder.Failure {

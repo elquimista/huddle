@@ -1,5 +1,6 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 /// A room's notification setting as a menu of choices, the current one ticked: the default
 /// (naming what that is), or one of the room's own.
@@ -8,15 +9,15 @@ struct NotificationModeMenu: View {
     let defaultMode: RoomNotificationMode?
     let choose: (RoomNotificationMode?) -> Void
 
-    var body: some View {
-        Menu("Notifications") {
+    var body: some View { WithPerceptionTracking {
+        Menu("Notifications") { WithPerceptionTracking {
             Toggle(NotificationModeTitles.default(defaultMode), isOn: Binding(get: { mode == nil }, set: { _ in choose(nil) }))
             Divider()
-            ForEach(RoomNotificationMode.choices, id: \.self) { choice in
+            ForEach(RoomNotificationMode.choices, id: \.self) { choice in WithPerceptionTracking {
                 Toggle(choice.title, isOn: Binding(get: { mode == choice }, set: { _ in choose(choice) }))
-            }
-        }
-    }
+            } }
+        } }
+    } }
 }
 
 /// The same choices as a pop-up, with what the setting in force does: for Room Info.
@@ -29,7 +30,7 @@ struct NotificationModeRow: View {
     /// What notifies: the room's own setting, or the default it follows.
     private var effective: RoomNotificationMode? { mode ?? defaultMode }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: effective?.symbol ?? "bell")
                 .font(.system(size: 15))
@@ -44,9 +45,9 @@ struct NotificationModeRow: View {
                     Picker("Notifications", selection: Binding(get: { mode }, set: { choose($0) })) {
                         Text(NotificationModeTitles.default(defaultMode)).tag(RoomNotificationMode?.none)
                         Divider()
-                        ForEach(RoomNotificationMode.choices, id: \.self) { choice in
+                        ForEach(RoomNotificationMode.choices, id: \.self) { choice in WithPerceptionTracking {
                             Text(choice.title).tag(Optional(choice))
-                        }
+                        } }
                     }
                     .pickerStyle(.menu)
                     .labelsHidden()
@@ -65,7 +66,7 @@ struct NotificationModeRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-    }
+    } }
 }
 
 enum NotificationModeTitles {

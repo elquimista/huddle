@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// People's and rooms' colours as Element gives them: Compound's six decorative colours (lime,
 /// cyan, fuchsia, purple, pink and orange), picked by adding up the ID's UTF-16 code units, as
@@ -66,7 +67,7 @@ enum Decorative {
 /// Sorting by user ID keeps this the same whoever speaks first. A bigger room has Element's
 /// colours as they are: six can't keep seven people apart, and shuffling them would change
 /// people's colours as others join.
-@MainActor @Observable
+@MainActor @Perceptible
 final class NameColors {
     static let shared = NameColors()
     static let largestRoom = Decorative.count

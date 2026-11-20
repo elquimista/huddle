@@ -1,7 +1,7 @@
 import AppKit
 import MatrixRustSDK
-import Observation
 import WebKit
+import Perception
 
 /// A call going on here: Element Call's, or a one-to-one call of the older kind.
 @MainActor
@@ -26,7 +26,7 @@ extension HuddleCall {
 /// (m.call.invite, answer, candidates, hangup), which needs nothing more of the server than
 /// messages do. The two Macs connect directly, with WebKit's WebRTC carrying the sound; the call's
 /// events go through the SDK's widget driver, which encrypts and decrypts them as the room needs.
-@MainActor @Observable
+@MainActor @Perceptible
 final class LegacyCall: HuddleCall {
     enum State: Equatable {
         /// Outgoing: getting the microphone ready, before the other person is rung.
@@ -75,24 +75,24 @@ final class LegacyCall: HuddleCall {
     private(set) var isMuted = false
     private(set) var peerIsMuted = false
 
-    @ObservationIgnored var onEnded: (() -> Void)?
-    @ObservationIgnored let media = CallMedia()
+    @PerceptionIgnored var onEnded: (() -> Void)?
+    @PerceptionIgnored let media = CallMedia()
     var page: WKWebView? { media.webView }
-    @ObservationIgnored private let signals = CallSignals()
-    @ObservationIgnored private var offerSDP: String?
+    @PerceptionIgnored private let signals = CallSignals()
+    @PerceptionIgnored private var offerSDP: String?
     /// The other side's device in the call: the caller's, or the one that answered.
-    @ObservationIgnored private var opponentPartyID: String?
-    @ObservationIgnored private var hasRemoteDescription = false
+    @PerceptionIgnored private var opponentPartyID: String?
+    @PerceptionIgnored private var hasRemoteDescription = false
     /// Their candidates, by device, until the one to connect to is known.
-    @ObservationIgnored private var remoteCandidates: [String: [[String: Any]]] = [:]
-    @ObservationIgnored private var localCandidates: [[String: Any]] = []
+    @PerceptionIgnored private var remoteCandidates: [String: [[String: Any]]] = [:]
+    @PerceptionIgnored private var localCandidates: [[String: Any]] = []
     /// The invite or answer has gone out, so candidates can follow it.
-    @ObservationIgnored private var hasSignalled = false
-    @ObservationIgnored private var wasAnswered = false
-    @ObservationIgnored private var streamID: String?
-    @ObservationIgnored private var flushTask: Task<Void, Never>?
-    @ObservationIgnored private var timeoutTask: Task<Void, Never>?
-    @ObservationIgnored private var seenEvents: Set<String> = []
+    @PerceptionIgnored private var hasSignalled = false
+    @PerceptionIgnored private var wasAnswered = false
+    @PerceptionIgnored private var streamID: String?
+    @PerceptionIgnored private var flushTask: Task<Void, Never>?
+    @PerceptionIgnored private var timeoutTask: Task<Void, Never>?
+    @PerceptionIgnored private var seenEvents: Set<String> = []
 
     /// How long a call rings before it's given up, as Element's clients have it.
     private static let ringLifetime: TimeInterval = 60
@@ -827,12 +827,12 @@ final class CallMedia: NSObject, WKNavigationDelegate, WKUIDelegate {
         let configuration = WKWebViewConfiguration()
         configuration.mediaTypesRequiringUserActionForPlayback = []
         // The call goes on at full speed with Huddle's window covered, in the Dock or closed.
-        configuration.preferences.inactiveSchedulingPolicy = .none
+        if #available(macOS 14, *) { configuration.preferences.inactiveSchedulingPolicy = .none }
         configuration.userContentController.add(CallMediaMessages(self), name: "legacyCall")
         let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration)
         view.navigationDelegate = self
         view.uiDelegate = self
-        if AppEnvironment.isDev { view.isInspectable = true }
+        if AppEnvironment.isDev, #available(macOS 13.3, *) { view.isInspectable = true }
         // A file origin, as Element Call's: WebKit counts it secure, so it may ask for the microphone.
         view.loadHTMLString(Self.page, baseURL: Bundle.main.bundleURL)
         return view

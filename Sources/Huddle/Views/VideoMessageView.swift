@@ -1,5 +1,6 @@
 import AVKit
 import SwiftUI
+import Perception
 
 /// A video in the conversation, played where it is: shaped like the film, a still from it with a
 /// play button and its length until it's played, then macOS's own player in its place, with its
@@ -63,7 +64,7 @@ struct VideoMessageView: View {
         return CGSize(width: max(film.width, min(Self.narrowestFrame, roomy)), height: film.height)
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let film = filmSize
         let size = frameSize(for: film)
         let radius = min(10, min(size.width, size.height) * 0.18)
@@ -88,7 +89,7 @@ struct VideoMessageView: View {
         .task(id: PosterKey(url: file.media?.source.url() ?? video.localURL?.path, isPlayed: learntShape != nil)) {
             await loadPoster()
         }
-    }
+    } }
 
     // MARK: Before playing
 

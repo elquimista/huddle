@@ -1,5 +1,6 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 // MARK: - Rail
 
@@ -14,17 +15,17 @@ struct SpaceRail: View {
         !account.spaces.isEmpty || !account.invitedSpaces.isEmpty
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 2) {
                     RailSpaceButton(account: account, kind: .home)
-                    ForEach(account.spaces, id: \.roomId) { space in
+                    ForEach(account.spaces, id: \.roomId) { space in WithPerceptionTracking {
                         RailSpaceButton(account: account, kind: .space(space))
-                    }
-                    ForEach(account.invitedSpaces) { invite in
+                    } }
+                    ForEach(account.invitedSpaces) { invite in WithPerceptionTracking {
                         RailSpaceButton(account: account, kind: .invite(invite))
-                    }
+                    } }
                 }
                 .padding(.vertical, 3)
             }
@@ -34,7 +35,7 @@ struct SpaceRail: View {
                 .padding(.vertical, 4)
         }
         .frame(width: 54)
-    }
+    } }
 }
 
 /// A plain plus, with a light background while pointed at.
@@ -42,7 +43,7 @@ private struct NewSpaceButton: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             Image(systemName: "plus")
                 .font(.system(size: 15))
@@ -58,7 +59,7 @@ private struct NewSpaceButton: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .help("New space")
         .accessibilityLabel("New Space")
-    }
+    } }
 }
 
 private struct RailSpaceButton: View {
@@ -111,7 +112,7 @@ private struct RailSpaceButton: View {
         if case .space(let space) = kind { space.roomId } else { nil }
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let isInvite = if case .invite = kind { true } else { false }
         let state = isInvite ? nil : account.attention(inSpace: spaceID)
         RailIcon(kind: kind,
@@ -123,7 +124,7 @@ private struct RailSpaceButton: View {
                  hasUnreadRooms: !isInvite && account.hasUnreadRooms(inSpace: spaceID),
                  actions: actions)
             .equatable()
-    }
+    } }
 
     private var actions: RailIcon.Actions {
         let account = account
@@ -207,7 +208,7 @@ private struct RailIcon: View, Equatable {
     /// Its own, not part of comparing: only this icon redraws as the pointer comes and goes.
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         // The selected space has a ring around it, a gap apart, in the text colour: it stands out
         // against a space's picture whatever its colours, as the accent colour would not on one
         // of the same colour. It shows at once, with no animation, while the room list and the
@@ -235,14 +236,14 @@ private struct RailIcon: View, Equatable {
             .padding(RailBadge.overhang)
             .onTapGesture(perform: actions.select)
             .help(help)
-            .contextMenu { menu }
+            .contextMenu { WithPerceptionTracking { menu } }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel)
             // The tooltip's key, which VoiceOver doesn't get from the tooltip of a combined element.
             .accessibilityHint(shortcut.map { "Keyboard shortcut \($0)" } ?? "")
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             .accessibilityAction(.default, actions.select)
-    }
+    } }
 
     @ViewBuilder private var icon: some View {
         switch kind {
@@ -338,7 +339,7 @@ struct SpaceListHeader: View {
     private var space: SpaceRoom? { account.spaces.first { $0.roomId == spaceID } }
     private var isBrowsing: Bool { account.browsingSpaceID == spaceID }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 4) {
             Button {
                 account.browse(space: spaceID)
@@ -364,7 +365,7 @@ struct SpaceListHeader: View {
             .onHoverInFrontWindow { isHovering = $0 }
             .help("Browse every room in this space")
             .accessibilityHint("Shows every room in this space, including ones you haven’t joined")
-            Menu {
+            Menu { WithPerceptionTracking {
                 Button("Browse Rooms") { account.browse(space: spaceID) }
                 if account.editableSpaceIDs.contains(spaceID) {
                     Button("New Room…") { account.sheet = .newRoom(inSpace: spaceID) }
@@ -377,7 +378,7 @@ struct SpaceListHeader: View {
                     .disabled(!account.hasUnreadRooms(inSpace: spaceID))
                 Divider()
                 Button("Leave Space…") { account.sheet = .leaveSpace(spaceID) }
-            } label: {
+            } } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
@@ -391,14 +392,14 @@ struct SpaceListHeader: View {
         .padding(.leading, 10)
         .padding(.trailing, 12)
         .padding(.bottom, 4)
-    }
+    } }
 }
 
 // MARK: - Browsing a space
 
 /// One level of a space's hierarchy as the server describes it: its rooms and the spaces
 /// within it, joined or not.
-@MainActor @Observable
+@MainActor @Perceptible
 final class SpaceDirectory {
     let spaceID: String
     private(set) var space: SpaceRoom?
@@ -407,9 +408,9 @@ final class SpaceDirectory {
     private(set) var hasMore = true
     private(set) var error: String?
 
-    @ObservationIgnored private var list: SpaceRoomList?
-    @ObservationIgnored private var handles: [TaskHandle] = []
-    @ObservationIgnored private let service: SpaceService?
+    @PerceptionIgnored private var list: SpaceRoomList?
+    @PerceptionIgnored private var handles: [TaskHandle] = []
+    @PerceptionIgnored private let service: SpaceService?
 
     init(account: AccountSession, spaceID: String) {
         self.spaceID = spaceID
@@ -487,7 +488,7 @@ struct SpaceBrowserView: View {
 
     private var currentID: String { path.last ?? spaceID }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
             if !path.isEmpty { breadcrumb }
             SpaceLevelView(account: account, spaceID: currentID, isTopLevel: path.isEmpty) { inner in
@@ -497,7 +498,7 @@ struct SpaceBrowserView: View {
             .transition(.opacity)
         }
         .navigationTitle(account.spaceName(spaceID))
-    }
+    } }
 
     /// "Work › Mobile", each part a way back to it.
     private var breadcrumb: some View {
@@ -512,7 +513,7 @@ struct SpaceBrowserView: View {
             }
             .buttonStyle(.plain)
             .help("Back")
-            ForEach(Array(([spaceID] + path).enumerated()), id: \.offset) { index, id in
+            ForEach(Array(([spaceID] + path).enumerated()), id: \.offset) { index, id in WithPerceptionTracking {
                 if index > 0 {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
@@ -525,7 +526,7 @@ struct SpaceBrowserView: View {
                 .foregroundStyle(index == path.count ? .primary : .secondary)
                 .fontWeight(index == path.count ? .semibold : .regular)
                 .disabled(index == path.count)
-            }
+            } }
             Spacer()
         }
         .font(.callout)
@@ -557,7 +558,7 @@ private struct SpaceLevelView: View {
         account.allRooms.first { $0.id == spaceID && $0.isInvite }
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
@@ -583,10 +584,10 @@ private struct SpaceLevelView: View {
             directory = nil
         }
         // Rooms joined, added or taken out, here or on another device.
-        .onChange(of: account.roomIDs(inSpace: spaceID)) {
+        .onChanged(of: account.roomIDs(inSpace: spaceID)) {
             Task { await directory?.reload() }
         }
-    }
+    } }
 
     // MARK: Header
 
@@ -686,23 +687,23 @@ private struct SpaceLevelView: View {
                     .frame(maxWidth: .infinity)
                     .padding(40)
             } else if let error = directory.error {
-                ContentUnavailableView("Can’t Show This Space", systemImage: "exclamationmark.triangle",
+                EmptyState("Can’t Show This Space", systemImage: "exclamationmark.triangle",
                                        description: Text(error))
                     .padding(.top, 30)
             } else {
-                ContentUnavailableView("No Rooms Yet", systemImage: "square.stack",
+                EmptyState("No Rooms Yet", systemImage: "square.stack",
                                        description: Text(account.editableSpaceIDs.contains(spaceID)
                                                          ? "Create a room here, or add rooms you’re already in."
                                                          : "Nobody has added a room to this space yet."))
                     .padding(.top, 30)
             }
         } else {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) { WithPerceptionTracking {
                 // Anything here can be taken out by someone who can change the space: a space
                 // within it too, which goes back to the rail (the only place to do that, as the
                 // room list doesn't show the spaces in a space).
                 let canRemove = invite == nil && account.editableSpaceIDs.contains(spaceID)
-                ForEach(rooms, id: \.roomId) { room in
+                ForEach(rooms, id: \.roomId) { room in WithPerceptionTracking {
                     SpaceRoomRow(account: account, room: room, isJoining: joining.contains(room.roomId),
                                  isPreview: invite != nil, open: { open(room) }, join: { join(room) },
                                  removal: canRemove ? ("Remove from \(account.spaceName(spaceID))", { remove(room) }) : nil)
@@ -710,14 +711,14 @@ private struct SpaceLevelView: View {
                             if room.roomId == rooms.last?.roomId { Task { await directory.loadMore() } }
                         }
                     Divider().padding(.leading, 76).padding(.trailing, 24)
-                }
+                } }
                 if directory.isLoading {
                     ProgressView()
                         .controlSize(.small)
                         .frame(maxWidth: .infinity)
                         .padding(16)
                 }
-            }
+            } }
             .padding(.top, 6)
         }
     }
@@ -782,7 +783,7 @@ private struct SpaceRoomRow: View {
     private var isJoined: Bool { room.state == .joined }
     private var opens: Bool { !isPreview && (isJoined || isSpace) }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(alignment: .center, spacing: 14) {
             AvatarView(media: account.media, url: room.avatarUrl, name: room.displayName,
                        seed: room.roomId, size: 38, isSquare: isSpace)
@@ -823,9 +824,9 @@ private struct SpaceRoomRow: View {
         .contentShape(Rectangle())
         .onTapGesture { if opens { open() } }
         .onHoverInFrontWindow { isHovering = $0 }
-        .contextMenu {
+        .contextMenu { WithPerceptionTracking {
             if let removal { Button(removal.title, action: removal.perform) }
-        }
+        } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isPreview ? [] : .isButton)
         .accessibilityAction(.default) {
@@ -837,7 +838,7 @@ private struct SpaceRoomRow: View {
             }
             if let removal { Button(removal.title, action: removal.perform) }
         }
-    }
+    } }
 
     private var details: String {
         var parts: [String] = []

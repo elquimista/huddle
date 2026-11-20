@@ -2,6 +2,7 @@ import AppKit
 import MatrixRustSDK
 import SwiftUI
 import UniformTypeIdentifiers
+import Perception
 
 /// An audio message: a play button, the sound's shape (or a plain track) to scrub through, and
 /// the time. Voice messages are one line; attached files also show their name.
@@ -49,7 +50,7 @@ struct AudioMessageView: View {
     /// Room for "0:00"; longer times widen it.
     private static let timeWidth: CGFloat = 34
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let phase = playback.phase(of: id)
         let failure = playback.failures[id]
         let isOpen = phase == .playing || phase == .paused
@@ -112,10 +113,10 @@ struct AudioMessageView: View {
                 .padding(.leading, 4)
             }
         }
-        .onChange(of: phase) {
+        .onChanged(of: phase) {
             if phase != .loading { pendingStart = nil }
         }
-    }
+    } }
 
     // MARK: Play button
 
@@ -176,7 +177,7 @@ struct AudioMessageView: View {
     private func progress(phase: AudioPlayback.Phase?) -> some View {
         // Read so that a seek while paused, when no frames are being drawn, still redraws this.
         _ = playback.clockChanges
-        return SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 30, paused: phase != .playing)) { _ in
+        return SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 30, paused: phase != .playing)) { _ in WithPerceptionTracking {
             let isOpen = phase == .playing || phase == .paused
             let length = isOpen ? playback.duration : (audio.duration ?? 0)
             let fraction = scrub
@@ -209,11 +210,11 @@ struct AudioMessageView: View {
                     ? "\(Self.clock(fraction * length, roundingUp: false)) of \(Self.clock(length, roundingUp: true))"
                     : "Not loaded")
             }
-        }
+        } }
     }
 
     private func scrubber(fraction: Double, showsKnob: Bool) -> some View {
-        GeometryReader { geometry in
+        GeometryReader { geometry in WithPerceptionTracking {
             Canvas { context, size in
                 let split = size.width * CGFloat(min(max(fraction, 0), 1))
                 draw(in: context, size: size, color: Color.primary.opacity(0.26))
@@ -238,7 +239,7 @@ struct AudioMessageView: View {
                         scrub = nil
                     }
             )
-        }
+        } }
         .frame(width: scrubberWidth, height: audio.waveform.isEmpty ? 16 : isEmbedded ? 18 : 26)
     }
 
@@ -309,7 +310,7 @@ struct AudioMessageView: View {
 private struct LoadingArc: View {
     @State private var isTurning = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Circle()
             .trim(from: 0.08, to: 0.78)
             .stroke(.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
@@ -317,7 +318,7 @@ private struct LoadingArc: View {
             .rotationEffect(.degrees(isTurning ? 360 : 0))
             .animation(.linear(duration: 0.8).repeatForever(autoreverses: false), value: isTurning)
             .onAppear { isTurning = true }
-    }
+    } }
 }
 
 /// Saves an attachment's file, exactly as it was sent, to a place the user picks.

@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 extension PresenceInfo.State {
     /// Green while online, amber while away. Offline has no colour: no dot at all.
@@ -31,7 +32,7 @@ private struct PresenceDot: ViewModifier {
         return CGPoint(x: offset, y: offset)
     }
 
-    func body(content: Content) -> some View {
+    func body(content: Content) -> some View { WithPerceptionTracking {
         let color = presence?.state.color
         content
             // The ring around the dot is cut out of the avatar with a mask, not painted over
@@ -54,7 +55,7 @@ private struct PresenceDot: ViewModifier {
                 }
             }
             .animation(.snappy(duration: 0.25), value: presence?.state)
-    }
+    } }
 }
 
 /// Everything around a view, minus one circle: filled even-odd, a mask that hides the circle.

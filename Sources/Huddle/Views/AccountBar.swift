@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// The accounts, as a row of small avatars in the title bar above the sidebar: the one shown
 /// opens into a chip with its name, and each carries its own unread badge. They sit above what
@@ -37,17 +38,17 @@ struct AccountBar: View {
         return (shown.map { ($0.offset, $0.element) }, more.map { ($0.offset, $0.element) })
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let split = split
         HStack(spacing: 0) {
-            ForEach(split.shown, id: \.1.id) { index, account in
+            ForEach(split.shown, id: \.1.id) { index, account in WithPerceptionTracking {
                 AccountButton(account: account, isSelected: account.id == store.selected?.id, index: index,
                               select: { store.selectedID = account.id },
                               menu: { menuSections(for: account) })
                 // Its own view, made only as the menu opens, so its checks (unread rooms, for
                 // Mark All as Read) aren't run each time the bar is drawn.
-                .contextMenu { AccountMenuContent(header: account.userID, sections: { menuSections(for: account) }) }
-            }
+                .contextMenu { WithPerceptionTracking { AccountMenuContent(header: account.userID, sections: { menuSections(for: account) }) } }
+            } }
             if !split.more.isEmpty {
                 MoreAccountsButton(accounts: split.more) { store.selectedID = $0.id }
             }
@@ -62,16 +63,16 @@ struct AccountBar: View {
         }
         .confirmationDialog("Sign out of \(accountToSignOut?.userID ?? "")?",
                             isPresented: Binding(get: { accountToSignOut != nil },
-                                                 set: { if !$0 { accountToSignOut = nil } })) {
+                                                 set: { if !$0 { accountToSignOut = nil } })) { WithPerceptionTracking {
             Button("Sign Out", role: .destructive) {
                 if let account = accountToSignOut {
                     Task { await store.signOut(account) }
                 }
             }
-        } message: {
+        } } message: {
             Text("Local message history and encryption keys for this account will be removed from this Mac.")
         }
-    }
+    } }
 }
 
 extension AccountBar {
@@ -100,7 +101,7 @@ extension AccountBar {
 
 /// "+2": the accounts that don't fit, in a menu, with a dot when any of them has something new.
 /// The sidebar's width as it is laid out, for the account bar above it to fit itself to.
-@Observable
+@Perceptible
 final class SidebarWidth {
     /// Starts at the narrowest the sidebar can be. The toolbar drops an item that is too wide
     /// for it when first laid out, and doesn't bring it back once it shrinks; it does let an
@@ -120,7 +121,7 @@ private struct MoreAccountsButton: View {
         return nil
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: open) {
             Text("+\(accounts.count)")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -138,7 +139,7 @@ private struct MoreAccountsButton: View {
         .background(MenuAnchorView(anchor: anchor))
         .help("More accounts")
         .accessibilityLabel("\(accounts.count) more accounts")
-    }
+    } }
 
     /// The other accounts, each with its unread count as the menu's own badge.
     private func open() {
@@ -148,7 +149,13 @@ private struct MoreAccountsButton: View {
             // With its label, where it has one: accounts often share their owner's name.
             let name = account.displayName ?? account.userID
             let item = ClosureMenuItem(title: account.label.map { "\(name) · \($0)" } ?? name) { select(account) }
-            if account.badgeCount > 0 { item.badge = NSMenuItemBadge(count: account.badgeCount) }
+            if account.badgeCount > 0 {
+                if #available(macOS 14, *) {
+                    item.badge = NSMenuItemBadge(count: account.badgeCount)
+                } else {
+                    item.title += " (\(account.badgeCount))"
+                }
+            }
             menu.addItem(item)
         }
         menu.popUp(positioning: nil, at: NSPoint(x: RailBadge.overhang, y: view.bounds.height), in: view)
@@ -186,7 +193,7 @@ private struct AccountButton: View {
         account.displayName ?? account.userID.matrixLocalpart
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         // The open account opens into a chip with its name, so it's plain at a glance which one
         // is shown.
         HStack(spacing: 6) {
@@ -235,7 +242,7 @@ private struct AccountButton: View {
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             .accessibilityAction(.default, activate)
             .help(helpText)
-    }
+    } }
 
     /// Another account is switched to; the open one shows its menu.
     private func activate() {

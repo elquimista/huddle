@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// One thing that can be done to a message, as a menu item. The same list makes the message's
 /// context menu and the menu behind its "More" button, so the two always agree.
@@ -18,14 +19,14 @@ struct MessageMenuItem: Identifiable {
 struct MessageContextMenu: View {
     let sections: [[MessageMenuItem]]
 
-    var body: some View {
-        ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
+    var body: some View { WithPerceptionTracking {
+        ForEach(Array(sections.enumerated()), id: \.offset) { index, section in WithPerceptionTracking {
             if index > 0 { Divider() }
-            ForEach(section) { item in
+            ForEach(section) { item in WithPerceptionTracking {
                 Button(item.title, action: item.action)
-            }
-        }
-    }
+            } }
+        } }
+    } }
 }
 
 /// The "More" button at the end of a message's hover actions. Its menu is an AppKit menu
@@ -40,7 +41,7 @@ struct MoreActionsButton: View {
     var isRound = false
     @State private var anchor = MenuAnchor()
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Group {
             if isRound {
                 RoundActionButton(help: "More actions", action: open) { Image(systemName: "ellipsis") }
@@ -50,7 +51,7 @@ struct MoreActionsButton: View {
         }
         .background(MenuAnchorView(anchor: anchor))
         .accessibilityLabel("More actions")
-    }
+    } }
 
     private func open() {
         guard let view = anchor.view else { return }

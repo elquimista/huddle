@@ -1,6 +1,7 @@
 import Foundation
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 /// Turns a message into styled text: Matrix's HTML formatting (bold, code, lists, quotes),
 /// clickable links, and mentions drawn as pills with the person's name.

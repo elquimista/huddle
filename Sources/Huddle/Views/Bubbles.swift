@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// The bubble layout's colours and measures.
 enum Bubble {
@@ -135,7 +136,7 @@ struct RoundActionButton<Label: View>: View {
     @ViewBuilder var label: Label
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             label
                 .font(.system(size: 12, weight: .medium))
@@ -151,7 +152,7 @@ struct RoundActionButton<Label: View>: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .help(help)
         .accessibilityLabel(help)
-    }
+    } }
 }
 
 /// The emoji picker with the quick reactions along its top, one click away, whatever the
@@ -164,23 +165,23 @@ struct QuickReactionPicker: View {
 
     private var marked: Set<String> { Set(reacted.map(EmojiCatalog.canonical)) }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
             HStack(spacing: 2) {
-                ForEach(QuickReactions.shared.emoji, id: \.self) { emoji in
+                ForEach(QuickReactions.shared.emoji, id: \.self) { emoji in WithPerceptionTracking {
                     QuickReactionButton(emoji: emoji, isMarked: marked.contains(emoji)) {
                         EmojiCatalog.noteUse(of: emoji)
                         onPick(emoji)
                     }
-                    .contextMenu { CustomizeQuickReactionsButton(before: { dismiss() }) }
-                }
+                    .contextMenu { WithPerceptionTracking { CustomizeQuickReactionsButton(before: { dismiss() }) } }
+                } }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             Divider()
             EmojiPicker(marked: marked, onPick: onPick)
         }
-    }
+    } }
 }
 
 private struct QuickReactionButton: View {
@@ -193,7 +194,7 @@ private struct QuickReactionButton: View {
         isMarked ? Color.accentColor.opacity(isHovering ? 0.3 : 0.2) : Color.primary.opacity(isHovering ? 0.08 : 0)
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             Text(emoji)
                 .font(.system(size: 21))
@@ -205,5 +206,5 @@ private struct QuickReactionButton: View {
         .onHover { isHovering = $0 }
         .help(isMarked ? "Remove your \(emoji)" : "React with \(emoji)")
         .accessibilityLabel(isMarked ? "Remove your \(emoji)" : "React with \(emoji)")
-    }
+    } }
 }

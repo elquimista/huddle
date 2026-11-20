@@ -1,5 +1,6 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 /// Whichever of the account's sheets is up: making a room or space, adding rooms to a
 /// space, or leaving one.
@@ -7,7 +8,7 @@ struct AccountSheetView: View {
     let account: AccountSession
     let sheet: AccountSheet
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         switch sheet {
         case .newMessage: NewMessageSheet(account: account)
         case .invite(let roomID): NewMessageSheet(account: account, purpose: .invite(roomID: roomID))
@@ -21,7 +22,7 @@ struct AccountSheetView: View {
         case .addRooms(let spaceID): AddRoomsSheet(account: account, spaceID: spaceID)
         case .leaveSpace(let spaceID): LeaveSpaceSheet(account: account, spaceID: spaceID)
         }
-    }
+    } }
 }
 
 // MARK: - Shared parts
@@ -31,7 +32,7 @@ private struct SheetTitle: View {
     let title: String
     var detail: String?
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.headline)
@@ -42,7 +43,7 @@ private struct SheetTitle: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
+    } }
 }
 
 /// Cancel and the sheet's action along its bottom, with what went wrong, if anything, beside them.
@@ -55,7 +56,7 @@ private struct SheetButtons: View {
     let perform: () -> Void
     @Environment(\.dismiss) private var dismiss
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             if let failure {
                 Label(failure, systemImage: "exclamationmark.triangle.fill")
@@ -75,14 +76,14 @@ private struct SheetButtons: View {
                 .keyboardShortcut(role == .destructive ? nil : .defaultAction)
                 .disabled(!isEnabled || isBusy)
         }
-    }
+    } }
 }
 
 /// A grouped form that is only as tall as what is in it, so the sheet fits it exactly.
 private struct SheetForm<Content: View>: View {
     @ViewBuilder let content: Content
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Form { content }
             .formStyle(.grouped)
             .scrollDisabled(true)
@@ -90,7 +91,7 @@ private struct SheetForm<Content: View>: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, -20)
             .padding(.vertical, -12)
-    }
+    } }
 }
 
 private extension View {
@@ -119,7 +120,7 @@ struct NewSpaceSheet: View {
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 16) {
             SheetTitle(title: "New Space",
                        detail: "A space gathers rooms in one place, so the people in it can find them and join.")
@@ -147,7 +148,7 @@ struct NewSpaceSheet: View {
         .padding(20)
         .frame(width: 440)
         .onAppear { nameIsFocused = true }
-    }
+    } }
 
     private func create() {
         guard !trimmedName.isEmpty, !isBusy else { return }
@@ -209,7 +210,7 @@ struct NewRoomSheet: View {
         }
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 16) {
             SheetTitle(title: "New Room")
             SheetForm {
@@ -221,9 +222,9 @@ struct NewRoomSheet: View {
                         Picker("Space", selection: $spaceID) {
                             Text("None").tag(String?.none)
                             Divider()
-                            ForEach(spaces, id: \.id) { space in
+                            ForEach(spaces, id: \.id) { space in WithPerceptionTracking {
                                 Text(space.name).tag(Optional(space.id))
-                            }
+                            } }
                         }
                     }
                 }
@@ -254,7 +255,7 @@ struct NewRoomSheet: View {
         .padding(20)
         .frame(width: 440)
         .onAppear { nameIsFocused = true }
-        .onChange(of: spaceID) { _, space in
+        .onChanged(of: spaceID) { _, space in
             // Who can join follows the space: its members by default, and never a space it's not in.
             if let space {
                 if access != .anyone { access = .spaceMembers(space) }
@@ -262,7 +263,7 @@ struct NewRoomSheet: View {
                 access = .invited
             }
         }
-    }
+    } }
 
     private func create() {
         guard !trimmedName.isEmpty, !isBusy else { return }
@@ -322,7 +323,9 @@ struct AddRoomsSheet: View {
         return (people, rooms, spaces)
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking { content } }
+
+    @ViewBuilder private var content: some View {
         let candidates = candidates
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
@@ -335,29 +338,29 @@ struct AddRoomsSheet: View {
             Group {
                 if candidates.people.isEmpty && candidates.rooms.isEmpty && candidates.spaces.isEmpty {
                     if query.isEmpty {
-                        ContentUnavailableView("Nothing to Add", systemImage: "square.stack",
+                        EmptyState("Nothing to Add", systemImage: "square.stack",
                                                description: Text("Every room you’re in is already in this space."))
                     } else {
-                        ContentUnavailableView.search(text: query)
+                        SearchEmptyState(text: query)
                     }
                 } else {
-                    List {
+                    List { WithPerceptionTracking {
                         if !candidates.people.isEmpty {
                             Section("People") {
-                                ForEach(candidates.people) { row($0) }
+                                ForEach(candidates.people) { item in WithPerceptionTracking { row(item) } }
                             }
                         }
                         if !candidates.rooms.isEmpty {
                             Section("Rooms") {
-                                ForEach(candidates.rooms) { row($0) }
+                                ForEach(candidates.rooms) { item in WithPerceptionTracking { row(item) } }
                             }
                         }
                         if !candidates.spaces.isEmpty {
                             Section("Spaces") {
-                                ForEach(candidates.spaces) { row($0) }
+                                ForEach(candidates.spaces) { item in WithPerceptionTracking { row(item) } }
                             }
                         }
-                    }
+                    } }
                     .listStyle(.inset)
                     .scrollContentBackground(.hidden)
                 }
@@ -425,7 +428,7 @@ struct LeaveSpaceSheet: View {
 
     private var name: String { account.spaceName(spaceID) }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 16) {
             SheetTitle(title: "Leave \(name)?",
                        detail: rooms.isEmpty ? "It will no longer be one of your spaces."
@@ -455,9 +458,9 @@ struct LeaveSpaceSheet: View {
                     }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            ForEach(rooms, id: \.spaceRoom.roomId) { room in
+                            ForEach(rooms, id: \.spaceRoom.roomId) { room in WithPerceptionTracking {
                                 row(room)
-                            }
+                            } }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)
@@ -476,7 +479,7 @@ struct LeaveSpaceSheet: View {
         .padding(20)
         .frame(width: 440)
         .task { await load() }
-    }
+    } }
 
     private func row(_ room: LeaveSpaceRoom) -> some View {
         let id = room.spaceRoom.roomId

@@ -1,5 +1,6 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 /// Setting up the account's recovery key, or changing it, on its own sheet: from Settings ▸
 /// Accounts and the room list's suggestion.
@@ -7,12 +8,12 @@ struct RecoveryKeySheet: View {
     let account: AccountSession
     @Environment(\.dismiss) private var dismiss
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 20) {
             RecoveryKeySetup(account: account, finish: { dismiss() })
         }
         .centredSheetLayout()
-    }
+    } }
 }
 
 extension View {
@@ -56,13 +57,13 @@ struct RecoveryKeySetup: View {
                          : account.recoveryState == .incomplete ? .changeWithCurrentKey : .change)
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         if let key {
             keyToKeep(key)
         } else {
             intro
         }
-    }
+    } }
 
     @ViewBuilder private var intro: some View {
         switch purpose {
@@ -113,9 +114,9 @@ struct RecoveryKeySetup: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(isBusy || (purpose == .changeWithCurrentKey && currentKey.isEmpty))
         }
-        .confirmationDialog("Replace your old key backup?", isPresented: $confirmsReplacing) {
+        .confirmationDialog("Replace your old key backup?", isPresented: $confirmsReplacing) { WithPerceptionTracking {
             Button("Replace Backup", role: .destructive) { make(replacing: true) }
-        } message: {
+        } } message: {
             Text("Messages whose keys are only in the old backup can’t be read again.")
         }
     }
@@ -186,7 +187,7 @@ struct RecoveryKeySetup: View {
 private struct RecoveryKeyText: View {
     let key: String
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Text(lines)
             .font(.system(size: 17, weight: .medium, design: .monospaced))
             .lineSpacing(6)
@@ -198,7 +199,7 @@ private struct RecoveryKeyText: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Recovery key")
             .accessibilityValue(key)
-    }
+    } }
 
     /// Its groups of four split over two lines.
     private var lines: String {
@@ -246,14 +247,14 @@ struct ResetIdentityFlow: View {
         _wantsPassword = State(initialValue: account.signsInWithOAuth ? false : nil)
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         switch step {
         case .confirm: confirm
         case .browser(let url): browser(url)
         case .done: done
         case .recoveryKey: RecoveryKeySetup(account: account, afterReset: true, finish: { dismiss() })
         }
-    }
+    } }
 
     @ViewBuilder private var confirm: some View {
         SheetHeader(symbol: "exclamationmark.triangle.fill", tint: .orange, isFilled: true,

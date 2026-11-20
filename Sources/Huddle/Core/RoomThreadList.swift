@@ -1,6 +1,6 @@
 import Foundation
 import MatrixRustSDK
-import Observation
+import Perception
 
 struct ThreadListEntry: Identifiable, Equatable {
     let id: String
@@ -25,33 +25,33 @@ struct ThreadListEntry: Identifiable, Equatable {
 /// any reply the SDK comes across later is taken for the latest and counted as one more, even
 /// an older one loaded as the room scrolls back; only a reply later than the latest is taken
 /// here, and counted once.
-@MainActor @Observable
+@MainActor @Perceptible
 final class RoomThreadList {
     private(set) var entries: [ThreadListEntry] = []
     private(set) var isLoading = true
     private(set) var hasMore = true
     private(set) var error: String?
 
-    @ObservationIgnored private let room: Room
-    @ObservationIgnored private let service: ThreadListService
-    @ObservationIgnored private var items: [ThreadListItem] = []
-    @ObservationIgnored private var handle: TaskHandle?
-    @ObservationIgnored private var updatesTask: Task<Void, Never>?
+    @PerceptionIgnored private let room: Room
+    @PerceptionIgnored private let service: ThreadListService
+    @PerceptionIgnored private var items: [ThreadListItem] = []
+    @PerceptionIgnored private var handle: TaskHandle?
+    @PerceptionIgnored private var updatesTask: Task<Void, Never>?
     /// Told whenever the entries change.
-    @ObservationIgnored var onChange: (() -> Void)?
+    @PerceptionIgnored var onChange: (() -> Void)?
     /// Looks up the latest replies' dates down the list only as far as the first one older than
     /// this: the server lists threads by their latest activity, so the rest are older still.
     /// Nil looks them all up.
-    @ObservationIgnored private let datesBack: Date?
+    @PerceptionIgnored private let datesBack: Date?
     /// Each thread's replies the SDK has given as its latest, by root event ID.
-    @ObservationIgnored private var threads: [String: Replies] = [:]
+    @PerceptionIgnored private var threads: [String: Replies] = [:]
     /// Replies' own dates, by event ID, as looked up.
-    @ObservationIgnored private var replyDates: [String: Date] = [:]
+    @PerceptionIgnored private var replyDates: [String: Date] = [:]
     /// Replies whose date couldn't be had (deleted, or the request failed): not asked again.
-    @ObservationIgnored private var undated: Set<String> = []
-    @ObservationIgnored private var lookups: Task<Void, Never>?
+    @PerceptionIgnored private var undated: Set<String> = []
+    @PerceptionIgnored private var lookups: Task<Void, Never>?
     /// Set once a reply older than `datesBack` has been found.
-    @ObservationIgnored private var lookedFarEnough = false
+    @PerceptionIgnored private var lookedFarEnough = false
 
     private struct Reply {
         let eventID: String

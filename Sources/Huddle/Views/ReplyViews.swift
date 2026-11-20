@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// What a message row can ask the timeline around it to do.
 struct MessageActions {
@@ -28,7 +29,7 @@ struct ReplyQuoteView: View {
     @State private var isHovering = false
     @Environment(\.nameColorRoom) private var room
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             HStack(spacing: 8) {
                 Capsule()
@@ -64,7 +65,7 @@ struct ReplyQuoteView: View {
         .widthCap(460)
         .accessibilityLabel(reply.state == .ready ? "In reply to \(reply.senderName): \(reply.text)" : reply.placeholder)
         .accessibilityHint(reply.state == .ready ? "Goes to that message" : "")
-    }
+    } }
 }
 
 /// Above the composer while writing a reply: who and what is being answered, and a way out.
@@ -73,7 +74,7 @@ struct ReplyComposerBar: View {
     let cancel: () -> Void
     @Environment(\.nameColorRoom) private var room
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             Capsule()
                 .fill(reply.tint(inRoom: room))
@@ -99,7 +100,7 @@ struct ReplyComposerBar: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
-    }
+    } }
 }
 
 /// Above the composer while editing a message: what it said before, and a way out.
@@ -108,7 +109,7 @@ struct EditComposerBar: View {
     let isCaption: Bool
     let cancel: () -> Void
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             Capsule()
                 .fill(Color.accentColor)
@@ -134,14 +135,14 @@ struct EditComposerBar: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
-    }
+    } }
 }
 
 /// One line standing for a message: its text, or what kind of thing it is.
 struct ReplySnippet: View {
     let reply: ReplyPreview
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 4) {
             if reply.state == .ready, let icon = reply.icon {
                 Image(systemName: icon)
@@ -153,7 +154,7 @@ struct ReplySnippet: View {
                 .truncationMode(.tail)
         }
         .foregroundStyle(.secondary)
-    }
+    } }
 }
 
 extension ReplyPreview {

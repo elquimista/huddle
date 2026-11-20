@@ -1,25 +1,26 @@
 import SwiftUI
 import WebKit
+import Perception
 
 /// A call going on, at the foot of the room list wherever you are in Huddle: who it's with, how
 /// it's going, Mute and End. Clicking who it's with goes to its room.
 struct CallStrip: View {
     let call: any HuddleCall
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         if let legacy = call as? LegacyCall {
             LegacyCallStrip(call: legacy)
         } else if let session = call as? CallSession {
             ElementCallStrip(session: session)
         }
-    }
+    } }
 }
 
 /// The older kind of one-to-one call: the other person, and how the call between you is going.
 private struct LegacyCallStrip: View {
     let call: LegacyCall
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         // Its picture as the room list shows the chat.
         let room = call.account.allRooms.first { $0.id == call.roomID }
         CallStripLayout(call: call, status: status, peerIsMuted: call.peerIsMuted && !call.isEnded,
@@ -28,7 +29,7 @@ private struct LegacyCallStrip: View {
             AvatarView(media: call.account.media, url: room?.avatarURL ?? call.peerAvatarURL,
                        name: room?.name ?? call.title, seed: call.roomID, size: 32)
         }
-    }
+    } }
 
     private var status: CallStripStatus {
         switch call.state {
@@ -55,7 +56,7 @@ private struct LegacyCallStrip: View {
 private struct ElementCallStrip: View {
     let session: CallSession
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let room = session.account.allRooms.first { $0.id == session.roomID }
         CallStripLayout(call: session, status: status(in: room), peerIsMuted: false,
                         isMuted: session.isMuted, canMute: session.canMute, isEnded: false,
@@ -63,7 +64,7 @@ private struct ElementCallStrip: View {
             AvatarView(media: session.account.media, url: room?.avatarURL, name: room?.name ?? session.title,
                        seed: session.roomID, size: 32)
         }
-    }
+    } }
 
     private func status(in room: RoomSummary?) -> CallStripStatus {
         if let failure = session.failure { return .failure(failure) }
@@ -99,7 +100,7 @@ private struct CallStripLayout<Avatar: View>: View {
 
     @Environment(AccountStore.self) private var store
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 10) {
             Button {
                 CallCenter.shared.show(call)
@@ -147,7 +148,7 @@ private struct CallStripLayout<Avatar: View>: View {
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Call with \(call.title)")
-    }
+    } }
 }
 
 /// How the call is going: calling, how long it's been on (in green), how it ended, or what went
@@ -155,7 +156,7 @@ private struct CallStripLayout<Avatar: View>: View {
 private struct CallStripStatusText: View {
     let status: CallStripStatus
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         switch status {
         case .text(let text):
             Text(text)
@@ -168,7 +169,7 @@ private struct CallStripStatusText: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(4)
         case .connected(let since, let detail):
-            SwiftUI.TimelineView(.periodic(from: since, by: 1)) { context in
+            SwiftUI.TimelineView(.periodic(from: since, by: 1)) { context in WithPerceptionTracking {
                 HStack(spacing: 4) {
                     Image(systemName: "phone.fill")
                         .font(.system(size: 8))
@@ -181,9 +182,9 @@ private struct CallStripStatusText: View {
                 .font(.caption)
                 .foregroundStyle(.green)
                 .lineLimit(1)
-            }
+            } }
         }
-    }
+    } }
 
     private static func duration(from start: Date, to now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(start)))
@@ -203,7 +204,7 @@ private struct CallStripButton: View {
 
     @Environment(\.isEnabled) private var isEnabled
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .semibold))
@@ -216,7 +217,7 @@ private struct CallStripButton: View {
         .buttonStyle(.plain)
         .help(title)
         .accessibilityLabel(title)
-    }
+    } }
 
     private var foreground: Color {
         switch style {
@@ -238,17 +239,17 @@ private struct CallStripButton: View {
 /// The calls' web pages, out of sight in Huddle's window: their sound goes through them, and
 /// WebKit lets a page use the microphone only while its window can be seen.
 struct CallPages: View {
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         ZStack {
-            ForEach(CallCenter.shared.calls.compactMap(CallPage.init)) { page in
+            ForEach(CallCenter.shared.calls.compactMap(CallPage.init)) { page in WithPerceptionTracking {
                 CallPageView(view: page.view)
-            }
+            } }
         }
         .frame(width: 1, height: 1)
         .opacity(0)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-    }
+    } }
 }
 
 private struct CallPage: Identifiable {

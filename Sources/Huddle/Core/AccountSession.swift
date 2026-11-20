@@ -1,6 +1,6 @@
 import Foundation
 import MatrixRustSDK
-import Observation
+import Perception
 
 struct RoomSummary: Identifiable, Equatable {
     /// A topic as a line: its first one with anything in it, its spaces evened out. Nil for one
@@ -83,7 +83,7 @@ struct DraftPreview: Equatable {
     }
 }
 
-@MainActor @Observable
+@MainActor @Perceptible
 final class AccountSession: Identifiable {
     nonisolated let id: String
     let userID: String
@@ -101,10 +101,10 @@ final class AccountSession: Identifiable {
     /// room, as the push rules have them (RoomNotifications.swift).
     var notificationModes: [String: RoomNotificationMode] = [:]
     var defaultNotificationModes: [NotificationDefaultKind: RoomNotificationMode] = [:]
-    @ObservationIgnored var notificationSettingsTask: Task<MatrixRustSDK.NotificationSettings, Never>?
+    @PerceptionIgnored var notificationSettingsTask: Task<MatrixRustSDK.NotificationSettings, Never>?
     /// Rooms whose setting is being changed, and how many changes have been made so far.
-    @ObservationIgnored var notificationWrites: [String: Int] = [:]
-    @ObservationIgnored var notificationChanges = 0
+    @PerceptionIgnored var notificationWrites: [String: Int] = [:]
+    @PerceptionIgnored var notificationChanges = 0
     /// The account's own sections, by tag, and the order of People, Rooms and them, as Element
     /// keeps them (RoomSections.swift).
     var sectionData: [String: CustomSection] = [:] {
@@ -163,18 +163,18 @@ final class AccountSession: Identifiable {
     let presence: PresenceTracker
     /// Unsent messages, by room (and thread): what was being written there, kept while away.
     /// The text is kept across launches too; a reply and attachments, for this one.
-    @ObservationIgnored private var drafts: [String: StashedDraft] = [:]
-    @ObservationIgnored private lazy var savedDraftTexts: [String: String] =
+    @PerceptionIgnored private var drafts: [String: StashedDraft] = [:]
+    @PerceptionIgnored private lazy var savedDraftTexts: [String: String] =
         UserDefaults.standard.dictionary(forKey: "drafts.\(id)") as? [String: String] ?? [:]
-    @ObservationIgnored private var draftSave: DispatchWorkItem?
+    @PerceptionIgnored private var draftSave: DispatchWorkItem?
     /// What each room's row says of an unsent message there, by room. Not for the open room,
     /// whose composer shows it: its row catches up as it's left, so that typing there doesn't
     /// redraw the list at every key.
     private(set) var draftPreviews: [String: DraftPreview] = [:]
     /// A room just chosen in Go to Room: its composer takes the keyboard, though the room came
     /// by a key (Return) rather than a click.
-    @ObservationIgnored var wantsComposerFocus = false
-    @ObservationIgnored private let ownPresence: OwnPresence
+    @PerceptionIgnored var wantsComposerFocus = false
+    @PerceptionIgnored private let ownPresence: OwnPresence
     /// For rooms opened this session: a reaction that came after the room's newest message.
     private(set) var reactionPreviews: [String: ReactionPreview] = [:]
     /// Rooms whose newest message is a reply in a thread, by the reply's date, as the room's probe
@@ -192,9 +192,9 @@ final class AccountSession: Identifiable {
     /// Rooms that need attention now: mentions, direct messages and pending invitations.
     private(set) var urgentCount = 0
 
-    @ObservationIgnored private var syncService: SyncService?
-    @ObservationIgnored private var roomListService: RoomListService?
-    @ObservationIgnored private var roomList: RoomList?
+    @PerceptionIgnored private var syncService: SyncService?
+    @PerceptionIgnored private var roomListService: RoomListService?
+    @PerceptionIgnored private var roomList: RoomList?
     // MARK: Spaces
 
     /// The account's top-level joined spaces, as the rail shows them.
@@ -225,65 +225,65 @@ final class AccountSession: Identifiable {
         searchModel = search
         return search
     }
-    @ObservationIgnored private var searchModel: MessageSearch?
+    @PerceptionIgnored private var searchModel: MessageSearch?
     /// Goes through encrypted rooms' whole history, so search finds all of it.
     let historyIndexer = HistoryIndexer()
     /// The room last open with each space selected ("" for Home), to go back to.
-    @ObservationIgnored private var lastRoomBySpace: [String: String] = [:]
+    @PerceptionIgnored private var lastRoomBySpace: [String: String] = [:]
     /// The room that was open when the app last quit, to open again once the room list has it.
-    @ObservationIgnored private var roomToReopen: String?
-    @ObservationIgnored private(set) var spaceService: SpaceService?
-    @ObservationIgnored private var allEntries: RoomListEntriesWithDynamicAdaptersResult?
-    @ObservationIgnored private var allController: RoomListDynamicEntriesController?
-    @ObservationIgnored private var allRoomsTask: Task<Void, Never>?
+    @PerceptionIgnored private var roomToReopen: String?
+    @PerceptionIgnored private(set) var spaceService: SpaceService?
+    @PerceptionIgnored private var allEntries: RoomListEntriesWithDynamicAdaptersResult?
+    @PerceptionIgnored private var allController: RoomListDynamicEntriesController?
+    @PerceptionIgnored private var allRoomsTask: Task<Void, Never>?
 
-    @ObservationIgnored private var handles: [TaskHandle] = []
+    @PerceptionIgnored private var handles: [TaskHandle] = []
     /// The SDK's search pass, while it runs (`runSearchBackfillWhenIdle`).
-    @ObservationIgnored private var searchBackfill: TaskHandle?
-    @ObservationIgnored private var searchBackfillTask: Task<Void, Never>?
+    @PerceptionIgnored private var searchBackfill: TaskHandle?
+    @PerceptionIgnored private var searchBackfillTask: Task<Void, Never>?
     /// Follows the rooms' sections, here and in other apps.
-    @ObservationIgnored var sectionsTask: Task<Void, Never>?
+    @PerceptionIgnored var sectionsTask: Task<Void, Never>?
     /// Section changes under way here: the server's answers may not have them yet.
-    @ObservationIgnored var sectionWrites = 0
-    @ObservationIgnored private var restartTask: Task<Void, Never>?
-    @ObservationIgnored private var restartAttempts = 0
-    @ObservationIgnored private var pendingClears: Set<String> = []
-    @ObservationIgnored private var roomHandles: [String: Room] = [:]
-    @ObservationIgnored private var timelines: [String: RoomTimeline] = [:]
-    @ObservationIgnored private var probes: [String: RoomPreviewProbe] = [:]
+    @PerceptionIgnored var sectionWrites = 0
+    @PerceptionIgnored private var restartTask: Task<Void, Never>?
+    @PerceptionIgnored private var restartAttempts = 0
+    @PerceptionIgnored private var pendingClears: Set<String> = []
+    @PerceptionIgnored private var roomHandles: [String: Room] = [:]
+    @PerceptionIgnored private var timelines: [String: RoomTimeline] = [:]
+    @PerceptionIgnored private var probes: [String: RoomPreviewProbe] = [:]
     /// Who else is typing in each room. Followed in every room from the start, not only open
     /// ones: the server says only when the typists change, so a room opened while someone is
     /// typing would otherwise not know until they stopped.
-    @ObservationIgnored private var typingUserIDs: [String: [String]] = [:]
+    @PerceptionIgnored private var typingUserIDs: [String: [String]] = [:]
     /// The same by name, for the room list's rows: made for a room once its row asks.
-    @ObservationIgnored private var roomTypists: [String: RoomTypists] = [:]
+    @PerceptionIgnored private var roomTypists: [String: RoomTypists] = [:]
     /// Names of those who have typed, by room and user ID, and those asked of the room so far.
-    @ObservationIgnored private var typistNames: [String: String] = [:]
-    @ObservationIgnored private var typistNamesAsked: Set<String> = []
+    @PerceptionIgnored private var typistNames: [String: String] = [:]
+    @PerceptionIgnored private var typistNamesAsked: Set<String> = []
     /// Whether people see when this account is typing, and it sees when they are. Element's
     /// setting, kept in the account's data; changed with `setSharesTyping`, which saves it there.
     var sharesTyping = true
-    @ObservationIgnored var typingSettingTask: Task<Void, Never>?
-    @ObservationIgnored var typingSettingObserver: NSObjectProtocol?
+    @PerceptionIgnored var typingSettingTask: Task<Void, Never>?
+    @PerceptionIgnored var typingSettingObserver: NSObjectProtocol?
     /// The setting as just changed here, until the account's copy of its data catches up.
-    @ObservationIgnored var typingSettingSaved: (value: Bool, date: Date)?
+    @PerceptionIgnored var typingSettingSaved: (value: Bool, date: Date)?
     /// A name of the user's own for this account ("Work"), to tell it from their others
     /// (AccountLabel.swift); nil without one.
     var label: String?
     /// Just changed here, until the account's copy of its data says so too.
-    @ObservationIgnored var labelSaved: (value: String?, date: Date)?
+    @PerceptionIgnored var labelSaved: (value: String?, date: Date)?
     /// The user's own names for people, by user ID (ContactNames.swift).
     var contactNames: [String: String] = [:]
-    @ObservationIgnored var contactNamesSaved: (value: [String: String], date: Date)?
+    @PerceptionIgnored var contactNamesSaved: (value: [String: String], date: Date)?
     /// Every timeline this account has made that's still about, to draw names again.
-    @ObservationIgnored private var madeTimelines = NSHashTable<RoomTimeline>.weakObjects()
-    @ObservationIgnored private var typingHandles: [String: TaskHandle] = [:]
-    @ObservationIgnored private var typingUpdates: AsyncStream<(roomID: String, userIDs: [String])>.Continuation?
-    @ObservationIgnored private var typingTask: Task<Void, Never>?
-    @ObservationIgnored private var visibleRooms: Set<String> = []
-    @ObservationIgnored private var subscribedRooms: Set<String> = []
-    @ObservationIgnored private var subscriptionTask: Task<Void, Never>?
-    @ObservationIgnored private var timelineOrder: [String] = []
+    @PerceptionIgnored private var madeTimelines = NSHashTable<RoomTimeline>.weakObjects()
+    @PerceptionIgnored private var typingHandles: [String: TaskHandle] = [:]
+    @PerceptionIgnored private var typingUpdates: AsyncStream<(roomID: String, userIDs: [String])>.Continuation?
+    @PerceptionIgnored private var typingTask: Task<Void, Never>?
+    @PerceptionIgnored private var visibleRooms: Set<String> = []
+    @PerceptionIgnored private var subscribedRooms: Set<String> = []
+    @PerceptionIgnored private var subscriptionTask: Task<Void, Never>?
+    @PerceptionIgnored private var timelineOrder: [String] = []
 
     private static let maxCachedTimelines = 6
     /// Rooms on screen kept subscribed at once: a full window's worth, with room to spare.
@@ -1456,7 +1456,7 @@ final class AccountSession: Identifiable {
         bannerPinTimelines.removeValue(forKey: roomID)?.stop()
     }
 
-    @ObservationIgnored private var bannerPinTimelines: [String: RoomTimeline] = [:]
+    @PerceptionIgnored private var bannerPinTimelines: [String: RoomTimeline] = [:]
 
     /// Sends a message's content, as it is, to another room.
     func forward(_ content: RoomMessageEventContentWithoutRelation, to roomID: String) async throws {

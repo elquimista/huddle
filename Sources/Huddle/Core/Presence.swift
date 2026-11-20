@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import MatrixRustSDK
-import Observation
+import Perception
 
 /// Whether someone is around, as their homeserver last told us.
 struct PresenceInfo: Equatable {
@@ -58,20 +58,20 @@ struct PresenceInfo: Equatable {
 /// Only while the user shares their own, as in most messaging apps: someone who doesn't share
 /// whether they're online doesn't see whether others are. Nothing is asked for then, and what was
 /// known is forgotten.
-@MainActor @Observable
+@MainActor @Perceptible
 final class PresenceTracker {
     private(set) var people: [String: PresenceInfo] = [:]
 
-    @ObservationIgnored private let client: Client
-    @ObservationIgnored private var watched: Set<String> = []
-    @ObservationIgnored private var focused: String?
-    @ObservationIgnored private var fetchedAt: [String: Date] = [:]
-    @ObservationIgnored private var inFlight: Set<String> = []
-    @ObservationIgnored private var loop: Task<Void, Never>?
-    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    @PerceptionIgnored private let client: Client
+    @PerceptionIgnored private var watched: Set<String> = []
+    @PerceptionIgnored private var focused: String?
+    @PerceptionIgnored private var fetchedAt: [String: Date] = [:]
+    @PerceptionIgnored private var inFlight: Set<String> = []
+    @PerceptionIgnored private var loop: Task<Void, Never>?
+    @PerceptionIgnored private var observers: [NSObjectProtocol] = []
     /// Set when the server says it doesn't do presence; nothing more is asked then.
-    @ObservationIgnored private var isUnsupported = false
-    @ObservationIgnored private var isShown = OwnPresence.isSharing
+    @PerceptionIgnored private var isUnsupported = false
+    @PerceptionIgnored private var isShown = OwnPresence.isSharing
 
     private static let listInterval: TimeInterval = DevHooks.presenceInterval ?? 90
     private static let focusedInterval: TimeInterval = DevHooks.presenceInterval ?? 30

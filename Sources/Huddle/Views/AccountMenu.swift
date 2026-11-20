@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// One item of an account's menu.
 struct AccountMenuItem: Identifiable {
@@ -68,16 +69,16 @@ struct AccountMenuContent: View {
     var header: String?
     let sections: () -> [[AccountMenuItem]]
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         if let header { Text(header) }
-        ForEach(Array(sections().enumerated()), id: \.offset) { index, section in
+        ForEach(Array(sections().enumerated()), id: \.offset) { index, section in WithPerceptionTracking {
             if index > 0 { Divider() }
-            ForEach(section) { item in
+            ForEach(section) { item in WithPerceptionTracking {
                 Button(item.title, role: item.isDestructive ? .destructive : nil, action: item.action)
                     .disabled(!item.isEnabled)
-            }
-        }
-    }
+            } }
+        } }
+    } }
 }
 
 extension View {
@@ -94,30 +95,30 @@ private struct AccountLabelPrompt: ViewModifier {
     @State private var shown: AccountSession?
     @State private var failure: String?
 
-    func body(content: Content) -> some View {
+    func body(content: Content) -> some View { WithPerceptionTracking {
         content
-            .onChange(of: account?.id, initial: true) {
+            .onChanged(of: account?.id, initial: true) {
                 guard let account else { return }
                 text = account.label ?? ""
                 shown = account
             }
             .alert("Label for \(shown?.displayName ?? shown?.userID ?? "")",
-                   isPresented: Binding(get: { shown != nil }, set: { if !$0 { shown = nil; account = nil } })) {
+                   isPresented: Binding(get: { shown != nil }, set: { if !$0 { shown = nil; account = nil } })) { WithPerceptionTracking {
                 TextField("Work, Personal", text: $text)
                 Button("Save") { save(text) }
                 if shown?.label != nil {
                     Button("Remove Label", role: .destructive) { save(nil) }
                 }
                 Button("Cancel", role: .cancel) {}
-            } message: {
+            } } message: {
                 Text("Notifications say which account they arrived on by its label. It’s kept with your account, so Huddle on your other Macs has it too.")
             }
-            .alert("Couldn’t Save the Label", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            .alert("Couldn’t Save the Label", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) { WithPerceptionTracking {
                 Button("OK", role: .cancel) {}
-            } message: {
+            } } message: {
                 Text(failure ?? "")
             }
-    }
+    } }
 
     private func save(_ label: String?) {
         guard let target = shown else { return }

@@ -1,5 +1,6 @@
 import Foundation
 import Sparkle
+import Perception
 
 /// Huddle's updates, through Sparkle: checking (from the app menu or Settings, and once a day by
 /// itself unless turned off), then showing what's new, downloading, checking the archive's
@@ -8,7 +9,7 @@ import Sparkle
 ///
 /// The Dev build never updates itself from releases, which would replace it with the release
 /// app: it looks for updates only when HUDDLE_DEV_UPDATE_FEED names a test feed.
-@MainActor @Observable
+@MainActor @Perceptible
 final class AppUpdater: NSObject {
     static let shared = AppUpdater()
 
@@ -40,8 +41,8 @@ final class AppUpdater: NSObject {
 
     nonisolated static let betaKey = "updatesIncludeBetas"
 
-    @ObservationIgnored private var controller: SPUStandardUpdaterController?
-    @ObservationIgnored private var observation: NSKeyValueObservation?
+    @PerceptionIgnored private var controller: SPUStandardUpdaterController?
+    @PerceptionIgnored private var observation: NSKeyValueObservation?
     private var updater: SPUUpdater? { controller?.updater }
 
     override private init() {

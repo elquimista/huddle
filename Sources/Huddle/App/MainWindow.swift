@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// Huddle's one window: kept under a fixed name, opened again if it doesn't come back at launch,
 /// and brought back from Window ▸ Huddle after it has been closed.
@@ -51,13 +52,13 @@ enum MainWindow {
 struct MainWindowCommand: View {
     @Environment(\.openWindow) private var openWindow
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         MainWindow.open = openWindow
         return Button(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Huddle") {
             MainWindow.show()
         }
         .keyboardShortcut("0", modifiers: .command)
-    }
+    } }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -82,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // One window, without tabs: a second, from a tab bar's "+", would show the same account.
         NSWindow.allowsAutomaticWindowTabbing = false
         Notifier.shared.attach()
+        PerceptionCheck.start()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

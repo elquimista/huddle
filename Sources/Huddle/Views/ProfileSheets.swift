@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Perception
 
 /// Your name and picture, as everyone sees them in every room. A new picture is shown here
 /// first and saved, with the name, by Save; Cancel leaves both as they were.
@@ -31,7 +32,7 @@ struct ProfileSheet: View {
         }
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 16) {
             Text("Edit Profile")
                 .font(.headline)
@@ -87,7 +88,7 @@ struct ProfileSheet: View {
             name = account.displayName ?? ""
             capabilities = await account.profileCapabilities()
         }
-    }
+    } }
 
     @ViewBuilder private var pictureView: some View {
         switch picture {
@@ -154,7 +155,7 @@ struct ChangePasswordSheet: View {
         canChange == true && !isChanging && !current.isEmpty && !new.isEmpty && confirmation == new
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Change Password")
@@ -181,7 +182,7 @@ struct ChangePasswordSheet: View {
             // Once the fields are enabled.
             if allowed { currentFocused = true }
         }
-    }
+    } }
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -219,7 +220,7 @@ struct ChangePasswordSheet: View {
             .textFieldStyle(.roundedBorder)
             .disabled(canChange != true || isChanging)
             // What went wrong last time no longer applies once the passwords are changed.
-            .onChange(of: [current, new, confirmation]) {
+            .onChanged(of: [current, new, confirmation]) {
                 failure = nil
                 if !current.isEmpty { currentIsWrong = false }
             }

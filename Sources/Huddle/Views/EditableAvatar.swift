@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import Perception
 
 /// A large picture that can be changed: a click asks for a new one, or, when there is one,
 /// offers to see it large or remove it too. "Edit" shows on hover, and a spinner while a change
@@ -22,7 +23,7 @@ struct EditableAvatar<Picture: View>: View {
 
     private var isEnabled: Bool { canChange && !isBusy }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         // One that can't be changed is just the picture, or a way to see it large. A disabled
         // button would dim it.
         if canChange {
@@ -37,7 +38,7 @@ struct EditableAvatar<Picture: View>: View {
         } else {
             picture.accessibilityLabel("Picture")
         }
-    }
+    } }
 
     private var button: some View {
         Button(action: open) {

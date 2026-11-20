@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// Round avatar that falls back to an initial in the person's or room's colour (Decorative), as
 /// Element has it. Spaces' are rounded squares, so they read apart from people and rooms at a
@@ -18,7 +19,7 @@ struct AvatarView: View {
     /// among its people, so a room's avatar keeps its own colour.
     @Environment(\.nameColorRoom) private var room
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         ZStack {
             if let image {
                 Image(nsImage: image)
@@ -45,7 +46,7 @@ struct AvatarView: View {
                 image = await media.thumbnail(url: url, size: Int(size))
             }
         }
-    }
+    } }
 
     private var initial: String {
         let trimmed = name.drop { "@#!".contains($0) }

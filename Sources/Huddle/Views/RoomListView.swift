@@ -1,8 +1,9 @@
 import MatrixRustSDK
 import SwiftUI
+import Perception
 
 struct RoomListView: View {
-    @Bindable var account: AccountSession
+    @Perception.Bindable var account: AccountSession
     /// Naming a new section, and the room to put in it, if it was made for one.
     @State private var newSection: NewSection?
     @State private var sectionName = ""
@@ -19,35 +20,35 @@ struct RoomListView: View {
         let message: String
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         dialogs(on: list)
-    }
+    } }
 
     private var list: some View {
-        ScrollViewReader { proxy in
-            List(selection: $account.selectedRoomID) {
-                ForEach(account.sections) { section in
+        ScrollViewReader { proxy in WithPerceptionTracking {
+            List(selection: $account.selectedRoomID) { WithPerceptionTracking {
+                ForEach(account.sections) { section in WithPerceptionTracking {
                     RoomListSection(account: account, section: section, actions: actions)
-                }
-            }
+                } }
+            } }
             // A room chosen some other way (Next Room, a notification) is brought into view. One
             // chosen from a search's Elsewhere takes the list to the space it's in (or Home).
-            .onChange(of: account.selectedRoomID) { _, roomID in
+            .onChanged(of: account.selectedRoomID) { _, roomID in
                 guard let roomID else { return }
                 if !account.searchText.isEmpty { account.showInList(roomID) }
                 proxy.scrollTo(roomID)
             }
-        }
+        } }
         .listStyle(.sidebar)
         .searchable(text: $account.searchText, placement: .sidebar, prompt: "Search rooms")
         .overlay {
             if account.sections.isEmpty {
                 if !account.searchText.isEmpty {
-                    ContentUnavailableView.search(text: account.searchText)
+                    SearchEmptyState(text: account.searchText)
                 } else if let space = account.selectedSpaceID, account.hasLoadedRooms {
                     SpaceEmptyList(account: account, spaceID: space)
                 } else if account.hasLoadedRooms {
-                    ContentUnavailableView("No Rooms Yet",
+                    EmptyState("No Rooms Yet",
                                            systemImage: "tray",
                                            description: Text("Invitations and rooms you join will appear here."))
                 } else if account.syncState == .running || account.syncState == .idle {
@@ -80,13 +81,13 @@ struct RoomListView: View {
                     Banner(icon: "exclamationmark.triangle", text: status, action: nil) {}
                 }
                 // Calls going on, whichever account's and wherever you are.
-                ForEach(CallCenter.shared.calls, id: \.identity) { call in
+                ForEach(CallCenter.shared.calls, id: \.identity) { call in WithPerceptionTracking {
                     CallStrip(call: call)
-                }
+                } }
             }
         }
         .navigationTitle(account.displayName ?? account.userID)
-        .onChange(of: account.asksForNewSection) { _, asks in
+        .onChanged(of: account.asksForNewSection) { _, asks in
             guard asks else { return }
             account.asksForNewSection = false
             actions.newSection(nil)
@@ -96,33 +97,33 @@ struct RoomListView: View {
     /// Naming, renaming and deleting sections, and what went wrong changing anything.
     private func dialogs(on content: some View) -> some View {
         content
-            .alert("New Section", isPresented: Binding(get: { newSection != nil }, set: { if !$0 { newSection = nil } })) {
+            .alert("New Section", isPresented: Binding(get: { newSection != nil }, set: { if !$0 { newSection = nil } })) { WithPerceptionTracking {
                 TextField("Name", text: $sectionName)
                 Button("Create") { createSection() }
                     .disabled(sectionName.trimmingCharacters(in: .whitespaces).isEmpty)
                 Button("Cancel", role: .cancel) {}
-            } message: {
+            } } message: {
                 Text(newSection?.roomID == nil ? "Name the section. Put rooms in it from their Move To menu, or drag them there."
                      : "Name the section. The room goes in it.")
             }
             .alert("Rename Section", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
-                   presenting: renaming) { section in
+                   presenting: renaming) { section in WithPerceptionTracking {
                 TextField("Name", text: $sectionName)
                 Button("Rename") { run { try await account.renameSection(section.id, to: sectionName) } }
                     .disabled(sectionName.trimmingCharacters(in: .whitespaces).isEmpty)
                 Button("Cancel", role: .cancel) {}
-            }
+            } }
             .confirmationDialog("Delete the “\(deleting?.title ?? "")” section?",
                                 isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                                presenting: deleting) { section in
+                                presenting: deleting) { section in WithPerceptionTracking {
                 Button("Delete Section", role: .destructive) { run { try await account.deleteSection(section.id) } }
-            } message: { _ in
+            } } message: { _ in
                 Text("Its rooms go back to People and Rooms.")
             }
             .alert(failure?.title ?? "", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } }),
-                   presenting: failure) { _ in
+                   presenting: failure) { _ in WithPerceptionTracking {
                 Button("OK") {}
-            } message: { failure in
+            } } message: { failure in
                 Text(failure.message)
             }
     }
@@ -217,11 +218,11 @@ private struct RoomListSection: View {
                 })
     }
 
-    var body: some View {
-        Section(isExpanded: isExpanded) {
-            ForEach(section.rooms) { room in
+    var body: some View { WithPerceptionTracking {
+        FoldingSection(isExpanded: isExpanded) {
+            ForEach(section.rooms) { room in WithPerceptionTracking {
                 RoomListRow(account: account, room: room, actions: actions)
-            }
+            } }
             .dropDestination(for: String.self) { roomIDs, _ in drop(roomIDs) }
             if section.rooms.isEmpty {
                 Text("Drag rooms here, or use a room’s Move To menu.")
@@ -233,7 +234,7 @@ private struct RoomListSection: View {
         } header: {
             header
         }
-    }
+    } }
 
     private var header: some View {
         HStack(spacing: 6) {
@@ -266,7 +267,7 @@ private struct RoomListSection: View {
         .contentShape(Rectangle())
         .background(SectionHeaderKeeper())
         .dropDestination(for: String.self) { roomIDs, _ in drop(roomIDs) }
-        .contextMenu { headerMenu }
+        .contextMenu { WithPerceptionTracking { headerMenu } }
         .accessibilityElement(children: .combine)
         .accessibilityActions { headerMenu }
     }
@@ -358,7 +359,7 @@ private struct RoomListRow: View {
     let actions: RoomListSection.Actions
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let isSelected = account.selectedRoomID == room.id
         RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id],
                 threadReply: account.threadReplyDates[room.id],
@@ -388,11 +389,11 @@ private struct RoomListRow: View {
             }
             // Its own view, made only as the menu opens: built here, it would run its unread
             // checks across every room each time any row is drawn.
-            .contextMenu { RoomRowMenu(account: account, room: room, actions: actions) }
+            .contextMenu { WithPerceptionTracking { RoomRowMenu(account: account, room: room, actions: actions) } }
             .accessibilityActions { placeActions }
             .onAppear { account.roomBecameVisible(room.id) }
             .onDisappear { account.roomBecameHidden(room.id) }
-    }
+    } }
 
     /// Everywhere the room can be put, in the list's order.
     private var destinations: [(title: String, place: SectionPlace)] {
@@ -409,9 +410,9 @@ private struct RoomListRow: View {
     @ViewBuilder private var placeActions: some View {
         if !room.isInvite {
             let place = account.place(of: room)
-            ForEach(destinations.filter { $0.place != place }, id: \.title) { destination in
+            ForEach(destinations.filter { $0.place != place }, id: \.title) { destination in WithPerceptionTracking {
                 Button("Move to \(destination.title)") { actions.move(room.id, destination.place) }
-            }
+            } }
             Button("Move to New Section") { actions.newSection(room.id) }
             Button(room.isMuted ? "Unmute" : "Mute") { actions.setNotifications(room.id, room.isMuted ? nil : .mute) }
         }
@@ -431,7 +432,7 @@ private struct RoomRowMenu: View {
     let room: RoomSummary
     let actions: RoomListSection.Actions
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         if room.isInvite {
             // An invitation's own choices, rather than an empty menu.
             Button("Accept Invitation") {
@@ -458,14 +459,14 @@ private struct RoomRowMenu: View {
                                               set: { actions.move(room.id, $0 ? .favourites : .usual) }))
             Toggle("Low Priority", isOn: Binding(get: { place == .lowPriority },
                                                  set: { actions.move(room.id, $0 ? .lowPriority : .usual) }))
-            Menu("Move To") {
-                ForEach(RoomListRow.destinations(for: room, in: account), id: \.title) { destination in
+            Menu("Move To") { WithPerceptionTracking {
+                ForEach(RoomListRow.destinations(for: room, in: account), id: \.title) { destination in WithPerceptionTracking {
                     Toggle(destination.title, isOn: Binding(get: { place == destination.place },
                                                             set: { _ in actions.move(room.id, destination.place) }))
-                }
+                } }
                 Divider()
                 Button("New Section…") { actions.newSection(room.id) }
-            }
+            } }
             Divider()
             if let space = account.selectedSpaceID {
                 Button("Mark All as Read") { account.markAllRead(inSpace: space) }
@@ -481,7 +482,7 @@ private struct RoomRowMenu: View {
                     .disabled(!account.hasUnreadRooms(inSpace: nil))
             }
         }
-    }
+    } }
 
 }
 
@@ -491,11 +492,11 @@ private struct SpaceEmptyList: View {
     let account: AccountSession
     let spaceID: String
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         let isEmpty = (account.spaces.first { $0.roomId == spaceID }?.childrenCount ?? 0) == 0
         let canEdit = account.editableSpaceIDs.contains(spaceID)
         let name = account.spaceName(spaceID)
-        ContentUnavailableView {
+        EmptyState {
             Label(isEmpty ? "No Rooms Yet" : "No Rooms Joined", systemImage: "square.stack")
         } description: {
             if isEmpty {
@@ -512,7 +513,7 @@ private struct SpaceEmptyList: View {
                 Button("Browse Rooms") { account.browse(space: spaceID) }
             }
         }
-    }
+    } }
 }
 
 private struct RoomRow: View {
@@ -562,7 +563,7 @@ private struct RoomRow: View {
         return Text(label + AttributedString(draft.text))
     }
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 10) {
             AvatarView(media: media, url: room.avatarURL, name: room.name, seed: room.avatarSeed, size: 36)
                 .presenceDot(presence, avatarSize: 36)
@@ -621,7 +622,7 @@ private struct RoomRow: View {
             }
         }
         .padding(.vertical, 3)
-    }
+    } }
 
     @ViewBuilder private var badge: some View {
         if room.isInvite {
@@ -663,7 +664,7 @@ private struct Banner: View {
     var dismiss: (() -> Void)?
     let perform: () -> Void
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         HStack(spacing: 8) {
             Image(systemName: icon)
             Text(text)
@@ -691,7 +692,7 @@ private struct Banner: View {
         .padding(.vertical, 8)
         .background(.bar)
         .overlay(alignment: .top) { Rectangle().fill(.separator).frame(height: 1) }
-    }
+    } }
 }
 
 extension Date {

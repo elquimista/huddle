@@ -1,4 +1,5 @@
 import SwiftUI
+import Perception
 
 /// A searchable grid of emoji, shown in a popover to pick a reaction.
 struct EmojiPicker: View {
@@ -16,7 +17,7 @@ struct EmojiPicker: View {
 
     private static let columns = Array(repeating: GridItem(.fixed(32), spacing: 2), count: 8)
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
@@ -32,7 +33,7 @@ struct EmojiPicker: View {
             .padding(.vertical, 8)
             Divider()
             ScrollView {
-                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 2, pinnedViews: []) {
+                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 2, pinnedViews: []) { WithPerceptionTracking {
                     if isSearching {
                         cells(matches)
                     } else {
@@ -41,11 +42,11 @@ struct EmojiPicker: View {
                                 cells(recents.map { EmojiCatalog.Entry(emoji: $0, name: "") }, in: "Recently Used")
                             } header: { header("Recently Used") }
                         }
-                        ForEach(EmojiCatalog.sections) { section in
+                        ForEach(EmojiCatalog.sections) { section in WithPerceptionTracking {
                             Section { cells(section.entries, in: section.title) } header: { header(section.title) }
-                        }
+                        } }
                     }
-                }
+                } }
                 .padding(8)
                 if isSearching, matches.isEmpty {
                     Text("No emoji found")
@@ -56,7 +57,7 @@ struct EmojiPicker: View {
         }
         .frame(width: 296, height: 320)
         .onAppear { searchFocused = true }
-    }
+    } }
 
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -65,11 +66,11 @@ struct EmojiPicker: View {
     /// One emoji can be in two sections, Recently Used and its own: the grid draws only one of
     /// the cells it takes for the same, so each section's are told apart.
     private func cells(_ entries: [EmojiCatalog.Entry], in section: String = "") -> some View {
-        ForEach(entries.map { (id: section + "/" + $0.emoji, entry: $0) }, id: \.id) { cell in
+        ForEach(entries.map { (id: section + "/" + $0.emoji, entry: $0) }, id: \.id) { cell in WithPerceptionTracking {
             EmojiCell(entry: cell.entry, isMarked: marked.contains(EmojiCatalog.canonical(cell.entry.emoji))) {
                 pick(cell.entry.emoji)
             }
-        }
+        } }
     }
 
     private func header(_ title: String) -> some View {
@@ -93,7 +94,7 @@ private struct EmojiCell: View {
     let action: () -> Void
     @State private var isHovering = false
 
-    var body: some View {
+    var body: some View { WithPerceptionTracking {
         Button(action: action) {
             Text(entry.emoji)
                 .font(.system(size: 20))
@@ -105,7 +106,7 @@ private struct EmojiCell: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .help(isMarked ? "Remove Your Reaction" : entry.name.isEmpty ? entry.emoji : entry.name.capitalized)
-    }
+    } }
 }
 
 /// Every emoji the system knows, built from Unicode's own tables so no list is shipped.
@@ -301,7 +302,7 @@ enum EmojiCatalog {
 /// The reactions one click away: six at the top of the reaction picker, and the first three (or
 /// all six) on a message's bar in the layouts that have one there. Chosen in Settings ▸
 /// Appearance, for every account on this Mac.
-@MainActor @Observable
+@MainActor @Perceptible
 final class QuickReactions {
     static let shared = QuickReactions()
     static let defaults = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
@@ -370,13 +371,32 @@ final class QuickReactions {
 struct CustomizeQuickReactionsButton: View {
     /// Done before Settings opens: putting away the popover the menu was in, say.
     var before: () -> Void = {}
-    @Environment(\.openSettings) private var openSettings
 
-    var body: some View {
-        Button("Customize Quick Reactions…") {
-            UserDefaults.standard.set(SettingsView.Tab.appearance.rawValue, forKey: SettingsView.tabKey)
-            before()
-            openSettings()
+    var body: some View { WithPerceptionTracking {
+        if #available(macOS 14, *) {
+            OpensSettings(before: before)
+        } else {
+            Button("Customize Quick Reactions…") {
+                UserDefaults.standard.set(SettingsView.Tab.appearance.rawValue, forKey: SettingsView.tabKey)
+                before()
+                // macOS 13's way to Settings: the app menu's own command.
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }
         }
+    } }
+
+    /// The button on macOS 14, where SwiftUI opens Settings itself.
+    @available(macOS 14, *)
+    private struct OpensSettings: View {
+        let before: () -> Void
+        @Environment(\.openSettings) private var openSettings
+
+        var body: some View { WithPerceptionTracking {
+            Button("Customize Quick Reactions…") {
+                UserDefaults.standard.set(SettingsView.Tab.appearance.rawValue, forKey: SettingsView.tabKey)
+                before()
+                openSettings()
+            }
+        } }
     }
 }
