@@ -126,7 +126,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
         let sender = item.senderInfo.displayName ?? senderID
         let isDirect = item.roomInfo.isDirect && item.roomInfo.joinedMembersCount <= 2
-        let recipient = (store?.accounts.count ?? 1) > 1 ? "for \(account.displayName ?? account.userID)" : nil
+        let recipient = arrival(on: account)
 
         let content = UNMutableNotificationContent()
         if isDirect {
@@ -152,10 +152,21 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center?.add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
     }
 
+    /// Which account it arrived on, said only when there's more than one: "on acme.com", by its
+    /// server, which tells a work account from a personal one where their names are usually the
+    /// same person's; by its full Matrix ID when another of the accounts is on that server too.
+    /// Worded as a place, so it isn't taken for whom a message was written to.
+    private func arrival(on account: AccountSession) -> String? {
+        guard let accounts = store?.accounts, accounts.count > 1 else { return nil }
+        let server = account.userID.matrixServer
+        let shared = accounts.contains { $0.id != account.id && $0.userID.matrixServer == server }
+        return "on " + (shared ? account.userID : server)
+    }
+
     /// A call that rang and went unanswered, here and on the account's other devices. It stays in
     /// Notification Center, as a missed call does, and opens the room when clicked.
     func announceMissedCall(_ call: IncomingCall) {
-        let recipient = (store?.accounts.count ?? 1) > 1 ? "for \(call.account.displayName ?? call.account.userID)" : nil
+        let recipient = arrival(on: call.account)
         let content = UNMutableNotificationContent()
         content.title = call.title
         content.subtitle = [call.roomName != nil ? call.callerName : nil, recipient]
@@ -180,7 +191,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         guard let summary = account.verificationFlow.requestSummary else { return }
         let content = UNMutableNotificationContent()
         content.title = "Verification Request"
-        if (store?.accounts.count ?? 1) > 1 { content.subtitle = "For \(account.displayName ?? account.userID)" }
+        if let arrival = arrival(on: account) { content.subtitle = arrival.capitalizedFirst }
         content.body = summary
         content.userInfo = ["account": account.id, "verify": true]
         if NotificationSettings.playsSound { content.sound = .default }

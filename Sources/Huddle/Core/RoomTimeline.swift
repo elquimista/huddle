@@ -212,6 +212,12 @@ extension String {
         guard hasPrefix("@"), let colon = firstIndex(of: ":") else { return self }
         return String(self[index(after: startIndex)..<colon])
     }
+
+    /// "example.org" from "@alice:example.org": the server, with any port.
+    var matrixServer: String {
+        guard let colon = firstIndex(of: ":") else { return self }
+        return String(self[index(after: colon)...])
+    }
 }
 
 @MainActor @Observable
