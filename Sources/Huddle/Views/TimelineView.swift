@@ -1720,7 +1720,7 @@ private struct MessageView: View {
                 actionBar
                     // Rides the top edge of the row, to the left of the receipts column so it
                     // covers neither this message's read receipts nor the previous one's.
-                    .offset(x: -ReceiptView.gutter, y: -15)
+                    .offset(x: -ReceiptView.gutter, y: actionBarOffset)
             }
         }
         .onAppear {
@@ -1731,6 +1731,15 @@ private struct MessageView: View {
         .modifier(MessageActionsMenus(sections: menuSections(includingReplies: true)))
         .animation(.easeOut(duration: 0.15), value: isBeingEdited)
     }
+
+    /// How tall the hover bar is: its buttons and the padding around them.
+    private static let actionBarHeight: CGFloat = 32
+
+    /// The hover bar's foot sits just inside the row, above its first line (the name, where a
+    /// run of one person's messages starts, or else the text): on the message before rather
+    /// than over the one it's for, and still overlapping the row, so the pointer can go from
+    /// one to the other.
+    private var actionBarOffset: CGFloat { topPadding + 1 - Self.actionBarHeight }
 
     /// Space above the message: more where a run of one person's messages starts.
     private var topPadding: CGFloat {
