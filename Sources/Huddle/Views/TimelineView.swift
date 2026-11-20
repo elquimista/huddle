@@ -55,7 +55,8 @@ struct TimelineView: View {
     /// Mentions picked from the suggestions for the message being written.
     @State private var composedMentions: [ComposedMention] = []
     @State private var suggestionIndex = 0
-    /// A mention query the user closed with Escape; stays closed until they type on.
+    /// Suggestions the user closed with Escape ("@name" or ":name", as `activeQuery` has them);
+    /// they stay closed until the user types on.
     @State private var dismissedQuery: String?
     /// The message being edited in the composer, while one is.
     @State private var editTarget: EditTarget?
@@ -898,8 +899,8 @@ struct TimelineView: View {
                         .accessibilityHint(editTarget == nil ? "Return sends. Shift-Return starts a new line."
                                                              : "Return saves. Shift-Return starts a new line.")
                         .onSubmit { send(proxy) }
-                        // While suggestions are showing, the arrows move through them and Return
-                        // or Tab picks one instead of sending. Shift-Return starts a new line, as
+                        // While suggestions (people or emoji) are showing, the arrows move through
+                        // them and Return or Tab picks one instead of sending. Shift-Return starts a new line, as
                         // in Element and most chat apps (Option-Return does too, as in any field).
                         .onKeyPress(.upArrow) { upArrow() }
                         .onKeyPress(.downArrow) { moveSuggestion(1) }
@@ -908,9 +909,9 @@ struct TimelineView: View {
                         }
                         .onKeyPress(.tab) { pickSelectedSuggestion() }
                         .onKeyPress(.escape) {
-                            // Escape closes the mention list if it is open; otherwise it cancels a reply.
-                            if !suggestions.isEmpty {
-                                dismissedQuery = mentionQuery
+                            // Escape closes the suggestions if they are open; otherwise it cancels a reply.
+                            if suggestionCount > 0 {
+                                dismissedQuery = activeQuery
                                 return .handled
                             }
                             if editTarget != nil {
@@ -921,10 +922,11 @@ struct TimelineView: View {
                             replyTarget = nil
                             return .handled
                         }
-                        .onChange(of: draft) {
+                        .onChange(of: draft) { old, new in
+                            completeShortcode(from: old, to: new)
                             keepDraft()
                             suggestionIndex = 0
-                            if mentionQuery != dismissedQuery { dismissedQuery = nil }
+                            if activeQuery != dismissedQuery { dismissedQuery = nil }
                             if mentionQuery != nil { Task { await timeline.loadMembers() } }
                             noteTyping()
                         }
@@ -961,6 +963,10 @@ struct TimelineView: View {
             Color.clear.frame(height: 0).overlay(alignment: .bottom) {
                 if !suggestions.isEmpty {
                     MentionSuggestions(candidates: suggestions, selected: suggestionIndex, media: media) { pick($0) }
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 4)
+                } else if !emojiSuggestions.isEmpty {
+                    EmojiSuggestions(entries: emojiSuggestions, selected: suggestionIndex) { pick(emoji: $0) }
                         .padding(.horizontal, 14)
                         .padding(.bottom, 4)
                 }
@@ -1275,9 +1281,9 @@ struct TimelineView: View {
         stagedFiles = stash.files
     }
 
-    /// Up arrow: moves through mention suggestions; in an empty composer, edits your last message.
+    /// Up arrow: moves through suggestions; in an empty composer, edits your last message.
     private func upArrow() -> KeyPress.Result {
-        if !suggestions.isEmpty { return moveSuggestion(-1) }
+        if suggestionCount > 0 { return moveSuggestion(-1) }
         guard draft.isEmpty, editTarget == nil, stagedImages.isEmpty, stagedFiles.isEmpty,
               let message = timeline.rows.reversed().lazy.compactMap(\.message)
                 .first(where: { $0.isOwn && ($0.editKind == .text || $0.editKind == .emote) })
@@ -1369,7 +1375,7 @@ struct TimelineView: View {
     }
 
     private var suggestions: [MentionCandidate] {
-        guard let query = mentionQuery, query != dismissedQuery else { return [] }
+        guard let query = mentionQuery, "@" + query != dismissedQuery else { return [] }
         let needle = query.lowercased()
         var starts: [MentionCandidate] = []
         var contains: [MentionCandidate] = []
@@ -1386,7 +1392,7 @@ struct TimelineView: View {
     }
 
     private func moveSuggestion(_ step: Int) -> KeyPress.Result {
-        let count = suggestions.count
+        let count = suggestionCount
         guard count > 0 else { return .ignored }
         suggestionIndex = (suggestionIndex + step + count) % count
         return .handled
@@ -1403,9 +1409,14 @@ struct TimelineView: View {
     }
 
     private func pickSelectedSuggestion() -> KeyPress.Result {
-        let current = suggestions
-        guard !current.isEmpty else { return .ignored }
-        pick(current[min(suggestionIndex, current.count - 1)])
+        let people = suggestions
+        if !people.isEmpty {
+            pick(people[min(suggestionIndex, people.count - 1)])
+            return .handled
+        }
+        let emoji = emojiSuggestions
+        guard !emoji.isEmpty else { return .ignored }
+        pick(emoji: emoji[min(suggestionIndex, emoji.count - 1)])
         return .handled
     }
 
@@ -1415,6 +1426,67 @@ struct TimelineView: View {
         let mention = ComposedMention(label: candidate.label, userID: candidate.isRoom ? nil : candidate.id)
         if !composedMentions.contains(mention) { composedMentions.append(mention) }
         composerFocused = true
+    }
+
+    // MARK: Emoji by name
+
+    /// What follows a ":" at the end of the draft while an emoji is being typed by name (":thu"):
+    /// two characters at least, the colon at the start or after something other than a letter or
+    /// digit, so a time ("10:30") or a link ("https://") isn't taken for one.
+    private var emojiQuery: String? {
+        guard let colon = draft.lastIndex(of: ":"), Self.opensShortcode(draft, at: colon) else { return nil }
+        let query = draft[draft.index(after: colon)...]
+        guard query.count >= 2, query.allSatisfy(Self.isShortcodeCharacter) else { return nil }
+        return String(query)
+    }
+
+    private static func isShortcodeCharacter(_ character: Character) -> Bool {
+        character.isLetter || character.isNumber || character == "_" || character == "+" || character == "-"
+    }
+
+    /// Whether the colon at `colon` can start a shortcode: at the start, or after anything but a
+    /// letter or digit (a space, punctuation, another emoji).
+    private static func opensShortcode(_ text: some StringProtocol, at colon: String.Index) -> Bool {
+        guard colon > text.startIndex else { return true }
+        let before = text[text.index(before: colon)]
+        return !(before.isLetter || before.isNumber)
+    }
+
+    /// The suggestions being typed for, as `dismissedQuery` keeps them: "@name" or ":name".
+    private var activeQuery: String? {
+        mentionQuery.map { "@" + $0 } ?? emojiQuery.map { ":" + $0 }
+    }
+
+    private var emojiSuggestions: [EmojiCatalog.Entry] {
+        guard mentionQuery == nil, let query = emojiQuery, ":" + query != dismissedQuery else { return [] }
+        return EmojiCatalog.search(query, limit: 6)
+    }
+
+    /// How many suggestions are showing: people for an "@", or emoji for a ":".
+    private var suggestionCount: Int {
+        let people = suggestions.count
+        return people > 0 ? people : emojiSuggestions.count
+    }
+
+    private func pick(emoji entry: EmojiCatalog.Entry) {
+        guard let colon = draft.lastIndex(of: ":") else { return }
+        draft.replaceSubrange(colon..., with: entry.emoji)
+        EmojiCatalog.noteUse(of: entry.emoji)
+        composerFocused = true
+    }
+
+    /// A shortcode closed with its colon as it's typed (":tada:", ":fire:") becomes its emoji,
+    /// as in Slack. Only as the closing colon is typed at the end: a message being edited, or
+    /// text pasted, keeps what it says.
+    private func completeShortcode(from old: String, to new: String) {
+        guard new.count == old.count + 1, new.hasPrefix(old), new.hasSuffix(":") else { return }
+        let body = new.dropLast()
+        guard let colon = body.lastIndex(of: ":"), Self.opensShortcode(body, at: colon) else { return }
+        let code = body[body.index(after: colon)...]
+        guard !code.isEmpty, code.allSatisfy(Self.isShortcodeCharacter),
+              let emoji = EmojiCatalog.emoji(forShortcode: String(code)) else { return }
+        draft = String(body[..<colon]) + emoji
+        EmojiCatalog.noteUse(of: emoji)
     }
 }
 
@@ -1830,10 +1902,14 @@ private struct MessageView: View {
         }
     }
 
+    /// The reactions you've made to this message.
+    private var ownReactions: [String] { message.reactions.filter(\.isOwn).map(\.key) }
+
     private var addReactionChip: some View {
         AddReactionChip { showsReactionPicker = true }
             .popover(isPresented: $showsReactionPicker, arrowEdge: .bottom) {
-                EmojiPicker { emoji in
+                // The same picker as the hover actions' add-reaction button.
+                QuickReactionPicker(reacted: ownReactions) { emoji in
                     showsReactionPicker = false
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }
@@ -1940,7 +2016,7 @@ private struct MessageView: View {
     private var reactButton: some View {
         RoundActionButton(help: "Add Reaction") { showsPicker = true } label: { AddReactionIcon() }
             .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
-                QuickReactionPicker { emoji in
+                QuickReactionPicker(reacted: ownReactions) { emoji in
                     showsPicker = false
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }
@@ -2075,7 +2151,7 @@ private struct MessageView: View {
             }
             .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
                 // All six on top, any not on the bar among them.
-                QuickReactionPicker { emoji in
+                QuickReactionPicker(reacted: ownReactions) { emoji in
                     showsPicker = false
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }
@@ -2201,6 +2277,49 @@ private struct MessageView: View {
 }
 
 /// People matching the "@…" being typed, listed above the composer.
+/// Emoji for a name typed after a colon, above the composer as people are for an "@": each with
+/// its name, and its shortcode where it has a well-known one.
+private struct EmojiSuggestions: View {
+    let entries: [EmojiCatalog.Entry]
+    let selected: Int
+    let onPick: (EmojiCatalog.Entry) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                Button { onPick(entry) } label: {
+                    HStack(spacing: 8) {
+                        Text(entry.emoji)
+                            .font(.system(size: 17))
+                            .frame(width: 22, height: 22)
+                        Text(entry.name.prefix(1).uppercased() + entry.name.dropFirst())
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                        if let code = EmojiCatalog.shortcode(for: entry.emoji) {
+                            Text(":\(code):")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(index == selected ? Color.accentColor.opacity(0.22) : .clear,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(entry.emoji) \(entry.name)")
+            }
+        }
+        .padding(4)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.separator) }
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+    }
+}
+
 private struct MentionSuggestions: View {
     let candidates: [MentionCandidate]
     let selected: Int

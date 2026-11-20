@@ -157,14 +157,18 @@ struct RoundActionButton<Label: View>: View {
 /// The emoji picker with the quick reactions along its top, one click away, whatever the
 /// layout: in bubbles, which have none of their own beside the message, these are the only ones.
 struct QuickReactionPicker: View {
+    /// Your reactions to the message, marked in the picker: picking one again takes it back.
+    var reacted: [String] = []
     let onPick: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+
+    private var marked: Set<String> { Set(reacted.map(EmojiCatalog.canonical)) }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 2) {
                 ForEach(QuickReactions.shared.emoji, id: \.self) { emoji in
-                    QuickReactionButton(emoji: emoji) {
+                    QuickReactionButton(emoji: emoji, isMarked: marked.contains(emoji)) {
                         EmojiCatalog.noteUse(of: emoji)
                         onPick(emoji)
                     }
@@ -174,27 +178,32 @@ struct QuickReactionPicker: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             Divider()
-            EmojiPicker(onPick: onPick)
+            EmojiPicker(marked: marked, onPick: onPick)
         }
     }
 }
 
 private struct QuickReactionButton: View {
     let emoji: String
+    var isMarked = false
     let action: () -> Void
     @State private var isHovering = false
+
+    private var fill: Color {
+        isMarked ? Color.accentColor.opacity(isHovering ? 0.3 : 0.2) : Color.primary.opacity(isHovering ? 0.08 : 0)
+    }
 
     var body: some View {
         Button(action: action) {
             Text(emoji)
                 .font(.system(size: 21))
                 .frame(width: 44, height: 36)
-                .background(Color.primary.opacity(isHovering ? 0.08 : 0), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(fill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .help("React with \(emoji)")
-        .accessibilityLabel("React with \(emoji)")
+        .help(isMarked ? "Remove your \(emoji)" : "React with \(emoji)")
+        .accessibilityLabel(isMarked ? "Remove your \(emoji)" : "React with \(emoji)")
     }
 }

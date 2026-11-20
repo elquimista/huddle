@@ -5,6 +5,9 @@ struct EmojiPicker: View {
     /// Whether what's picked counts as used, for Recently Used: a reaction does; an emoji chosen
     /// as a setting doesn't.
     var recordsUse = true
+    /// Emoji to mark as chosen already: your reactions to the message, which picking again
+    /// takes back.
+    var marked: Set<String> = []
     let onPick: (String) -> Void
 
     @State private var query = ""
@@ -57,16 +60,15 @@ struct EmojiPicker: View {
 
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    private var matches: [EmojiCatalog.Entry] {
-        let words = query.lowercased().split(separator: " ")
-        return EmojiCatalog.all.filter { entry in words.allSatisfy { entry.name.contains($0) } }
-    }
+    private var matches: [EmojiCatalog.Entry] { EmojiCatalog.search(query) }
 
     /// One emoji can be in two sections, Recently Used and its own: the grid draws only one of
     /// the cells it takes for the same, so each section's are told apart.
     private func cells(_ entries: [EmojiCatalog.Entry], in section: String = "") -> some View {
         ForEach(entries.map { (id: section + "/" + $0.emoji, entry: $0) }, id: \.id) { cell in
-            EmojiCell(entry: cell.entry) { pick(cell.entry.emoji) }
+            EmojiCell(entry: cell.entry, isMarked: marked.contains(EmojiCatalog.canonical(cell.entry.emoji))) {
+                pick(cell.entry.emoji)
+            }
         }
     }
 
@@ -87,6 +89,7 @@ struct EmojiPicker: View {
 
 private struct EmojiCell: View {
     let entry: EmojiCatalog.Entry
+    var isMarked = false
     let action: () -> Void
     @State private var isHovering = false
 
@@ -95,11 +98,13 @@ private struct EmojiCell: View {
             Text(entry.emoji)
                 .font(.system(size: 20))
                 .frame(width: 32, height: 32)
-                .background(isHovering ? Color.primary.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                .background(isMarked ? Color.accentColor.opacity(isHovering ? 0.3 : 0.2)
+                                     : isHovering ? Color.primary.opacity(0.1) : .clear,
+                            in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .help(entry.name.isEmpty ? entry.emoji : entry.name.capitalized)
+        .help(isMarked ? "Remove Your Reaction" : entry.name.isEmpty ? entry.emoji : entry.name.capitalized)
     }
 }
 
@@ -158,6 +163,129 @@ enum EmojiCatalog {
     }()
 
     static let all: [Entry] = sections.flatMap(\.entries)
+
+    /// An emoji as the catalog writes it: with the emoji variation selector when its first
+    /// character defaults to text style, so one typed or picked either way is found as one.
+    static func canonical(_ emoji: String) -> String {
+        guard let scalar = emoji.unicodeScalars.first else { return emoji }
+        if emoji.unicodeScalars.count > 2 || (emoji.unicodeScalars.count == 2 && emoji.unicodeScalars.last != "\u{FE0F}") {
+            return emoji
+        }
+        return scalar.properties.isEmojiPresentation ? String(scalar) : String(scalar) + "\u{FE0F}"
+    }
+
+    /// Shortcodes people know from Slack, GitHub and Element, for emoji whose Unicode names
+    /// don't start with them (":tada:" is a party popper); most others are found by their names.
+    private static let shortcodes: [String: String] = [
+        "+1": "👍", "thumbsup": "👍", "-1": "👎", "thumbsdown": "👎", "heart": "❤️", "tada": "🎉",
+        "100": "💯", "pray": "🙏", "sob": "😭", "rofl": "🤣", "joy": "😂", "heart_eyes": "😍",
+        "sweat_smile": "😅", "smile": "😄", "smiley": "😃", "laughing": "😆", "satisfied": "😆",
+        "blush": "😊", "relaxed": "☺️", "kissing_heart": "😘", "yum": "😋", "stuck_out_tongue": "😛",
+        "rage": "😡", "angry": "😠", "triumph": "😤", "cry": "😢", "sweat": "😓", "cold_sweat": "😰",
+        "disappointed_relieved": "😥", "roll_eyes": "🙄", "mask": "😷", "vomiting": "🤮",
+        "hot_face": "🥵", "cold_face": "🥶", "cowboy": "🤠", "hugs": "🤗", "shushing_face": "🤫",
+        "star_struck": "🤩", "partying_face": "🥳", "pleading_face": "🥺", "zany_face": "🤪",
+        "innocent": "😇", "smiling_imp": "😈", "imp": "👿", "poop": "💩", "hankey": "💩",
+        "muscle": "💪", "raised_hands": "🙌", "wave": "👋", "raised_hand": "✋", "v": "✌️",
+        "point_up": "☝️", "point_right": "👉", "point_left": "👈", "point_down": "👇",
+        "crossed_fingers": "🤞", "metal": "🤘", "vulcan_salute": "🖖", "x": "❌",
+        "white_check_mark": "✅", "heavy_check_mark": "✔️", "zap": "⚡", "boom": "💥",
+        "star2": "🌟", "dizzy": "💫", "coffee": "☕", "beers": "🍻", "birthday": "🎂", "gift": "🎁",
+        "checkered_flag": "🏁", "bulb": "💡", "memo": "📝", "exclamation": "❗", "bangbang": "‼️",
+        "sunny": "☀️", "shrug": "🤷", "facepalm": "🤦", "ok": "🆗", "cool": "🆒", "new": "🆕",
+    ]
+
+    /// Lowercased with spaces, hyphens and underscores taken out: "thumbs_up" and "thumbs up"
+    /// are both "thumbsup".
+    private static func squeezed(_ text: String) -> String {
+        String(text.lowercased().filter { $0 != " " && $0 != "_" && $0 != "-" })
+    }
+
+    private static let squeezedShortcodes: [(code: String, squeezed: String, emoji: String)] =
+        shortcodes.map { ($0.key, squeezed($0.key), canonical($0.value)) }.sorted { $0.code < $1.code }
+
+    /// What an emoji's name answers to: each word, a word in "-ing" as it's usually typed
+    /// ("smiling" as "smile"), and the words from each one on run together ("thumbs up sign"
+    /// as "thumbsupsign", "upsign" and "sign"), so "thumbsup" finds it.
+    private static let keys: [String: [String]] = {
+        var keys: [String: [String]] = [:]
+        for entry in all {
+            let words = entry.name.split(whereSeparator: { $0 == " " || $0 == "-" }).map(String.init)
+            var found = Set(words)
+            for word in words where word.hasSuffix("ing") && word.count > 5 {
+                let stem = String(word.dropLast(3))
+                found.insert(stem)
+                found.insert(stem + "e")
+                // "running" as "run"
+                if let last = stem.last, stem.dropLast().last == last { found.insert(String(stem.dropLast())) }
+            }
+            for start in words.indices.dropLast() { found.insert(words[start...].joined()) }
+            keys[entry.emoji] = Array(found)
+        }
+        return keys
+    }()
+
+    private static let byEmoji: [String: Entry] = Dictionary(all.map { ($0.emoji, $0) }, uniquingKeysWith: { first, _ in first })
+
+    /// An entry for an emoji the catalog might not list, named as Unicode names it.
+    private static func entry(for emoji: String) -> Entry {
+        if let known = byEmoji[emoji] { return known }
+        return Entry(emoji: emoji, name: emoji.unicodeScalars.first?.properties.name?.lowercased() ?? "")
+    }
+
+    /// Emoji for what's typed, best first: one whose shortcode it is exactly, then the rest of
+    /// those whose shortcodes start with it or whose names have a word starting with each word
+    /// typed, ranked: used lately, the quick reactions, a shortcode, a name starting with it,
+    /// any other. Words may be split by spaces, underscores or hyphens ("thumbs up", "thumbs_up").
+    @MainActor static func search(_ query: String, limit: Int? = nil) -> [Entry] {
+        let words = query.lowercased().split(whereSeparator: { $0 == " " || $0 == "_" || $0 == "-" }).map(String.init)
+        let whole = squeezed(query)
+        guard !whole.isEmpty else { return [] }
+        let terms = words.isEmpty ? [whole] : words
+
+        let exact = squeezedShortcodes.filter { $0.squeezed == whole }.map(\.emoji)
+        let coded = Set(squeezedShortcodes.filter { $0.squeezed.hasPrefix(whole) }.map(\.emoji))
+        var candidates = all.filter { entry in
+            if coded.contains(entry.emoji) { return true }
+            let keys = Self.keys[entry.emoji] ?? []
+            return terms.allSatisfy { term in keys.contains { $0.hasPrefix(term) } }
+                || (terms.count > 1 && keys.contains { $0.hasPrefix(whole) })
+        }
+        // Shortcodes for emoji the catalog doesn't list.
+        for emoji in coded where byEmoji[emoji] == nil { candidates.append(entry(for: emoji)) }
+
+        let recents = Self.recents
+        let quick = QuickReactions.shared.emoji
+        func rank(_ entry: Entry) -> (Int, Int) {
+            if let index = exact.firstIndex(of: entry.emoji) { return (0, index) }
+            if let index = recents.firstIndex(of: entry.emoji) { return (1, index) }
+            if let index = quick.firstIndex(of: entry.emoji) { return (2, index) }
+            if coded.contains(entry.emoji) { return (3, 0) }
+            return (entry.name.hasPrefix(terms[0]) ? 4 : 5, 0)
+        }
+        // Sorted stably: the catalog's own order within each rank.
+        let ranked = candidates.enumerated().sorted { a, b in
+            let (ra, rb) = (rank(a.element), rank(b.element))
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+        return limit.map { Array(ranked.prefix($0)) } ?? ranked
+    }
+
+    /// An emoji's well-known shortcode, if it has one ("tada" for 🎉), for showing beside it.
+    static func shortcode(for emoji: String) -> String? {
+        let emoji = canonical(emoji)
+        let codes = squeezedShortcodes.filter { $0.emoji == emoji }.map(\.code)
+        // A word ("thumbsup") says more than "+1".
+        return codes.first { $0.first?.isLetter == true } ?? codes.first
+    }
+
+    /// The emoji a complete shortcode stands for: ":tada:" or ":fire:", or a name written out
+    /// with underscores (":thumbs_up_sign:").
+    static func emoji(forShortcode code: String) -> String? {
+        let whole = squeezed(code)
+        if let match = squeezedShortcodes.first(where: { $0.squeezed == whole }) { return match.emoji }
+        return all.first { squeezed($0.name) == whole }?.emoji
+    }
 
     private static let recentsKey = "recentEmoji"
 
