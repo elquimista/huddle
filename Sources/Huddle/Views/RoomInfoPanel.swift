@@ -208,23 +208,39 @@ private struct RoomInfoContent: View {
     }
 
     /// The room's picture: clicked to change it, where that's allowed.
+    /// A direct chat's picture is the person's (unless the chat was given one of its own), and
+    /// isn't the user's to change from here: a picture for the chat would be one both see.
     private var picture: some View {
-        EditableAvatar(canChange: details.canChangeAvatar, isBusy: isChangingPicture,
-                       hasPicture: details.avatarURL != nil,
-                       chooseMessage: "Choose a picture for “\(details.name)”") { url in
-            isChangingPicture = true
-            run { try await details.setAvatar(from: url) } done: { isChangingPicture = false }
-        } remove: {
-            isChangingPicture = true
-            run { try await details.removeAvatar() } done: { isChangingPicture = false }
-        } picture: {
-            // A direct chat's looks like the person, as it does in the room list: their colour, and
-            // the initial of the name it goes by.
-            AvatarView(media: account.media, url: details.avatarURL,
-                       name: directPerson.flatMap { account.contactName(for: $0.userID) }
-                           ?? details.shownName(names: account.contactNames),
-                       seed: directPerson?.userID ?? details.roomID, size: 76)
-        }
+        let shown = details.avatarURL ?? directPerson?.avatarURL
+        return EditableAvatar(
+            canChange: details.canChangeAvatar && directPerson == nil, isBusy: isChangingPicture,
+            hasPicture: details.avatarURL != nil,
+            chooseMessage: "Choose a picture for “\(details.name)”",
+            choose: { url in
+                isChangingPicture = true
+                run { try await details.setAvatar(from: url) } done: { isChangingPicture = false }
+            },
+            remove: {
+                isChangingPicture = true
+                run { try await details.removeAvatar() } done: { isChangingPicture = false }
+            },
+            showLarge: shown.map { url in { viewPicture(url) } },
+            picture: {
+                // A direct chat's looks like the person, as it does in the room list: their
+                // colour, and the initial of the name it goes by.
+                AvatarView(media: account.media, url: shown,
+                           name: directPerson.flatMap { account.contactName(for: $0.userID) }
+                               ?? details.shownName(names: account.contactNames),
+                           seed: directPerson?.userID ?? details.roomID, size: 76)
+            })
+    }
+
+    /// The picture at full size, in the viewer messages' pictures open in: the copy already
+    /// shown at once, the original once it's in.
+    private func viewPicture(_ url: String) {
+        let name = directPerson.flatMap { account.contactName(for: $0.userID) ?? $0.name } ?? details.name
+        guard let image = ImageAttachment(picture: url, name: name) else { return }
+        ImageViewerState.shared.open(image, media: account.media, placeholder: account.media.cached(url: url, size: 76))
     }
 
     private var editor: some View {

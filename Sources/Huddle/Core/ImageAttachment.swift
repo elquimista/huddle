@@ -47,6 +47,13 @@ struct ImageAttachment: Equatable {
         self.init(source: source, info: info, filename: name, caption: nil, isSticker: true)
     }
 
+    /// Someone's profile picture, or a room's, to see large. Nothing is known of it but its
+    /// address: its size comes from the picture once it's loaded.
+    init?(picture url: String, name: String) {
+        guard let source = try? MediaSource.fromUrl(url: url) else { return nil }
+        self.init(source: source, info: nil, filename: name, caption: nil, isSticker: false)
+    }
+
     private init(source: MediaSource, info: ImageInfo?, filename: String, caption: String?, isSticker: Bool) {
         media = MediaRef(source: source)
         thumbnail = info?.thumbnailSource.map(MediaRef.init(source:))
