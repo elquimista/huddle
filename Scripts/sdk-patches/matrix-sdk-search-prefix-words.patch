@@ -1,0 +1,19 @@
+diff --git a/crates/matrix-sdk-search/src/index/mod.rs b/crates/matrix-sdk-search/src/index/mod.rs
+index a8cdb00..bb73a78 100644
+--- a/crates/matrix-sdk-search/src/index/mod.rs
++++ b/crates/matrix-sdk-search/src/index/mod.rs
+@@ -172,7 +172,13 @@ impl fmt::Debug for RoomIndex {
+ 
+ impl RoomIndex {
+     pub(crate) fn new_with(index: Index, schema: RoomMessageSchema, room_id: &RoomId) -> RoomIndex {
+-        let query_parser = QueryParser::for_index(&index, schema.default_search_fields());
++        let mut query_parser = QueryParser::for_index(&index, schema.default_search_fields());
++        // As people search while they type: each word matches the words it begins ("hel"
++        // finds "hello"), and a message has to have all of them, as a server's search does.
++        for field in schema.default_search_fields() {
++            query_parser.set_field_fuzzy(field, true, 0, true);
++        }
++        query_parser.set_conjunction_by_default();
+         Self {
+             index,
+             schema,

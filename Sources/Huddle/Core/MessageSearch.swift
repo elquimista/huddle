@@ -215,6 +215,16 @@ final class MessageSearch {
 
     // MARK: Both
 
+    /// The query as words only, for this Mac's index. Its query language reads punctuation
+    /// (`room:`, quotes, a leading minus, AND and OR), which a search typed as plain text
+    /// shouldn't trip over: "re: meeting" would look for a field called "re". The index keeps
+    /// only letters and digits of what it indexes anyway, so nothing that could match is lost.
+    static func indexWords(_ query: String) -> String {
+        query.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .joined(separator: " ")
+    }
+
     /// Runs the query a moment after the last keystroke, so typing doesn't start a search
     /// for every letter.
     private func schedule() {
@@ -238,7 +248,10 @@ final class MessageSearch {
             localEnded = false
             restartServer()
             do {
-                try await service.setQuery(query: query)
+                // Nothing for this Mac's index to read as its own syntax. (Its words, at
+                // least one: the server's search takes the query as typed.)
+                let words = Self.indexWords(query)
+                if !words.isEmpty { try await service.setQuery(query: words) }
             } catch {
                 if self.trimmedQuery == query { self.failure = error.actionMessage }
             }
