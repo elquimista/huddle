@@ -22,6 +22,7 @@ final class AccountStore {
 
     func restore() async {
         DevHooks.applyAppearance()
+        IndexingSchedule.shared.start()
         Notifier.shared.store = self
         // An earlier build wrote images being viewed to a temporary folder. Nothing does now;
         // this clears anything that build left behind.

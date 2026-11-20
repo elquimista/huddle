@@ -194,6 +194,11 @@ enum DevHooks {
     static let indexPauseMilliseconds: Int? = AppEnvironment.isDev
         ? ProcessInfo.processInfo.environment["HUDDLE_DEV_INDEX_PAUSE"].flatMap(Int.init) : nil
 
+    /// Whether indexing counts Huddle as idle (HUDDLE_DEV_INDEXING=idle or busy), whatever its
+    /// state: Dev runs in the background during tests, which on its own counts as idle.
+    static let indexingIdle: Bool? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_INDEXING"].map { $0 != "busy" } : nil
+
     /// Images to stage in the composer of the room opened at launch.
     static let stagedImagePaths: [String] = AppEnvironment.isDev
         ? (ProcessInfo.processInfo.environment["HUDDLE_DEV_STAGE"] ?? "").split(separator: ",").map(String.init) : []

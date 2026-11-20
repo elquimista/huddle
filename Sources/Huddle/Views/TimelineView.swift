@@ -106,6 +106,8 @@ struct TimelineView: View {
     @State private var jumps = JumpCounter()
     /// Whether the top of the loaded history is on screen, which is when to fetch more.
     @State private var historyEdgeVisible = false
+    /// The same, without the slack: really in view, so the room doesn't reach the top of it.
+    @State private var historyEdgeInView = false
     private static let bottomID = "timeline-bottom"
     @Environment(\.timelineWidth) private var timelineWidth
 
@@ -126,7 +128,12 @@ struct TimelineView: View {
         let edgeVisible: Bool
         let finishedRequests: Int
         var shown = 0
+        var edgeInView = false
     }
+
+    /// While following the newest message, a room that doesn't reach the top of the view is
+    /// filled until it does, up to this many rows; scrolling up to the top asks for more.
+    private static let mostRowsToFill = 80
 
     /// The first row drawn, when the newest ones are drawn and not all of those loaded. A room
     /// opens with its newest few dozen messages drawn, however many are loaded, since every
@@ -194,6 +201,7 @@ struct TimelineView: View {
                             .frame(maxWidth: .infinity)
                             .padding(12)
                             .onGeometryChange(for: Bool.self, of: Self.isOnScreen) { historyEdgeVisible = $0 }
+                            .onGeometryChange(for: Bool.self, of: Self.isInView) { historyEdgeInView = $0 }
                     }
                     ForEach(shownRows) { row in
                         TimelineRowView(row: row, timeline: timeline, media: media,
@@ -425,6 +433,11 @@ struct TimelineView: View {
                         print("DEV_TIMELINE_PREPEND rows=\(timeline.rows.count) drawn=\(shownRows.count) following=\(followsNewest) atTop=\(historyEdgeVisible)")
                         fflush(stdout)
                     }
+                    // Not asked for here (the view isn't at its top): something else loaded the
+                    // room's history (an indexing pass, the SDK's own), which can slow the room.
+                    if !historyEdgeVisible, timeline.threadRoot == nil, timeline.focusedEvent == nil {
+                        TimelineLog.log.notice("Older messages arrived above the open room unasked: \(timeline.rows.count, privacy: .public) rows loaded, \(shownRows.count, privacy: .public) drawn, following newest \(followsNewest, privacy: .public)")
+                    }
                 }
                 // Older messages were added above. Unless the view is at its top, where they were
                 // asked for, they came on their own (the SDK fetches history in the background,
@@ -449,8 +462,19 @@ struct TimelineView: View {
             }
             // Fetches history while its top edge is on screen, again after each request finishes.
             .task(id: HistoryTrigger(edgeVisible: historyEdgeVisible, finishedRequests: timeline.historyRequests,
-                                     shown: shownRows.count)) {
+                                     shown: shownRows.count, edgeInView: historyEdgeInView)) {
                 guard historyEdgeVisible else { return }
+                // What was just drawn or loaded takes its place first. Asked again before the
+                // layout caught up, the edge would still look in view, and a room opening with a
+                // few messages loaded would draw a hundred or more, scrolling itself all the while.
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                // Filling a room that doesn't reach the top of the view: only while the edge is
+                // really in view, and only so far. The reader scrolling up to it asks for more,
+                // a little before it's reached.
+                if followsNewest, timeline.focusedEvent == nil {
+                    guard historyEdgeInView, shownRows.count < Self.mostRowsToFill else { return }
+                }
                 // Not while the view is on its way to a message just chosen: rows drawn above
                 // it then would move it from under the view as it gets there.
                 let wait = showingRowUntil.timeIntervalSinceNow
@@ -597,6 +621,11 @@ struct TimelineView: View {
         let marker = geometry.frame(in: .local)
         if visible.maxY >= marker.maxY - 0.5, visible.intersects(marker.insetBy(dx: 0, dy: -0.5)) { return .atEnd }
         return isOnScreen(geometry) ? .nearEnd : .away
+    }
+
+    private static func isInView(_ geometry: GeometryProxy) -> Bool {
+        guard let visible = geometry.bounds(of: .scrollView) else { return false }
+        return visible.intersects(geometry.frame(in: .local))
     }
 
     private static func isOnScreen(_ geometry: GeometryProxy) -> Bool {

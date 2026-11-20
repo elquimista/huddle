@@ -186,6 +186,9 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var allRoomsTask: Task<Void, Never>?
 
     @ObservationIgnored private var handles: [TaskHandle] = []
+    /// The SDK's search pass, while it runs (`runSearchBackfillWhenIdle`).
+    @ObservationIgnored private var searchBackfill: TaskHandle?
+    @ObservationIgnored private var searchBackfillTask: Task<Void, Never>?
     /// Follows the rooms' sections, here and in other apps.
     @ObservationIgnored var sectionsTask: Task<Void, Never>?
     /// Section changes under way here: the server's answers may not have them yet.
@@ -313,9 +316,7 @@ final class AccountSession: Identifiable {
 
             await syncService.start()
             verificationFlow.connect()
-            // Fills the search index with about three months of every room's history, newest
-            // weeks first, pausing between pages so it never holds up what's on screen.
-            handles.append(client.runSearchBackfill(strategy: .foreground))
+            runSearchBackfillWhenIdle()
             historyIndexer.start(for: self)
             startError = nil
             ownPresence.start()
@@ -325,6 +326,29 @@ final class AccountSession: Identifiable {
             startError = error.actionMessage
         }
         await loadProfile()
+    }
+
+    /// The SDK's search pass, which fills the search index with about three months of every
+    /// room's history, newest weeks first: only while Huddle is idle (`IndexingSchedule`).
+    /// Stopped the moment it's in use, started over once it isn't (what it has already fetched
+    /// comes from this Mac's store, quickly); once all the way through, not again this launch.
+    private func runSearchBackfillWhenIdle() {
+        searchBackfillTask?.cancel()
+        let client = client
+        searchBackfillTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await IndexingSchedule.shared.waitUntilIdle()
+                guard !Task.isCancelled else { return }
+                let handle = client.runSearchBackfill(strategy: .foreground)
+                self?.searchBackfill = handle
+                while !Task.isCancelled, !handle.isFinished(), IndexingSchedule.shared.isIdle {
+                    try? await Task.sleep(for: .seconds(2))
+                }
+                self?.searchBackfill = nil
+                if handle.isFinished() { return }
+                handle.cancel()
+            }
+        }
     }
 
     /// The SDK never restarts a sync that ended in an error (a server error, a timeout, a
@@ -363,6 +387,10 @@ final class AccountSession: Identifiable {
         allRoomsTask?.cancel()
         handles.forEach { $0.cancel() }
         handles.removeAll()
+        searchBackfillTask?.cancel()
+        searchBackfillTask = nil
+        searchBackfill?.cancel()
+        searchBackfill = nil
         timelines.values.forEach { $0.stop() }
         timelines.removeAll()
         bannerPinTimelines.values.forEach { $0.stop() }

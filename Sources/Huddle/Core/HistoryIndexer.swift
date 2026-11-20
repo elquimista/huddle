@@ -14,7 +14,8 @@ import MatrixRustSDK
 /// Huddle has on it too, each redrawing as it grows, and keep it all in memory. So a room open
 /// (or open recently) waits until it isn't, and one opened part way through is left for later;
 /// a room in view in the list has its reactions probe stopped while it's gone through. The
-/// timeline used here builds no items: it only drives the paging.
+/// timeline used here builds no items: it only drives the paging. It goes on only while Huddle
+/// isn't in use (`IndexingSchedule`).
 @MainActor @Observable
 final class HistoryIndexer {
     /// Settings ▸ Privacy can turn it off; on unless it has been.
@@ -147,6 +148,9 @@ final class HistoryIndexer {
                   trackReadReceipts: .disabled,
                   reportUtds: false)) else { return .stopped }
         while !Task.isCancelled, Self.isEnabled {
+            // Only while Huddle isn't in use (`IndexingSchedule`).
+            await IndexingSchedule.shared.waitUntilIdle()
+            if Task.isCancelled { return .stopped }
             // Waits out a lost connection rather than counting it as the end.
             while account?.syncState != .running {
                 try? await Task.sleep(for: .seconds(5))
