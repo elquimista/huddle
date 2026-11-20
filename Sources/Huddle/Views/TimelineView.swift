@@ -1151,7 +1151,7 @@ struct TimelineView: View {
     // MARK: Replies
 
     private func startReply(to message: MessageRow) {
-        guard let target = ReplyPreview(replyingTo: message) else { return }
+        guard let target = ReplyPreview(replyingTo: message, contactName: timeline.contactName) else { return }
         if editTarget != nil { finishEdit() }
         replyTarget = target
         composerFocused = true
@@ -1235,14 +1235,16 @@ struct TimelineView: View {
     /// Puts a message in the composer to be changed. Whatever was being written is set aside
     /// and comes back when the edit is saved or cancelled.
     private func startEdit(_ message: MessageRow) {
-        guard let kind = message.editKind, let original = ReplyPreview(replyingTo: message) else { return }
+        guard let kind = message.editKind,
+              let original = ReplyPreview(replyingTo: message, contactName: timeline.contactName) else { return }
         if editTarget == nil {
             stashedDraft = StashedDraft(text: draft, mentions: composedMentions, reply: replyTarget, images: stagedImages,
                                         files: stagedFiles)
             followedBeforeEdit = followsNewest
         }
         let restored = kind == .text
-            ? MentionComposer.draft(body: message.editableText, html: message.html, mentionsRoom: message.mentionsRoom)
+            ? MentionComposer.draft(body: message.editableText, html: message.html, mentionsRoom: message.mentionsRoom,
+                                    contactName: timeline.contactName)
             : (text: message.editableText, mentions: [])
         draft = restored.text
         composedMentions = restored.mentions
@@ -1335,7 +1337,7 @@ struct TimelineView: View {
     }
 
     private func startForward(_ message: MessageRow) {
-        guard let preview = ReplyPreview(replyingTo: message),
+        guard let preview = ReplyPreview(replyingTo: message, contactName: timeline.contactName),
               let content = timeline.forwardableContent(for: message.itemID) else {
             if !DevHooks.mutesAudio { NSSound.beep() }
             return
@@ -1385,7 +1387,7 @@ struct TimelineView: View {
         let messages = pinnedMessages
         if let room, !messages.isEmpty {
             let index = min(room.pinIndex.wrappedValue, messages.count - 1)
-            PinnedBanner(messages: messages, index: index, showAll: room.showPinned) {
+            PinnedBanner(messages: messages, index: index, contactName: timeline.contactName, showAll: room.showPinned) {
                 guard let eventID = messages[index].eventID else { return }
                 // The next click goes on to the one pinned before it.
                 withAnimation(.snappy(duration: 0.3)) { room.pinIndex.wrappedValue = (index + 1) % messages.count }
@@ -1454,8 +1456,8 @@ struct TimelineView: View {
 
     private func pick(_ candidate: MentionCandidate) {
         guard let at = draft.lastIndex(of: "@") else { return }
-        draft.replaceSubrange(at..., with: candidate.label + " ")
-        let mention = ComposedMention(label: candidate.label, userID: candidate.isRoom ? nil : candidate.id)
+        let mention = ComposedMention(candidate, contactName: candidate.isRoom ? nil : timeline.contactName(candidate.id))
+        draft.replaceSubrange(at..., with: mention.label + " ")
         if !composedMentions.contains(mention) { composedMentions.append(mention) }
         composerFocused = true
     }

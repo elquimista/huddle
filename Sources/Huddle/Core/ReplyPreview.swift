@@ -23,7 +23,8 @@ struct ReplyPreview: Equatable {
     var icon: String?
 
     /// From a reply in the timeline: what the SDK knows about the message it answers.
-    init(_ details: InReplyToDetails) {
+    /// `contactName` gives the user's own names for people, for mentions in it.
+    init(_ details: InReplyToDetails, contactName: (String) -> String? = { _ in nil }) {
         eventID = details.eventId()
         switch details.event() {
         case .unavailable:
@@ -37,13 +38,13 @@ struct ReplyPreview: Equatable {
             state = .ready
             self.sender = sender
             senderName = profile.name(fallback: sender)
-            (text, icon) = Self.describe(content, senderName: senderName)
+            (text, icon) = Self.describe(content, senderName: senderName, contactName: contactName)
         }
     }
 
     /// From a message on screen that the user is about to reply to. Nil for one that hasn't
     /// reached the server yet, which can't be replied to.
-    init?(replyingTo message: MessageRow) {
+    init?(replyingTo message: MessageRow, contactName: (String) -> String? = { _ in nil }) {
         guard let eventID = message.eventID else { return nil }
         self.eventID = eventID
         state = .ready
@@ -52,9 +53,10 @@ struct ReplyPreview: Equatable {
         let formatted = message.html.map { FormattedBody(format: .html, body: $0) }
         switch message.body {
         case .text(let body):
-            text = MessageFormatter.plainText(text: body, formatted: formatted)
+            text = MessageFormatter.plainText(text: body, formatted: formatted, contactName: contactName)
         case .emote(let body):
-            text = "* \(message.senderName) " + MessageFormatter.plainText(text: body, formatted: formatted)
+            text = "* \(message.senderName) "
+                + MessageFormatter.plainText(text: body, formatted: formatted, contactName: contactName)
         case .image(let image):
             (text, icon) = image.isSticker
                 ? ("Sticker", "face.smiling")
@@ -79,19 +81,20 @@ struct ReplyPreview: Equatable {
 
     /// One line of plain text for a message's content, and an SF Symbol for what it is when it
     /// isn't plain text.
-    static func describe(_ content: TimelineItemContent, senderName: String) -> (String, String?) {
+    static func describe(_ content: TimelineItemContent, senderName: String,
+                         contactName: (String) -> String? = { _ in nil }) -> (String, String?) {
         guard case .msgLike(let message) = content else {
-            return (content.preview(sender: senderName) ?? "Message", nil)
+            return (content.preview(sender: senderName, contactName: contactName) ?? "Message", nil)
         }
         switch message.kind {
         case .message(let content):
             switch content.msgType {
             case .text(let text):
-                return (ReplyFallback.plainText(text.body, text.formatted), nil)
+                return (ReplyFallback.plainText(text.body, text.formatted, contactName: contactName), nil)
             case .notice(let notice):
-                return (ReplyFallback.plainText(notice.body, notice.formatted), nil)
+                return (ReplyFallback.plainText(notice.body, notice.formatted, contactName: contactName), nil)
             case .emote(let emote):
-                return ("* \(senderName) " + ReplyFallback.plainText(emote.body, emote.formatted), nil)
+                return ("* \(senderName) " + ReplyFallback.plainText(emote.body, emote.formatted, contactName: contactName), nil)
             case .image(let image):
                 return (AttachmentText.line(name: image.filename, caption: image.caption, kind: "Image"), "photo")
             case .video(let video):
@@ -119,9 +122,10 @@ struct ReplyPreview: Equatable {
 /// message is shown as one line of its own words.
 enum ReplyFallback {
     /// A message's plain text without the quote, from its HTML if it has any.
-    static func plainText(_ body: String, _ formatted: FormattedBody?) -> String {
+    static func plainText(_ body: String, _ formatted: FormattedBody?,
+                          contactName: (String) -> String? = { _ in nil }) -> String {
         let formatted = formatted.map { FormattedBody(format: $0.format, body: strip(html: $0.body)) }
-        return MessageFormatter.plainText(text: strip(body: body), formatted: formatted)
+        return MessageFormatter.plainText(text: strip(body: body), formatted: formatted, contactName: contactName)
     }
 
     static func strip(body: String) -> String {

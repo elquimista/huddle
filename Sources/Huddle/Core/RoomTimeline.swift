@@ -189,7 +189,7 @@ struct ReactionPreview: Equatable {
                 switch message.body {
                 case .text(let text), .emote(let text):
                     let plain = MessageFormatter.plainText(
-                        text: text, formatted: message.html.map { FormattedBody(format: .html, body: $0) }, name: name)
+                        text: text, formatted: message.html.map { FormattedBody(format: .html, body: $0) }, contactName: name)
                     target = "“\(plain.prefix(60))”"
                 case .image(let image): target = image.isSticker ? "a sticker" : (image.filename.isEmpty ? "an image" : image.filename)
                 case .audio(let audio): target = audio.isVoice ? "a voice message" : audio.filename
@@ -1313,7 +1313,7 @@ extension TimelineRow.Kind {
                 .sorted { $0.userID < $1.userID },
             html: formatted.flatMap { $0.format == .html ? $0.body : nil },
             mentionsRoom: mentionsRoom,
-            replyTo: content.inReplyTo.map(ReplyPreview.init),
+            replyTo: content.inReplyTo.map { ReplyPreview($0, contactName: contactName) },
             uploadProgress: uploadProgress,
             // Not strict: people who haven't been verified are the usual case, not a warning.
             shield: event.isOwn ? nil : MessageRow.Shield(event.lazyProvider.getShields(strict: false)),
@@ -1474,9 +1474,11 @@ extension TimelineItemContent {
                         : AttachmentText.line(name: audio.filename, caption: audio.caption, kind: "Audio")
                 case .file(let file): text = AttachmentText.line(name: file.filename, caption: file.caption, kind: "File")
                 case .emote(let emote):
-                    return "* \(who) \(MessageFormatter.plainText(text: emote.body, formatted: emote.formatted))"
-                case .text(let content): text = MessageFormatter.plainText(text: content.body, formatted: content.formatted)
-                case .notice(let content): text = MessageFormatter.plainText(text: content.body, formatted: content.formatted)
+                    return "* \(who) \(MessageFormatter.plainText(text: emote.body, formatted: emote.formatted, contactName: contactName))"
+                case .text(let content):
+                    text = MessageFormatter.plainText(text: content.body, formatted: content.formatted, contactName: contactName)
+                case .notice(let content):
+                    text = MessageFormatter.plainText(text: content.body, formatted: content.formatted, contactName: contactName)
                 default: text = message.isVerificationRequest ? "Verification request" : message.body
                 }
             case .sticker: text = "Sticker"

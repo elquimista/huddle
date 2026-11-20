@@ -71,7 +71,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             guard senderID != account.userID,
                   Date(timeIntervalSince1970: TimeInterval(event.timestamp()) / 1000) >= launchDate,
                   let content = try? event.content(),
-                  let text = Self.describe(content) else { return }
+                  let text = Self.describe(content, contactName: { [account] in account.contactName(for: $0) }) else { return }
             body = text
             threadRoot = item.threadId ?? event.threadRootEventId()
             key = "\(account.id)|\(roomID)|\(event.eventId())"
@@ -206,14 +206,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center?.add(UNNotificationRequest(identifier: "\(account.id)|verify", content: content, trigger: nil))
     }
 
-    private static func describe(_ content: TimelineEventContent) -> String? {
+    private static func describe(_ content: TimelineEventContent, contactName: (String) -> String?) -> String? {
         guard case .messageLike(let content) = content else { return nil }
         switch content {
         case .roomMessage(let type, let inReplyTo):
             // A reply's plain text may begin with the quoted message; the alert shows the answer.
             func plain(_ body: String, _ formatted: FormattedBody?) -> String {
                 MessageFormatter.plainText(text: inReplyTo == nil ? body : MessageFormatter.strippingReplyFallback(body),
-                                           formatted: formatted)
+                                           formatted: formatted, contactName: contactName)
             }
             switch type {
             case .text(let content): return plain(content.body, content.formatted)

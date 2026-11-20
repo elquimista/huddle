@@ -11,16 +11,34 @@ struct MentionCandidate: Identifiable, Equatable {
     let avatarURL: String?
 
     var isRoom: Bool { id == "@room" }
-    /// How the mention reads in the composer.
-    var label: String { "@" + name }
 }
 
 /// A mention picked from the suggestions while writing. It counts only if its label is still
 /// in the text when the message is sent.
 struct ComposedMention: Equatable {
+    /// How it reads in the composer: "@" and the user's own name for the person
+    /// (ContactNames.swift), where they've given one, or else the person's name in the room.
     let label: String
     /// Nil for "@room".
     let userID: String?
+    /// The person's name in the room, which is what's sent: the user's own name for them is
+    /// theirs alone. Nil for "@room".
+    var name: String? = nil
+
+    init(label: String, userID: String?, name: String? = nil) {
+        self.label = label
+        self.userID = userID
+        self.name = name
+    }
+
+    /// Someone picked from the suggestions, shown by the user's name for them if there is one.
+    init(_ candidate: MentionCandidate, contactName: String?) {
+        if candidate.isRoom {
+            self.init(label: "@room", userID: nil)
+        } else {
+            self.init(label: "@" + (contactName ?? candidate.name), userID: candidate.id, name: candidate.name)
+        }
+    }
 }
 
 enum MentionComposer {
@@ -37,8 +55,10 @@ enum MentionComposer {
     }
 
     /// A sent message as it would have been typed: each mention back as "@Name", with the
-    /// person it names, so that editing the message keeps its mentions.
-    static func draft(body: String, html: String?, mentionsRoom: Bool) -> (text: String, mentions: [ComposedMention]) {
+    /// person it names, so that editing the message keeps its mentions. A person the user has
+    /// named reads by that name, as they would have been picked; the name sent stays theirs.
+    static func draft(body: String, html: String?, mentionsRoom: Bool,
+                      contactName: (String) -> String? = { _ in nil }) -> (text: String, mentions: [ComposedMention]) {
         var text = body
         var mentions: [ComposedMention] = []
         if let html {
@@ -52,15 +72,14 @@ enum MentionComposer {
                 let name = decodeEntities(String(match.output.2))
                 guard !userID.isEmpty, !name.isEmpty,
                       let found = text.range(of: name, range: cursor..<text.endIndex) else { continue }
-                let label = name.hasPrefix("@") ? name : "@" + name
+                let sent = name.hasPrefix("@") ? String(name.dropFirst()) : name
+                let label = "@" + (contactName(userID) ?? sent)
                 let alreadyAt = found.lowerBound > text.startIndex && text[text.index(before: found.lowerBound)] == "@"
-                if alreadyAt || name.hasPrefix("@") {
-                    cursor = found.upperBound
-                } else {
-                    text.replaceSubrange(found, with: label)
-                    cursor = text.index(found.lowerBound, offsetBy: label.count)
-                }
-                let mention = ComposedMention(label: label, userID: userID)
+                // "@Bob" or "Bob" in the text, whichever it has, becomes the label.
+                let start = alreadyAt ? text.index(before: found.lowerBound) : found.lowerBound
+                text.replaceSubrange(start..<found.upperBound, with: label)
+                cursor = text.index(start, offsetBy: label.count)
+                let mention = ComposedMention(label: label, userID: userID, name: sent)
                 if !mentions.contains(mention) { mentions.append(mention) }
             }
         }
@@ -96,7 +115,7 @@ enum MentionComposer {
             if text[index] == "@", let mention = used.first(where: { text[index...].hasPrefix($0.label) }) {
                 flush()
                 if let userID = mention.userID {
-                    let name = String(mention.label.dropFirst())
+                    let name = mention.name ?? String(mention.label.dropFirst())
                     plain += name
                     html += "<a href=\"https://matrix.to/#/\(userID)\">\(escape(name))</a>"
                     if !userIDs.contains(userID) { userIDs.append(userID) }

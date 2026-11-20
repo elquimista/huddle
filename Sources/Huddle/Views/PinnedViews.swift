@@ -24,6 +24,8 @@ struct PinnedBanner: View {
     /// Most recently pinned first.
     let messages: [MessageRow]
     let index: Int
+    /// The user's own names for people, for mentions in the message.
+    let contactName: (String) -> String?
     let showAll: (() -> Void)?
     let select: () -> Void
     @State private var isHovering = false
@@ -31,7 +33,7 @@ struct PinnedBanner: View {
 
     var body: some View {
         let message = messages[index]
-        let preview = ReplyPreview(replyingTo: message)
+        let preview = ReplyPreview(replyingTo: message, contactName: contactName)
         HStack(spacing: 10) {
             Button(action: select) {
                 HStack(spacing: 10) {
@@ -135,6 +137,7 @@ struct PinnedListView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(messages, id: \.itemID) { message in
                                 PinnedRow(message: message, media: account.media,
+                                          contactName: { account.contactName(for: $0) },
                                           canUnpin: pins.permissions.canPin) {
                                     guard let eventID = message.eventID else { return }
                                     account.timeline(for: roomID)?.requestedJump = eventID
@@ -180,6 +183,8 @@ struct PinnedListView: View {
 private struct PinnedRow: View {
     let message: MessageRow
     let media: MediaLoader
+    /// The user's own names for people, for mentions in the message.
+    let contactName: (String) -> String?
     let canUnpin: Bool
     let open: () -> Void
     let unpin: () -> Void
@@ -187,7 +192,7 @@ private struct PinnedRow: View {
     @Environment(\.nameColorRoom) private var nameColorRoom
 
     var body: some View {
-        let preview = ReplyPreview(replyingTo: message)
+        let preview = ReplyPreview(replyingTo: message, contactName: contactName)
         Button(action: open) {
             HStack(alignment: .top, spacing: 10) {
                 AvatarView(media: media, url: message.senderAvatarURL, name: message.senderName,

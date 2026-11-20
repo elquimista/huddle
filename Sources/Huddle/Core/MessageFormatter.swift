@@ -53,9 +53,16 @@ enum MessageFormatter {
 
     /// The same message as one line of plain text, for room list previews and notifications:
     /// mentions read "@Name" and formatting is dropped.
-    static func plainText(text: String, formatted: FormattedBody?, name: @escaping (String) -> String? = { _ in nil }) -> String {
+    /// - Parameter contactName: the user's own names for people (ContactNames.swift): a mention
+    ///   of someone they've named reads by that name, as their pill does, rather than as the
+    ///   sender wrote it.
+    static func plainText(text: String, formatted: FormattedBody?,
+                          contactName: (String) -> String? = { _ in nil }) -> String {
         let html = formatted.flatMap { $0.format == .html ? $0.body : nil }
-        let styled = render(text: text, html: html, mentionsRoom: false, ownUserID: "", keepsLinkText: true, name: name)
+        // Only used while rendering, which is over before this returns.
+        let styled = withoutActuallyEscaping(contactName) { name in
+            render(text: text, html: html, mentionsRoom: false, ownUserID: "", keepsLinkText: true, name: name)
+        }
         return String(styled.characters)
             .replacingOccurrences(of: "\u{202F}", with: "")
             .replacingOccurrences(of: "\n", with: " ")
@@ -92,9 +99,13 @@ enum MessageFormatter {
     /// A pill reads as the person it points to: their name in the room, else their username.
     /// Not the link's own text, which the sender wrote: `<a href="…/@mallory:evil">@Alice</a>`
     /// would otherwise pass for a mention of Alice. Plain text (`keepsLinkText`: previews and
-    /// alerts) has no pill to pass off, so there the sender's words stand, as typed text would.
+    /// alerts) has no pill to pass off, so there the sender's words stand, as typed text would,
+    /// unless the user has a name of their own for the person, which `name` then gives.
     static func mentionLabel(for userID: String, given label: String?, keepsLinkText: Bool = false,
                              name: (String) -> String?) -> String {
+        if keepsLinkText, let own = name(userID)?.trimmingCharacters(in: .whitespacesAndNewlines), !own.isEmpty {
+            return "@" + own
+        }
         var shown = keepsLinkText ? label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" : ""
         // Some clients put the raw ID in the link text; a name reads better.
         if shown.isEmpty || shown.hasPrefix("@") && shown.contains(":") {
