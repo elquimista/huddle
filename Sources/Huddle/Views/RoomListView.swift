@@ -353,8 +353,10 @@ private struct RoomListRow: View {
     let account: AccountSession
     let room: RoomSummary
     let actions: RoomListSection.Actions
+    @State private var isHovering = false
 
     var body: some View {
+        let isSelected = account.selectedRoomID == room.id
         RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id],
                 threadReply: account.threadReplyDates[room.id],
                 presence: room.directUserID.flatMap { account.presence.people[$0] },
@@ -362,8 +364,20 @@ private struct RoomListRow: View {
                 // and not in a muted room, which is meant to be quiet.
                 typists: account.sharesTyping && !room.isMuted && !room.isInvite ? account.typists(in: room.id) : nil,
                 // Not on the open room's row: its composer shows it.
-                draft: account.selectedRoomID == room.id ? nil : account.draftPreviews[room.id],
-                isSelected: account.selectedRoomID == room.id)
+                draft: isSelected ? nil : account.draftPreviews[room.id],
+                isSelected: isSelected)
+            // Pointed at, a faint wash where the selection would be: which row a click opens.
+            .background {
+                if isHovering && !isSelected {
+                    RoundedRectangle(cornerRadius: RoomHoverWash.corner, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                        .padding(RoomHoverWash.outset)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+            .onHoverInFrontWindow { isHovering = $0 }
+            .onAppear { if DevHooks.hoveredNames.contains(room.name) { isHovering = true } }
             .tag(room.id)
             .draggable(room.id) {
                 Label(room.name, systemImage: "bubble.left")
@@ -399,6 +413,13 @@ private struct RoomListRow: View {
             Button(room.isMuted ? "Unmute" : "Mute") { actions.setNotifications(room.id, room.isMuted ? nil : .mute) }
         }
     }
+}
+
+/// The hover wash's shape: the sidebar's selection highlight, which reaches past a row's content
+/// by the list's own margins.
+private enum RoomHoverWash {
+    static let corner: CGFloat = 5
+    static let outset = EdgeInsets(top: -4, leading: -6, bottom: -4, trailing: -6)
 }
 
 /// A room's right-click menu: read state, notifications, where it's kept, and its space.

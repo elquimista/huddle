@@ -188,25 +188,34 @@ private struct RailIcon: View, Equatable {
     private static let ringWidth: CGFloat = 2.5
     private static let ringGap: CGFloat = 2
 
+    /// Its own, not part of comparing: only this icon redraws as the pointer comes and goes.
+    @State private var isHovering = false
+
     var body: some View {
         // The selected space has a ring around it, a gap apart, in the text colour: it stands out
         // against a space's picture whatever its colours, as the accent colour would not on one
         // of the same colour. It shows at once, with no animation, while the room list and the
-        // conversation are drawn just after.
+        // conversation are drawn just after. Pointed at, another has the same ring, faint: what
+        // a click will do.
         icon
             .padding(3)
             .overlay {
-                if isSelected {
+                if isSelected || isHovering {
                     // Out past the 3-point margin around the square.
                     let outset = Self.ringGap + Self.ringWidth - 3
                     RoundedRectangle(cornerRadius: Self.corner + Self.ringGap + Self.ringWidth, style: .continuous)
-                        .strokeBorder(.primary, lineWidth: Self.ringWidth)
+                        .strokeBorder(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.primary.opacity(0.22)),
+                                      lineWidth: Self.ringWidth)
                         .padding(-outset)
+                        .transition(.opacity)
                 }
             }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
             // After the ring, so a badge on the corner cuts a gap in it too.
             .railBadge(badge)
             .contentShape(RoundedRectangle(cornerRadius: Self.corner + 3, style: .continuous))
+            .onHoverInFrontWindow { isHovering = $0 }
+            .onAppear { if DevHooks.hoveredNames.contains(name) { isHovering = true } }
             .padding(RailBadge.overhang)
             .onTapGesture(perform: actions.select)
             .help(help)
@@ -254,11 +263,18 @@ private struct RailIcon: View, Equatable {
         }
     }
 
+    private var name: String {
+        switch kind {
+        case .home: "Home"
+        case .space(let space): space.displayName
+        case .invite(let invite): invite.name
+        }
+    }
+
     private var accessibilityLabel: String {
         switch kind {
         case .invite(let invite): return "Invitation to \(invite.name)"
         case .home, .space:
-            let name = if case .space(let space) = kind { space.displayName } else { "Home" }
             let count = attention?.count ?? 0
             return count > 0 ? "\(name), \(count) with new messages" : name
         }

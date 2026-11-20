@@ -40,43 +40,12 @@ struct AccountBar: View {
         let split = split
         HStack(spacing: 0) {
             ForEach(split.shown, id: \.1.id) { index, account in
-                AccountButton(account: account, isSelected: account.id == store.selected?.id, index: index) {
-                    store.selectedID = account.id
-                }
-                .contextMenu {
-                    Text(account.userID)
-                    Button("Copy User ID") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(account.userID, forType: .string)
-                    }
-                    Button("Mark All as Read") { account.markAllRead() }
-                        .disabled(!account.hasUnreadRooms)
-                    Divider()
-                    Button("Edit Profile…") {
-                        store.selectedID = account.id
-                        account.sheet = .profile
-                    }
-                    if account.signsInWithOAuth {
-                        Button("Manage Account…") { openAccountPage(of: account) }
-                    } else {
-                        Button("Change Password…") {
-                            store.selectedID = account.id
-                            account.sheet = .changePassword
-                        }
-                    }
-                    Button("Devices…") {
-                        store.selectedID = account.id
-                        account.sheet = .devices
-                    }
-                    Divider()
-                    Button("New Space…") {
-                        store.selectedID = account.id
-                        account.sheet = .newSpace
-                    }
-                    Button("Add Account…") { store.isAddingAccount = true }
-                    Divider()
-                    Button("Sign Out…", role: .destructive) { accountToSignOut = account }
-                }
+                AccountButton(account: account, isSelected: account.id == store.selected?.id, index: index,
+                              select: { store.selectedID = account.id },
+                              menu: { menuSections(for: account) })
+                // Its own view, made only as the menu opens, so its checks (unread rooms, for
+                // Mark All as Read) aren't run each time the bar is drawn.
+                .contextMenu { AccountContextMenu(header: account.userID, sections: { menuSections(for: account) }) }
             }
             if !split.more.isEmpty {
                 MoreAccountsButton(accounts: split.more) { store.selectedID = $0.id }
@@ -98,6 +67,64 @@ struct AccountBar: View {
     }
 }
 
+extension AccountBar {
+    /// An account's menu: the same for right-clicking any account's avatar and for clicking the
+    /// open account's chip.
+    fileprivate func menuSections(for account: AccountSession) -> [[AccountMenuItem]] {
+        let store = store
+        let select = { store.selectedID = account.id }
+        let accountPage = account.signsInWithOAuth
+            ? AccountMenuItem("Manage Account…") { openAccountPage(of: account) }
+            : AccountMenuItem("Change Password…") { select(); account.sheet = .changePassword }
+        return [
+            [AccountMenuItem("Copy User ID") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(account.userID, forType: .string)
+             },
+             AccountMenuItem("Mark All as Read", isEnabled: account.hasUnreadRooms) { account.markAllRead() }],
+            [AccountMenuItem("Edit Profile…") { select(); account.sheet = .profile },
+             accountPage,
+             AccountMenuItem("Devices…") { select(); account.sheet = .devices }],
+            [AccountMenuItem("New Space…") { select(); account.sheet = .newSpace },
+             AccountMenuItem("Add Account…") { store.isAddingAccount = true }],
+            [AccountMenuItem("Sign Out…", isDestructive: true) { accountToSignOut = account }],
+        ]
+    }
+}
+
+/// One item of an account's menu.
+private struct AccountMenuItem: Identifiable {
+    let title: String
+    var isEnabled = true
+    var isDestructive = false
+    let action: () -> Void
+    var id: String { title }
+
+    init(_ title: String, isEnabled: Bool = true, isDestructive: Bool = false, action: @escaping () -> Void) {
+        self.title = title
+        self.isEnabled = isEnabled
+        self.isDestructive = isDestructive
+        self.action = action
+    }
+}
+
+/// An account's menu as a context menu: its user ID on top, then its groups of items.
+private struct AccountContextMenu: View {
+    let header: String
+    let sections: () -> [[AccountMenuItem]]
+
+    var body: some View {
+        Text(header)
+        ForEach(Array(sections().enumerated()), id: \.offset) { index, section in
+            if index > 0 { Divider() }
+            ForEach(section) { item in
+                Button(item.title, role: item.isDestructive ? .destructive : nil, action: item.action)
+                    .disabled(!item.isEnabled)
+            }
+        }
+    }
+}
+
 /// "+2": the accounts that don't fit, in a menu, with a dot when any of them has something new.
 /// The sidebar's width as it is laid out, for the account bar above it to fit itself to.
 @Observable
@@ -112,6 +139,7 @@ private struct MoreAccountsButton: View {
     let accounts: [(Int, AccountSession)]
     let select: (AccountSession) -> Void
     @State private var anchor = MenuAnchor()
+    @State private var isHovering = false
 
     private var badge: RailBadge? {
         if accounts.contains(where: { $0.1.urgentCount > 0 }) { return .dot(.red, size: 7) }
@@ -123,14 +151,17 @@ private struct MoreAccountsButton: View {
         Button(action: open) {
             Text("+\(accounts.count)")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isHovering ? .primary : .secondary)
                 .frame(width: AccountButton.size, height: AccountButton.size)
-                .background(Color.secondary.opacity(0.2), in: Circle())
+                .background(Color.secondary.opacity(isHovering ? 0.32 : 0.2), in: Circle())
                 .railBadge(badge)
                 .padding(RailBadge.overhang)
                 .contentShape(Circle())
+                .animation(.easeOut(duration: 0.12), value: isHovering)
         }
         .buttonStyle(.plain)
+        .onHoverInFrontWindow { isHovering = $0 }
+        .onAppear { if DevHooks.hoveredNames.contains("more") { isHovering = true } }
         .background(MenuAnchorView(anchor: anchor))
         .help("More accounts")
         .accessibilityLabel("\(accounts.count) more accounts")
@@ -154,6 +185,11 @@ private struct AccountButton: View {
     let isSelected: Bool
     let index: Int
     let select: () -> Void
+    /// The account's menu, which clicking the open account's chip shows, as right-clicking does.
+    let menu: () -> [[AccountMenuItem]]
+    @State private var isHovering = false
+    @State private var isMenuOpen = false
+    @State private var anchor = MenuAnchor()
 
     static let size: CGFloat = 22
 
@@ -199,19 +235,62 @@ private struct AccountButton: View {
         }
         .background {
             if isSelected {
+                // A shade deeper pointed at, and while its menu is open, as a pop-up button.
                 Capsule().fill(.quaternary)
+                    .overlay { Capsule().fill(Color.primary.opacity(isHovering || isMenuOpen ? 0.07 : 0)) }
                     .overlay { Capsule().strokeBorder(.separator, lineWidth: 0.5) }
+            } else if isHovering {
+                // Another account pointed at: the chip it would open into, without the name yet.
+                Circle().fill(.quaternary)
+                    .overlay { Circle().strokeBorder(.separator, lineWidth: 0.5) }
+                    .padding(-Self.chipInset)
+                    .transition(.opacity)
             }
         }
         .animation(.snappy(duration: 0.22), value: isSelected)
+        .animation(.easeOut(duration: 0.12), value: isHovering)
             .contentShape(Capsule())
+            .onHoverInFrontWindow { isHovering = $0 }
+            .onAppear { if DevHooks.hoveredNames.contains(account.userID.matrixLocalpart) { isHovering = true } }
+            .background(MenuAnchorView(anchor: anchor))
             .padding(RailBadge.overhang)
-            .onTapGesture(perform: select)
+            .onTapGesture(perform: activate)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel)
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-            .accessibilityAction(.default, select)
+            .accessibilityAction(.default, activate)
             .help(helpText)
+    }
+
+    /// Another account is switched to; the open one shows its menu.
+    private func activate() {
+        if isSelected { openMenu() } else { select() }
+    }
+
+    /// The menu hangs from the chip, lined up with its left side, and returns once it has closed.
+    private func openMenu() {
+        guard let view = anchor.view else { return }
+        let nsMenu = NSMenu()
+        nsMenu.autoenablesItems = false
+        let header = NSMenuItem(title: account.userID, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        nsMenu.addItem(header)
+        for (index, section) in menu().enumerated() {
+            if index > 0 { nsMenu.addItem(.separator()) }
+            for item in section {
+                let menuItem = ClosureMenuItem(title: item.title, handler: item.action)
+                menuItem.isEnabled = item.isEnabled
+                nsMenu.addItem(menuItem)
+            }
+        }
+        if DevHooks.logsMenus {
+            print("DEV_MENU " + nsMenu.items.map { $0.isSeparatorItem ? "—" : ($0.isEnabled ? $0.title : "(\($0.title))") }
+                .joined(separator: " | ")); fflush(stdout)
+            return
+        }
+        isMenuOpen = true
+        nsMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
+        isMenuOpen = false
     }
 
     private var name: String { account.displayName ?? account.userID }
