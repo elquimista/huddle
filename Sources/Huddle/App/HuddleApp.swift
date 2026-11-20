@@ -112,9 +112,7 @@ struct HuddleApp: App {
                     .disabled(!(account?.hasUnreadRooms ?? false) || paused)
                 if let account {
                     Divider()
-                    // Home and the account's spaces, as the rail has them. The spaces are ⌘1 to
-                    // ⌘9 from the top, as the first is the one a hand reaches for; Home, the base
-                    // they're numbered from, is ⇧⌘H, Finder's Go ▸ Home (RailShortcut).
+                    // Home and the account's spaces, as the rail has them: ⌘1 to ⌘9 (RailShortcut).
                     Toggle("Home", isOn: Binding(get: { account.selectedSpaceID == nil },
                                                  set: { _ in account.choose(inRail: .home) }))
                         .keyboardShortcut(RailShortcut.home)

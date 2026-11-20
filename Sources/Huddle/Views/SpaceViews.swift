@@ -97,7 +97,7 @@ private struct RailSpaceButton: View {
         }
     }
 
-    /// Its key in the Go menu, for its tooltip: ⇧⌘H for Home, ⌘1 to ⌘9 for the first nine spaces.
+    /// Its key in the Go menu, for its tooltip: ⌘1 for Home, ⌘2 to ⌘9 for the first eight spaces.
     private var shortcut: String? {
         switch kind {
         case .home: RailShortcut.homeLabel
@@ -196,6 +196,10 @@ private struct RailIcon: View, Equatable {
     }
 
     private static var corner: CGFloat { RailSpaceButton.corner }
+    /// Home's colours: the app icon's green (Scripts/make-icon.swift).
+    private static let homeTop = Color(.sRGB, red: 0.40, green: 0.90, blue: 0.42)
+    private static let homeBottom = Color(.sRGB, red: 0.08, green: 0.70, blue: 0.24)
+
     /// The selected space's ring, and the gap between it and the space's square.
     private static let ringWidth: CGFloat = 2.5
     private static let ringGap: CGFloat = 2
@@ -243,13 +247,14 @@ private struct RailIcon: View, Equatable {
     @ViewBuilder private var icon: some View {
         switch kind {
         case .home:
+            // A space of Huddle's own, as solid as the others: the app icon's green, top to
+            // bottom, under a white house.
             Image(systemName: "house.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(isSelected ? .primary : .secondary)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
                 .frame(width: 34, height: 34)
-                // A plain wash rather than the sidebar's translucent grey, which the badge's
-                // compositing group would flatten and darken.
-                .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
+                .background(LinearGradient(colors: [Self.homeTop, Self.homeBottom], startPoint: .top, endPoint: .bottom),
+                            in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
         case .space(let space):
             AvatarView(media: media, url: space.avatarUrl, name: space.displayName,
                        seed: space.roomId, size: 34, isSquare: true)
@@ -873,18 +878,17 @@ private struct SpaceRoomRow: View {
     }
 }
 
-/// The Go menu's keys for the rail: ⌘1 to ⌘9 for the first nine spaces from the top, and ⇧⌘H
-/// for Home, as Finder's Go ▸ Home. The spaces are numbered from the first because that is the
-/// one a hand reaches for with ⌘1; Home is the base they hang from, not one of them.
+/// The Go menu's keys for the rail, in its order from the top: ⌘1 for Home, the first of the
+/// rail's tiles, and ⌘2 to ⌘9 for the first eight spaces below it, as Element numbers them.
 enum RailShortcut {
-    static let home = KeyboardShortcut("h", modifiers: [.command, .shift])
-    static let homeLabel = "⇧⌘H"
+    static let home = KeyboardShortcut("1", modifiers: .command)
+    static let homeLabel = "⌘1"
 
     static func space(at index: Int) -> KeyboardShortcut? {
-        index < 9 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command) : nil
+        index < 8 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 2)")), modifiers: .command) : nil
     }
 
     static func spaceLabel(at index: Int) -> String? {
-        index < 9 ? "⌘\(index + 1)" : nil
+        index < 8 ? "⌘\(index + 2)" : nil
     }
 }
