@@ -40,13 +40,13 @@ A native, lightweight Matrix client for macOS. It is built with SwiftUI on the [
 
 ## Requirements
 
-- An Apple Silicon Mac running macOS 14 or later.
-- Xcode (or its command line tools) with Swift 5.10 or later.
-- Rust, only to compile the Matrix SDK: `brew install rustup && rustup default stable`.
+- A Mac running macOS 14 or later, with Apple Silicon or an Intel processor: the release app is one app for both.
+- Xcode with Swift 5.10 or later (a release build, for both kinds of Mac at once, needs Xcode itself, not only its command line tools).
+- Rust, only to compile the Matrix SDK, with both Mac targets: `brew install rustup && rustup default stable && rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
 
 ## Building
 
-Element publishes the Matrix SDK prebuilt for iOS only, so the first step compiles it for macOS. This takes 10–20 minutes and is needed once, and again whenever the SDK commit pinned in `Scripts/build-sdk.sh` or a patch in `Scripts/sdk-patches` changes. Its output lands in `Vendor/MatrixRustSDK` and is not kept in git.
+Element publishes the Matrix SDK prebuilt for iOS only, so the first step compiles it for macOS, for Apple Silicon and Intel in one library. This takes 20–40 minutes and is needed once, and again whenever the SDK commit pinned in `Scripts/build-sdk.sh` or a patch in `Scripts/sdk-patches` changes. Its output lands in `Vendor/MatrixRustSDK` and is not kept in git.
 
 `Scripts/sdk-patches` holds fixes to the SDK's dependencies, applied as the SDK is built. `ruma-html-deep-nesting.patch` frees a message's parsed HTML one node at a time: freed recursively, as ruma does, HTML nested a few thousand levels deep (which fits in one message) overflows the stack and crashes the app, at every launch while that message is in a room. When the SDK commit is bumped, check whether ruma has fixed this itself, and drop the patch if so.
 

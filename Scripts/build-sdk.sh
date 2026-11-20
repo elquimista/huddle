@@ -1,7 +1,8 @@
 #!/bin/bash
-# Compiles the Matrix Rust SDK for macOS (Apple Silicon) and vendors the result
-# into Vendor/MatrixRustSDK. Element only publishes prebuilt binaries for iOS.
-# Requires Rust (brew install rustup && rustup default stable). Takes 10-20 min.
+# Compiles the Matrix Rust SDK for macOS, Apple Silicon and Intel in one library, and vendors
+# the result into Vendor/MatrixRustSDK. Element only publishes prebuilt binaries for iOS.
+# Requires Rust with both Mac targets (brew install rustup && rustup default stable &&
+# rustup target add aarch64-apple-darwin x86_64-apple-darwin). Takes 20-40 min.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -45,7 +46,7 @@ done
 } > .build/.cargo/config.toml
 
 (cd "$SRC" && cargo xtask swift build-framework --release \
-    --target aarch64-apple-darwin --macos-deployment-target 14.0)
+    --target aarch64-apple-darwin --target x86_64-apple-darwin --macos-deployment-target 14.0)
 
 GENERATED="$SRC/bindings/apple/generated"
 rm -rf "$OUT/MatrixSDKFFI.xcframework" "$OUT/Sources/MatrixRustSDK"

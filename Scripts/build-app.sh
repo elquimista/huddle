@@ -5,6 +5,7 @@
 #   HUDDLE_VERSION=1.2.0 Scripts/build-app.sh   # stamps that version (the release workflow passes the
 #                                               # tag; without it, the latest v-tag's, else 0.1.0)
 #   HUDDLE_BUILD=99 Scripts/build-app.sh       # stamps that build number (to make a test update)
+#   HUDDLE_ARCHS="arm64 x86_64" Scripts/build-app.sh debug   # which Macs it runs on (see below)
 # Icons come from Resources/*.icns; regenerate them with Scripts/make-icons.sh.
 # Updates: Sparkle is bundled; see "Updates" below for the feed and the key updates are signed with.
 # Signing: an "Apple Development" certificate if one is in your keychain (Keychain access then
@@ -20,7 +21,7 @@ else
 fi
 
 if [ ! -d Vendor/MatrixRustSDK/MatrixSDKFFI.xcframework ]; then
-  echo "error: the Matrix SDK isn't built yet. Run Scripts/build-sdk.sh first (needs Rust, 10-20 min)." >&2
+  echo "error: the Matrix SDK isn't built yet. Run Scripts/build-sdk.sh first (needs Rust, 20-40 min)." >&2
   exit 1
 fi
 
@@ -52,8 +53,31 @@ else
   UPDATE_KEYS="<key>SUEnableAutomaticChecks</key><false/>"
 fi
 
-swift build -c "$CONFIG" --product Huddle
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/Huddle"
+# A release runs on both kinds of Mac, Apple Silicon and Intel, as one app. The Dev build is for
+# this Mac's own kind only, which builds in half the time; HUDDLE_ARCHS="arm64 x86_64" makes it
+# both, to try the Intel half under Rosetta (arch -x86_64 "build/Huddle Dev.app/Contents/MacOS/Huddle").
+if [ -n "${HUDDLE_ARCHS:-}" ]; then
+  read -ra ARCHS <<< "$HUDDLE_ARCHS"
+elif [ "$CONFIG" = release ]; then
+  ARCHS=(arm64 x86_64)
+else
+  ARCHS=()
+fi
+# Each kind is built on its own and the two joined with lipo. (Asked for both at once, SwiftPM
+# hands the build to Xcode's build system, whose linker crashes on the Matrix SDK's library.)
+if [ ${#ARCHS[@]} -eq 0 ]; then
+  swift build -c "$CONFIG" --product Huddle
+  BIN="$(swift build -c "$CONFIG" --show-bin-path)/Huddle"
+else
+  SLICES=()
+  for arch in "${ARCHS[@]}"; do
+    swift build -c "$CONFIG" --product Huddle --arch "$arch"
+    SLICES+=("$(swift build -c "$CONFIG" --arch "$arch" --show-bin-path)/Huddle")
+  done
+  BIN="$(dirname "${SLICES[0]}")/Huddle-universal/Huddle"
+  mkdir -p "$(dirname "$BIN")"
+  lipo -create "${SLICES[@]}" -output "$BIN"
+fi
 
 APP="build/$NAME.app"
 rm -rf "$APP"
@@ -66,7 +90,7 @@ ditto Vendor/ElementCall/dist "$APP/Contents/Resources/ElementCall"
 cp Vendor/ElementCall/LICENSE.txt "$APP/Contents/Resources/Licenses/Element-Call-LICENSE.txt"
 cp "$BIN" "$APP/Contents/MacOS/Huddle"
 if [ "$CONFIG" = release ]; then strip -x "$APP/Contents/MacOS/Huddle"; fi
-ditto "$(dirname "$BIN")/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
+ditto "$(swift build -c "$CONFIG" ${ARCHS[0]+--arch "${ARCHS[0]}"} --show-bin-path)/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
