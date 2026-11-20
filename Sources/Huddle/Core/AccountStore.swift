@@ -10,9 +10,27 @@ final class AccountStore {
     private(set) var isRestoring = true
     private(set) var restoreErrors: [String] = []
     var selectedID: String? {
-        didSet { UserDefaults.standard.set(selectedID, forKey: "selectedAccount") }
+        didSet {
+            UserDefaults.standard.set(selectedID, forKey: "selectedAccount")
+            RoomHistory.shared.noteChange()
+        }
     }
     var isAddingAccount = false
+    /// Go ▸ Go to Room… (⌘K) is open.
+    var isGoingToRoom = false
+
+    /// Whether the keys that move around (Go menu) wait: while something is over the
+    /// conversation, which has its own keys (a sheet, the picture viewer, Go to Room itself).
+    var navigationPaused: Bool {
+        selected?.sheet != nil || isAddingAccount || isGoingToRoom || ImageViewerState.shared.item != nil
+    }
+
+    /// The next account along (or the one before), round to the first again.
+    func selectAccount(step: Int) {
+        guard accounts.count > 1 else { return }
+        let index = accounts.firstIndex { $0.id == selected?.id } ?? 0
+        selectedID = accounts[((index + step) % accounts.count + accounts.count) % accounts.count].id
+    }
 
     var selected: AccountSession? {
         accounts.first { $0.id == selectedID } ?? accounts.first
@@ -23,6 +41,8 @@ final class AccountStore {
     func restore() async {
         DevHooks.applyAppearance()
         IndexingSchedule.shared.start()
+        RoomHistory.shared.store = self
+        NavigationKeys.shared.start(store: self)
         Notifier.shared.store = self
         // An earlier build wrote images being viewed to a temporary folder. Nothing does now;
         // this clears anything that build left behind.
@@ -116,6 +136,7 @@ final class AccountStore {
         SessionVault.shared.remove(id: account.id)
         accounts.removeAll { $0.id == account.id }
         StorePaths(storeID: account.id).delete()
+        UserDefaults.standard.removeObject(forKey: "drafts.\(account.id)")
         if selectedID == account.id { selectedID = accounts.first?.id }
     }
 }

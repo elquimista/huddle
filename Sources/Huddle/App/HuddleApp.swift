@@ -80,6 +80,70 @@ struct HuddleApp: App {
             // There is no help book: no Huddle Help item that only says so. The Help menu keeps
             // its search of the menus.
             CommandGroup(replacing: .help) {}
+            // Moving around: rooms, spaces, accounts, and the way back. Paused while something is
+            // over the conversation, which has keys of its own.
+            CommandMenu("Go") {
+                let account = store.selected
+                let paused = store.navigationPaused
+                let history = RoomHistory.shared
+                Button("Go to Room…") { store.isGoingToRoom.toggle() }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(store.accounts.isEmpty || (paused && !store.isGoingToRoom))
+                Divider()
+                Button("Back") { history.go(-1) }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!history.canGoBack || paused)
+                Button("Forward") { history.go(1) }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(!history.canGoForward || paused)
+                Divider()
+                // As Element goes from room to room.
+                Button("Next Room") { account?.showRoom(step: 1) }
+                    .keyboardShortcut(.downArrow, modifiers: .option)
+                    .disabled(account == nil || paused)
+                Button("Previous Room") { account?.showRoom(step: -1) }
+                    .keyboardShortcut(.upArrow, modifiers: .option)
+                    .disabled(account == nil || paused)
+                Button("Next Unread Room") { account?.showRoom(step: 1, unreadOnly: true) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                    .disabled(!(account?.hasUnreadRooms ?? false) || paused)
+                Button("Previous Unread Room") { account?.showRoom(step: -1, unreadOnly: true) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                    .disabled(!(account?.hasUnreadRooms ?? false) || paused)
+                if let account {
+                    Divider()
+                    // Home and the account's spaces, as the rail has them: ⌘1 to ⌘9.
+                    Toggle("Home", isOn: Binding(get: { account.selectedSpaceID == nil },
+                                                 set: { _ in account.choose(inRail: .home) }))
+                        .keyboardShortcut("1", modifiers: .command)
+                        .disabled(paused)
+                    ForEach(Array(account.spaces.enumerated()), id: \.element.roomId) { index, space in
+                        Toggle(space.displayName, isOn: Binding(
+                            get: { account.selectedSpaceID == space.roomId },
+                            set: { _ in account.choose(inRail: .space(space.roomId)) }))
+                            .keyboardShortcut(index < 8 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 2)")),
+                                                                           modifiers: .command) : nil)
+                            .disabled(paused)
+                    }
+                }
+                Divider()
+                // Round the accounts; with two, back and forth. ⌥⌘→ and ⌥⌘← too (NavigationKeys).
+                Button("Next Account") { store.selectAccount(step: 1) }
+                    .keyboardShortcut(.tab, modifiers: .control)
+                    .disabled(store.accounts.count < 2 || paused)
+                Button("Previous Account") { store.selectAccount(step: -1) }
+                    .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                    .disabled(store.accounts.count < 2 || paused)
+                // The one showing ticked; ⌃1 to ⌃9 for the first nine, and no shortcut after that
+                // (rather than all of the rest sharing one).
+                ForEach(Array(store.accounts.enumerated()), id: \.element.id) { index, account in
+                    Toggle(account.displayName ?? account.userID, isOn: Binding(
+                        get: { store.selectedID == account.id }, set: { _ in store.selectedID = account.id }))
+                        .keyboardShortcut(index < 9 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 1)")),
+                                                                       modifiers: .control) : nil)
+                        .disabled(paused)
+                }
+            }
             CommandMenu("Room") {
                 let account = store.selected
                 let roomID = account?.selectedRoomID
@@ -91,20 +155,6 @@ struct HuddleApp: App {
                 .keyboardShortcut("i", modifiers: .command)
                 .disabled(roomID == nil || account?.browsingSpaceID != nil)
                 Divider()
-                // As Messages goes from one conversation to the next.
-                Button("Next Room") { account?.showRoom(step: 1) }
-                    .keyboardShortcut(.tab, modifiers: .control)
-                    .disabled(account == nil)
-                Button("Previous Room") { account?.showRoom(step: -1) }
-                    .keyboardShortcut(.tab, modifiers: [.control, .shift])
-                    .disabled(account == nil)
-                Button("Next Unread Room") { account?.showRoom(step: 1, unreadOnly: true) }
-                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-                    .disabled(!(account?.hasUnreadRooms ?? false))
-                Button("Previous Unread Room") { account?.showRoom(step: -1, unreadOnly: true) }
-                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-                    .disabled(!(account?.hasUnreadRooms ?? false))
-                Divider()
                 let unread = roomID.map { account?.isUnread($0) ?? false } ?? false
                 Button(unread ? "Mark as Read" : "Mark as Unread") {
                     if let account, let roomID { account.setRoom(roomID, unread: !unread) }
@@ -113,16 +163,6 @@ struct HuddleApp: App {
                 .disabled(roomID == nil)
                 Button("Mark All as Read") { account?.markAllRead() }
                     .disabled(!(account?.hasUnreadRooms ?? false))
-            }
-            CommandMenu("Accounts") {
-                // The one showing ticked; ⌘1 to ⌘9 for the first nine, and no shortcut after that
-                // (rather than all of the rest sharing one).
-                ForEach(Array(store.accounts.enumerated()), id: \.element.id) { index, account in
-                    Toggle(account.displayName ?? account.userID, isOn: Binding(
-                        get: { store.selectedID == account.id }, set: { _ in store.selectedID = account.id }))
-                        .keyboardShortcut(index < 9 ? KeyboardShortcut(KeyEquivalent(Character("\(index + 1)")),
-                                                                       modifiers: .command) : nil)
-                }
             }
         }
 
@@ -151,6 +191,9 @@ struct RootView: View {
             }
         }
         .background { CallPages() }
+        .overlay {
+            if store.isGoingToRoom { GoToRoomPanel() }
+        }
         // The full-size image viewer covers the whole window, title bar included, which an
         // overlay here can't reach. `ImageViewerPresenter` puts it above everything, where it
         // takes every click. (Don't switch hit-testing off on this content instead: that makes

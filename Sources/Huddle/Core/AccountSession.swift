@@ -106,6 +106,7 @@ final class AccountSession: Identifiable {
     private(set) var startError: String?
     var selectedRoomID: String? {
         didSet {
+            RoomHistory.shared.noteChange()
             // A room opened takes the main area from a space being browsed, and is where to
             // come back to in the space it was opened in.
             if let selectedRoomID {
@@ -122,6 +123,15 @@ final class AccountSession: Identifiable {
     }
     /// Who is around, for the direct chats on screen.
     let presence: PresenceTracker
+    /// Unsent messages, by room (and thread): what was being written there, kept while away.
+    /// The text is kept across launches too; a reply and attachments, for this one.
+    @ObservationIgnored private var drafts: [String: StashedDraft] = [:]
+    @ObservationIgnored private lazy var savedDraftTexts: [String: String] =
+        UserDefaults.standard.dictionary(forKey: "drafts.\(id)") as? [String: String] ?? [:]
+    @ObservationIgnored private var draftSave: DispatchWorkItem?
+    /// A room just chosen in Go to Room: its composer takes the keyboard, though the room came
+    /// by a key (Return) rather than a click.
+    @ObservationIgnored var wantsComposerFocus = false
     @ObservationIgnored private let ownPresence: OwnPresence
     /// For rooms opened this session: a reaction that came after the room's newest message.
     private(set) var reactionPreviews: [String: ReactionPreview] = [:]
@@ -1137,6 +1147,29 @@ final class AccountSession: Identifiable {
         typingUserIDs[roomID] = others.isEmpty ? nil : others
         timelines[roomID]?.setTypingUserIDs(others)
         showTypists(others, in: roomID)
+    }
+
+    /// What was being written in a room (or a thread, keyed "room|root"), if anything.
+    func draft(for key: String) -> StashedDraft? {
+        drafts[key] ?? savedDraftTexts[key].map { StashedDraft(text: $0) }
+    }
+
+    /// Keeps what is being written in a room for coming back to; nothing to keep forgets it.
+    func keepDraft(_ draft: StashedDraft, for key: String) {
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isEmpty = text.isEmpty && draft.reply == nil && draft.images.isEmpty && draft.files.isEmpty
+        drafts[key] = isEmpty ? nil : draft
+        let saved = text.isEmpty ? nil : draft.text
+        guard savedDraftTexts[key] != saved else { return }
+        savedDraftTexts[key] = saved
+        // Written out a moment later, once typing pauses.
+        draftSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            UserDefaults.standard.set(self.savedDraftTexts, forKey: "drafts.\(self.id)")
+        }
+        draftSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
     /// Who is typing in a room, by name, for its row in the room list.

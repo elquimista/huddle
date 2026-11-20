@@ -552,13 +552,21 @@ struct TimelineView: View {
             if isAtBottom, isInFrontOfUser, !timeline.rows.isEmpty { await timeline.markAsRead() }
         }
         .onAppear {
+            restoreDraft()
             // Ready to type in. Not when the room was reached with the arrow keys, though: the
             // keyboard stays in the room list so the arrows keep moving through it (typing
             // still lands here, by way of `typeToCompose`).
-            if NSApp.currentEvent?.type != .keyDown {
+            let chosenToWriteIn = account?.wantsComposerFocus == true && timeline.threadRoot == nil
+            if chosenToWriteIn { account?.wantsComposerFocus = false }
+            if NSApp.currentEvent?.type != .keyDown || chosenToWriteIn {
                 composerFocused = true
                 // Clicking a row in the list leaves the keyboard with the list for a moment.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { composerFocused = true }
+                // A draft put back is carried on with, not typed over: a field taking the keyboard
+                // selects all it holds.
+                if !draft.isEmpty {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { cursorToEnd() }
+                }
             }
             if timeline.threadRoot == nil {
                 typeToCompose.focus = { composerFocused = true }
@@ -608,6 +616,7 @@ struct TimelineView: View {
         }
         .animation(.easeOut(duration: 0.12), value: isDropTarget)
         .onDisappear {
+            keepDraft()
             searchTask?.cancel()
             input.stop()
             pasteInterceptor.stop()
@@ -913,6 +922,7 @@ struct TimelineView: View {
                             return .handled
                         }
                         .onChange(of: draft) {
+                            keepDraft()
                             suggestionIndex = 0
                             if mentionQuery != dismissedQuery { dismissedQuery = nil }
                             if mentionQuery != nil { Task { await timeline.loadMembers() } }
@@ -1215,6 +1225,39 @@ struct TimelineView: View {
         finishEdit()
         guard text != edit.text.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
         Task { await timeline.edit(edit.itemID, kind: edit.kind, to: text, mentions: mentions) }
+    }
+
+    /// Where this composer's unsent message is kept: the room, or the thread in it.
+    private var draftKey: String {
+        timeline.threadRoot.map { "\(timeline.roomID)|\($0)" } ?? timeline.roomID
+    }
+
+    /// What was being written here before going elsewhere, back in the composer.
+    private func restoreDraft() {
+        guard draft.isEmpty, stagedImages.isEmpty, stagedFiles.isEmpty,
+              let saved = account?.draft(for: draftKey) else { return }
+        restoredDraft = saved.text
+        draft = saved.text
+        composedMentions = saved.mentions
+        replyTarget = saved.reply
+        stagedImages = saved.images
+        stagedFiles = saved.files
+    }
+
+    /// The cursor at the end of what's in the composer, with nothing selected.
+    private func cursorToEnd() {
+        guard let editor = (NSApp.keyWindow ?? MainWindow.window)?.firstResponder as? NSTextView,
+              editor.isEditable, editor.string == draft else { return }
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+    }
+
+    /// Keeps what is being written here (while editing, what was set aside for it).
+    private func keepDraft() {
+        guard let account else { return }
+        let current = editTarget != nil ? stashedDraft
+            : StashedDraft(text: draft, mentions: composedMentions, reply: replyTarget,
+                           images: stagedImages, files: stagedFiles)
+        account.keepDraft(current, for: draftKey)
     }
 
     /// Leaves editing and puts back what was being written before.
