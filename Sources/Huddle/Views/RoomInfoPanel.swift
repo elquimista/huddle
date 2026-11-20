@@ -43,8 +43,17 @@ private struct RoomInfoContent: View {
     @State private var showsAllMembers = false
     /// Someone about to be taken out of the room, or have their invitation withdrawn.
     @State private var removing: RoomDetails.Member?
-    /// Someone being given a name of the user's own (ContactNames.swift).
-    @State private var naming: (userID: String, name: String)?
+    /// In a direct chat, giving the person a name of the user's own (ContactNames.swift), in
+    /// the header where their name is.
+    @State private var isNaming = false
+    @State private var draftNickname = ""
+    /// The editor's first field takes the keyboard as it opens, from the message field or
+    /// wherever it was: what's typed next is meant for it.
+    @FocusState private var focusedField: EditorField?
+
+    private enum EditorField {
+        case name, nickname
+    }
     /// A role change that can't be undone, waiting to be confirmed.
     @State private var roleChange: RoleChange?
     @State private var actionFailure: ActionFailure?
@@ -107,7 +116,6 @@ private struct RoomInfoContent: View {
         } message: {
             Text("From now on, only the people in this \(noun.lowercased()) can read its messages. Encryption can’t be turned off again.")
         }
-        .contactNamePrompt(for: $naming, in: account)
         .confirmationDialog("Leave “\(details.name)”?", isPresented: $asksToLeave) {
             Button("Leave", role: .destructive) { run { try await account.leave(roomID: details.roomID) } }
         } message: {
@@ -150,6 +158,8 @@ private struct RoomInfoContent: View {
             picture
             if isEditing {
                 editor
+            } else if isNaming, let person = directPerson {
+                nameEditor(for: person)
             } else {
                 // A direct chat is the person: the user's name for them, where they've given one,
                 // with their own beneath.
@@ -170,14 +180,15 @@ private struct RoomInfoContent: View {
                         .multilineTextAlignment(.center)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                } else if canEditText {
+                } else if canEditText, directPerson == nil {
+                    // Somewhere to put one, then; a direct chat is the person, without one.
                     Text("No topic")
                         .foregroundStyle(.tertiary)
                 }
                 // A direct chat is named after the person: the name to set is the user's own for
                 // them, not one for the chat that both would see.
                 if let person = directPerson {
-                    Button("Set Name…") { naming = (person.userID, person.name) }
+                    Button("Set Name…") { startNaming(person) }
                         .controlSize(.small)
                         .padding(.top, 2)
                 } else if canEditText {
@@ -186,7 +197,7 @@ private struct RoomInfoContent: View {
                         .padding(.top, 2)
                 }
             }
-            if let failure, !isEditing {
+            if let failure, !isEditing, !isNaming {
                 Text(failure)
                     .font(.callout)
                     .foregroundStyle(.red)
@@ -221,6 +232,7 @@ private struct RoomInfoContent: View {
             if details.canChangeName {
                 TextField("Name", text: $draftName, prompt: Text("Name"))
                     .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .name)
                     .onSubmit(save)
             }
             if details.canChangeTopic {
@@ -250,12 +262,82 @@ private struct RoomInfoContent: View {
         }
         // Escape cancels the edit, rather than closing the panel and losing it.
         .preference(key: PanelTakesEscape.self, value: true)
+        .task { await Self.focus { focusedField = details.canChangeName ? .name : nil } }
+    }
+
+    /// Puts the keyboard in a field just shown, once it's in the window: asked for as it
+    /// appears, the focus can stay where it was.
+    @MainActor
+    static func focus(_ set: () -> Void) async {
+        try? await Task.sleep(for: .milliseconds(60))
+        set()
+    }
+
+    /// The person's name of the user's own, edited where it shows, as a room's name is: their
+    /// own name standing in the empty field, as what they'll go by without one.
+    private func nameEditor(for person: RoomDetails.Member) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Name", text: $draftNickname, prompt: Text(person.name))
+                .textFieldStyle(.roundedBorder)
+                .focused($focusedField, equals: .nickname)
+                .onSubmit { saveNickname(for: person) }
+            Text("Only you see this name, on all your Macs. Leave it empty to use “\(person.name)”.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let failure {
+                Text(failure)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                if isSaving { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel") {
+                    isNaming = false
+                    failure = nil
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Save") { saveNickname(for: person) }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isSaving)
+            }
+        }
+        .task { await Self.focus { focusedField = .nickname } }
+        // Escape cancels, rather than closing the panel.
+        .preference(key: PanelTakesEscape.self, value: true)
+    }
+
+    private func startNaming(_ person: RoomDetails.Member) {
+        draftNickname = account.contactName(for: person.userID) ?? ""
+        failure = nil
+        isEditing = false
+        isNaming = true
+    }
+
+    private func saveNickname(for person: RoomDetails.Member) {
+        guard !isSaving else { return }
+        isSaving = true
+        failure = nil
+        let name = draftNickname
+        Task {
+            defer { isSaving = false }
+            do {
+                try await account.setContactName(name, for: person.userID)
+                isNaming = false
+            } catch {
+                failure = error.actionMessage
+            }
+        }
     }
 
     private func startEditing() {
         draftName = details.name
         draftTopic = details.topic ?? ""
         failure = nil
+        isNaming = false
         isEditing = true
     }
 
@@ -357,8 +439,7 @@ private struct RoomInfoContent: View {
                                 ? { account.verify(person: member.userID, name: member.name) } : nil,
                               roles: details.roleChoices(for: member),
                               setRole: { choose($0, for: member) },
-                              remove: details.canRemove(member) ? { removing = member } : nil,
-                              setName: member.userID == account.userID ? nil : { naming = (member.userID, member.name) })
+                              remove: details.canRemove(member) ? { removing = member } : nil)
                 }
                 // Where each of them stands, asking the server about anyone this Mac doesn't keep
                 // track of, so it shows in an unencrypted room too.
@@ -457,10 +538,13 @@ private struct MemberRow: View {
     let setRole: (RoomDetails.RoleChoice) -> Void
     /// Set when this account may take them out of the room, or withdraw their invitation.
     let remove: (() -> Void)?
-    /// Asks for the user's own name for them; nil for the user themself.
-    var setName: (() -> Void)? = nil
     @State private var isHovering = false
     @State private var anchor = MenuAnchor()
+    /// Giving them a name of the user's own, in place of theirs in the row, as Finder renames a
+    /// file: Return keeps it, Escape doesn't, and clicking elsewhere keeps it too.
+    @State private var isRenaming = false
+    @State private var draftName = ""
+    @FocusState private var nameFocused: Bool
 
     private var removeTitle: String { member.isInvited ? "Withdraw Invitation…" : "Remove from \(noun)…" }
 
@@ -471,13 +555,22 @@ private struct MemberRow: View {
                 .opacity(member.isInvited ? 0.6 : 1)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 4) {
-                    Text(member.userID == account.userID ? "\(member.name) (you)" : nickname ?? member.name)
-                        .lineLimit(1)
-                    IdentityBadge(identity: identity)
+                if isRenaming {
+                    nameField
+                } else {
+                    HStack(spacing: 4) {
+                        Text(member.userID == account.userID ? "\(member.name) (you)" : nickname ?? member.name)
+                            .lineLimit(1)
+                        IdentityBadge(identity: identity)
+                    }
                 }
-                // Their own name beside their ID, where the user calls them something else.
-                if nickname != nil {
+                if isRenaming {
+                    Text("Only you see this name")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if nickname != nil {
+                    // Their own name beside their ID, where the user calls them something else.
                     Text(member.name == member.userID ? member.userID : "\(member.name) · \(member.userID)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -491,6 +584,7 @@ private struct MemberRow: View {
             }
             Spacer(minLength: 6)
             // On hover, the button takes the tag's place.
+            if !isRenaming {
             ZStack(alignment: .trailing) {
                 Group {
                     if member.isInvited {
@@ -505,6 +599,7 @@ private struct MemberRow: View {
                         .opacity(showsMenuButton ? 1 : 0)
                 }
             }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 5)
@@ -512,8 +607,8 @@ private struct MemberRow: View {
         .onHoverInFrontWindow { isHovering = $0 }
         .contextMenu {
             Button("Copy User ID", action: copyUserID)
-            if let setName {
-                Button("Set Name…", action: setName)
+            if canName {
+                Button("Set Name…", action: startRenaming)
             }
             if let verify {
                 Button("Verify \(member.name)…", action: verify)
@@ -532,9 +627,12 @@ private struct MemberRow: View {
             }
         }
         .accessibilityElement(children: .combine)
+        // While naming, Escape is the field's, not the panel's to close.
+        .preference(key: PanelTakesEscape.self, value: isRenaming)
+        .task { if DevHooks.renamesMember == member.userID { startRenaming() } }
         .accessibilityActions {
-            if let setName {
-                Button("Set Name", action: setName)
+            if canName {
+                Button("Set Name", action: startRenaming)
             }
             if let verify {
                 Button("Verify \(member.name)", action: verify)
@@ -548,7 +646,44 @@ private struct MemberRow: View {
         }
     }
 
-    private var hasActions: Bool { roles != nil || remove != nil || verify != nil || setName != nil }
+    private var hasActions: Bool { roles != nil || remove != nil || verify != nil || canName }
+
+    /// Anyone but the user can be given a name of their own.
+    private var canName: Bool { member.userID != account.userID }
+
+    /// Where their name was: their own name standing in it while it's empty.
+    private var nameField: some View {
+        TextField("Name", text: $draftName, prompt: Text(member.name))
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .focused($nameFocused)
+            .onSubmit(finishRenaming)
+            .onKeyPress(.escape) {
+                isRenaming = false
+                return .handled
+            }
+            .onChange(of: nameFocused) {
+                if !nameFocused { finishRenaming() }
+            }
+            .task { await RoomInfoContent.focus { nameFocused = true } }
+            .accessibilityLabel("Your name for \(member.name)")
+    }
+
+    private func startRenaming() {
+        draftName = nickname ?? ""
+        isRenaming = true
+    }
+
+    /// Keeps the name typed, or with nothing typed, goes back to theirs.
+    private func finishRenaming() {
+        guard isRenaming else { return }
+        isRenaming = false
+        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name != (nickname ?? "") else { return }
+        let account = account
+        let userID = member.userID
+        FailureAlert.run("Couldn’t Save the Name") { try await account.setContactName(name, for: userID) }
+    }
 
     /// The user's own name for them (ContactNames.swift).
     private var nickname: String? { account.contactName(for: member.userID) }
@@ -573,8 +708,8 @@ private struct MemberRow: View {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(ClosureMenuItem(title: "Copy User ID", handler: copyUserID))
-        if let setName {
-            menu.addItem(ClosureMenuItem(title: "Set Name…", handler: setName))
+        if canName {
+            menu.addItem(ClosureMenuItem(title: "Set Name…", handler: startRenaming))
         }
         if let verify {
             menu.addItem(ClosureMenuItem(title: "Verify \(member.name)…", handler: verify))

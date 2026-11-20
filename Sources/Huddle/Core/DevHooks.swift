@@ -183,6 +183,8 @@ enum DevHooks {
 
     /// The account whose Label… prompt opens with Settings ▸ Accounts, by user name.
     static let labelPrompt: String? = AppEnvironment.isDev ? ProcessInfo.processInfo.environment["HUDDLE_DEV_LABEL_PROMPT"] : nil
+    /// Starts naming this member (a user ID) in place as Room Info opens (HUDDLE_DEV_RENAME_MEMBER).
+    static let renamesMember: String? = AppEnvironment.isDev ? ProcessInfo.processInfo.environment["HUDDLE_DEV_RENAME_MEMBER"] : nil
 
     /// Menus written to the log instead of shown.
     static let logsMenus = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_LOG_MENUS"] != nil
