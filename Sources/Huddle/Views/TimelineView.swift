@@ -224,7 +224,10 @@ struct TimelineView: View {
                                 guard let visible = proxy.bounds(of: .scrollView) else { return nil }
                                 let frame = proxy.frame(in: .local)
                                 return visible.intersects(frame) ? frame.offsetBy(dx: 0, dy: -visible.minY) : nil
-                            } action: { place.rows[row.id] = $0 }
+                            } action: { frame in
+                                place.rows[row.id] = frame
+                                if row.id == place.anchor?.id { readingRowMoved(proxy) }
+                            }
                         if row.id == threadRootRowID {
                             RepliesDivider(count: replyCount)
                         }
@@ -311,6 +314,9 @@ struct TimelineView: View {
                         settleOnNewest(proxy)
                     } else if place.heldRow != nil {
                         restoreReadingPlace(proxy)
+                    } else {
+                        place.contentChanged = Date()
+                        keepReadingPlace(proxy)
                     }
                 }
             }
@@ -363,6 +369,7 @@ struct TimelineView: View {
                         scrollToBottom(proxy)
                     } else {
                         followsNewest = false
+                        viewWillMove(for: 0.4)
                         withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo(row.id, anchor: .bottom) }
                     }
                 }
@@ -557,6 +564,7 @@ struct TimelineView: View {
                 typeToCompose.focus = { composerFocused = true }
                 typeToCompose.start()
             }
+            input.onInput = { viewWillMove(for: 0.15) }
             input.start()
             pasteInterceptor.onImages = { stage($0) }
             pasteInterceptor.onFiles = { attach($0) }
@@ -655,6 +663,7 @@ struct TimelineView: View {
     /// conversation bobs.
     private func jump(_ proxy: ScrollViewProxy, to id: some Hashable, anchor: UnitPoint) {
         jumps.count(rowsDrawn: shownRows.count, follows: followsNewest, atBottom: isAtBottom)
+        viewWillMove(for: 0.4)
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { proxy.scrollTo(id, anchor: anchor) }
@@ -724,11 +733,56 @@ struct TimelineView: View {
                 restoreReadingPlace(proxy)
                 if delay == 0.3 {
                     place.heldRow = nil
+                    viewWillMove(for: 0)
                     // Back in place and the newest message in view after all: follow it again.
                     if isAtBottom, timeline.focusedEvent == nil { followsNewest = true }
                 }
             }
         }
+    }
+
+    /// Reading older messages, the row in the middle of the view stays where it is when rows
+    /// above it change height: a picture arriving without a size, a message decrypting,
+    /// reactions or a thread summary loading. The view only keeps its distance from the top of
+    /// the conversation, so otherwise what's being read slides down, as if the view had
+    /// jumped up. The place is noted once the reader stops scrolling (and after the view's own
+    /// moves), and the row put back whenever it moves for any other reason.
+    private func keepReadingPlace(_ proxy: ScrollViewProxy) {
+        guard !followsNewest, place.heldRow == nil, let anchor = place.anchor,
+              let frame = place.rows[anchor.id] ?? nil, abs(frame.minY - anchor.top) > 0.5 else { return }
+        let span = place.viewport - place.topInset
+        guard span > frame.height else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(anchor.id, anchor: UnitPoint(x: 0, y: anchor.top / (span - frame.height)))
+        }
+    }
+
+    /// The row being read has moved. Just after the content changed height, that's what moved
+    /// it: it goes back. Otherwise the view was scrolled (its scroll bar's track clicked, say,
+    /// which isn't noticed as scrolling), and where the row is now is the place.
+    private func readingRowMoved(_ proxy: ScrollViewProxy) {
+        if Date().timeIntervalSince(place.contentChanged) < 0.15 {
+            keepReadingPlace(proxy)
+        } else if let anchor = place.anchor, let frame = place.rows[anchor.id] ?? nil {
+            place.anchor = (anchor.id, frame.minY)
+        } else {
+            place.anchor = nil
+        }
+    }
+
+    /// The view is about to move (the reader scrolling, or the view itself): the reading place
+    /// isn't held while it does, and is noted again once it has stopped.
+    private func viewWillMove(for seconds: Double) {
+        place.anchor = nil
+        place.anchorWork?.cancel()
+        let work = DispatchWorkItem {
+            guard !followsNewest, place.heldRow == nil else { return }
+            place.anchor = place.middleRow(among: timeline.rows.map(\.id))
+        }
+        place.anchorWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
     /// Scrolls so the held row's top is where it was before the rows around it changed. If the
@@ -1111,6 +1165,7 @@ struct TimelineView: View {
         followsNewest = false
         place.heldRow = nil
         showingRowUntil = Date().addingTimeInterval(0.6)
+        viewWillMove(for: 0.7)
         if animated {
             withAnimation(.snappy(duration: 0.3)) {
                 proxy.scrollTo(rowID, anchor: .center)
@@ -2394,7 +2449,11 @@ private final class ScrollInputTracker {
     private func counts(_ kind: String) {
         lastInput = Date()
         lastKind = kind
+        onInput?()
     }
+
+    /// Told of each bit of the reader's scrolling.
+    var onInput: (() -> Void)?
 
     private func isInside(_ event: NSEvent) -> Bool {
         guard let area, let window = area.window else { return false }
@@ -2784,6 +2843,12 @@ final class ReadingPlace {
     }
     /// The row being read and where its top was, from just before the messages re-wrapped.
     var heldRow: (id: String, top: CGFloat)?
+    /// The row being read and where its top is, while reading older messages and not scrolling;
+    /// see `keepReadingPlace`.
+    var anchor: (id: String, top: CGFloat)?
+    var anchorWork: DispatchWorkItem?
+    /// When the content last changed height while reading older messages.
+    var contentChanged = Date.distantPast
     /// When `heldRow` was taken: the reader's own scrolling after it wins over it.
     var heldSince = Date.distantPast
 
