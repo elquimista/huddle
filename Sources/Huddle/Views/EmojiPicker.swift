@@ -2,6 +2,9 @@ import SwiftUI
 
 /// A searchable grid of emoji, shown in a popover to pick a reaction.
 struct EmojiPicker: View {
+    /// Whether what's picked counts as used, for Recently Used: a reaction does; an emoji chosen
+    /// as a setting doesn't.
+    var recordsUse = true
     let onPick: (String) -> Void
 
     @State private var query = ""
@@ -31,10 +34,12 @@ struct EmojiPicker: View {
                         cells(matches)
                     } else {
                         if !recents.isEmpty {
-                            Section { cells(recents.map { EmojiCatalog.Entry(emoji: $0, name: "") }) } header: { header("Recently Used") }
+                            Section {
+                                cells(recents.map { EmojiCatalog.Entry(emoji: $0, name: "") }, in: "Recently Used")
+                            } header: { header("Recently Used") }
                         }
                         ForEach(EmojiCatalog.sections) { section in
-                            Section { cells(section.entries) } header: { header(section.title) }
+                            Section { cells(section.entries, in: section.title) } header: { header(section.title) }
                         }
                     }
                 }
@@ -57,9 +62,11 @@ struct EmojiPicker: View {
         return EmojiCatalog.all.filter { entry in words.allSatisfy { entry.name.contains($0) } }
     }
 
-    private func cells(_ entries: [EmojiCatalog.Entry]) -> some View {
-        ForEach(entries) { entry in
-            EmojiCell(entry: entry) { pick(entry.emoji) }
+    /// One emoji can be in two sections, Recently Used and its own: the grid draws only one of
+    /// the cells it takes for the same, so each section's are told apart.
+    private func cells(_ entries: [EmojiCatalog.Entry], in section: String = "") -> some View {
+        ForEach(entries.map { (id: section + "/" + $0.emoji, entry: $0) }, id: \.id) { cell in
+            EmojiCell(entry: cell.entry) { pick(cell.entry.emoji) }
         }
     }
 
@@ -73,7 +80,7 @@ struct EmojiPicker: View {
     }
 
     private func pick(_ emoji: String) {
-        EmojiCatalog.noteUse(of: emoji)
+        if recordsUse { EmojiCatalog.noteUse(of: emoji) }
         onPick(emoji)
     }
 }
@@ -160,5 +167,88 @@ enum EmojiCatalog {
         var list = recents.filter { $0 != emoji }
         list.insert(emoji, at: 0)
         UserDefaults.standard.set(Array(list.prefix(16)), forKey: recentsKey)
+    }
+}
+
+/// The reactions one click away: six at the top of the reaction picker, and the first three (or
+/// all six) on a message's bar in the layouts that have one there. Chosen in Settings ▸
+/// Appearance, for every account on this Mac.
+@MainActor @Observable
+final class QuickReactions {
+    static let shared = QuickReactions()
+    static let defaults = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
+    /// How many a message's bar can show: the first three, a small bar, or all six.
+    static let barCounts = [3, 6]
+    static let defaultBarCount = 3
+    private static let key = "quickReactions"
+    private static let barKey = "quickReactionsOnBar"
+
+    private(set) var emoji: [String]
+    /// How many of them, from the first, a message's bar shows.
+    private(set) var onBarCount: Int
+
+    private init() {
+        let saved = UserDefaults.standard.stringArray(forKey: Self.key) ?? []
+        // Six different ones, or the standard six.
+        let usable = saved.count == Self.defaults.count && Set(saved).count == saved.count
+            && saved.allSatisfy { !$0.isEmpty }
+        emoji = usable ? saved : Self.defaults
+        let count = UserDefaults.standard.integer(forKey: Self.barKey)
+        onBarCount = Self.barCounts.contains(count) ? count : Self.defaultBarCount
+    }
+
+    var onBar: [String] { Array(emoji.prefix(onBarCount)) }
+
+    var areDefaults: Bool { emoji == Self.defaults && onBarCount == Self.defaultBarCount }
+
+    func setOnBarCount(_ count: Int) {
+        guard Self.barCounts.contains(count), count != onBarCount else { return }
+        onBarCount = count
+        if count == Self.defaultBarCount {
+            UserDefaults.standard.removeObject(forKey: Self.barKey)
+        } else {
+            UserDefaults.standard.set(count, forKey: Self.barKey)
+        }
+    }
+
+    /// Puts an emoji in a place. One that's already in another place swaps with the one it
+    /// replaces, so each is there once and choosing one already there moves it.
+    func set(_ new: String, at index: Int) {
+        guard emoji.indices.contains(index), emoji[index] != new else { return }
+        var list = emoji
+        if let other = list.firstIndex(of: new) { list[other] = list[index] }
+        list[index] = new
+        save(list)
+    }
+
+    func restoreDefaults() {
+        save(Self.defaults)
+        setOnBarCount(Self.defaultBarCount)
+    }
+
+    private func save(_ list: [String]) {
+        emoji = list
+        // The standard six aren't saved, so a change to them reaches everyone who kept them.
+        if list == Self.defaults {
+            UserDefaults.standard.removeObject(forKey: Self.key)
+        } else {
+            UserDefaults.standard.set(list, forKey: Self.key)
+        }
+    }
+}
+
+/// "Customize Quick Reactions…", for a quick reaction's menu: Settings, at Appearance, where
+/// they're chosen.
+struct CustomizeQuickReactionsButton: View {
+    /// Done before Settings opens: putting away the popover the menu was in, say.
+    var before: () -> Void = {}
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Button("Customize Quick Reactions…") {
+            UserDefaults.standard.set(SettingsView.Tab.appearance.rawValue, forKey: SettingsView.tabKey)
+            before()
+            openSettings()
+        }
     }
 }

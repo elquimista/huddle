@@ -154,21 +154,21 @@ struct RoundActionButton<Label: View>: View {
     }
 }
 
-/// The emoji picker with the commonest reactions along its top, one click away: the bubble
-/// layout's react button opens it, having no quick reactions of its own beside the bubble.
+/// The emoji picker with the quick reactions along its top, one click away, whatever the
+/// layout: in bubbles, which have none of their own beside the message, these are the only ones.
 struct QuickReactionPicker: View {
     let onPick: (String) -> Void
-
-    static let quick = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 2) {
-                ForEach(Self.quick, id: \.self) { emoji in
+                ForEach(QuickReactions.shared.emoji, id: \.self) { emoji in
                     QuickReactionButton(emoji: emoji) {
                         EmojiCatalog.noteUse(of: emoji)
                         onPick(emoji)
                     }
+                    .contextMenu { CustomizeQuickReactionsButton(before: { dismiss() }) }
                 }
             }
             .padding(.horizontal, 8)

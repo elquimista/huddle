@@ -1561,8 +1561,6 @@ private struct MessageView: View {
     /// The bubble layout: others' messages carry their avatar and name, in rooms of more than two.
     private var bubbleShowsSender: Bool { !message.isOwn && !timeline.isOneToOne }
 
-    private static let quickReactions = ["👍", "❤️", "😂"]
-
     /// The action bar stays up while an emoji picker of this message's is open, even with the
     /// pointer elsewhere.
     private var showsActions: Bool {
@@ -2046,14 +2044,29 @@ private struct MessageView: View {
             .help(message.date.formatted(date: .abbreviated, time: .shortened))
     }
 
+    /// The narrowest timeline whose bar has room for six quick reactions: the bar sits left of the
+    /// receipts, and six (about 300 points with the rest of the bar) in less would cover the
+    /// start of the message, its sender's name and time.
+    private static let sixOnBarWidth: CGFloat = 540
+
+    /// The quick reactions on the bar: as many as Settings says, but three where six won't fit
+    /// (a thread beside the conversation, say).
+    private var barReactions: [String] {
+        let reactions = QuickReactions.shared.onBar
+        guard reactions.count > 3, timelineWidth > 0, timelineWidth < Self.sixOnBarWidth else { return reactions }
+        return Array(reactions.prefix(3))
+    }
+
     private var actionBar: some View {
         HStack(spacing: 1) {
-            ForEach(Self.quickReactions, id: \.self) { emoji in
+            ForEach(barReactions, id: \.self) { emoji in
                 ActionButton(help: "React with \(emoji)") {
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 } label: {
                     Text(emoji).font(.system(size: 15))
                 }
+                // In place of the message's own menu, as a toolbar's buttons offer to customize it.
+                .contextMenu { CustomizeQuickReactionsButton() }
             }
             ActionButton(help: "Add Reaction") {
                 showsPicker = true
@@ -2061,7 +2074,8 @@ private struct MessageView: View {
                 AddReactionIcon()
             }
             .popover(isPresented: $showsPicker, arrowEdge: .bottom) {
-                EmojiPicker { emoji in
+                // All six on top, any not on the bar among them.
+                QuickReactionPicker { emoji in
                     showsPicker = false
                     Task { await timeline.toggleReaction(emoji, on: message.itemID) }
                 }

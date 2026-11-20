@@ -130,7 +130,10 @@ struct SettingsView: View {
         case notifications, appearance, privacy, accounts, updates
     }
 
-    @AppStorage("settingsTab") private var tab = Tab.notifications
+    /// The tab showing, kept across launches; set it to open Settings at a tab.
+    static let tabKey = "settingsTab"
+
+    @AppStorage(Self.tabKey) private var tab = Tab.notifications
 
     var body: some View {
         TabView(selection: $tab) {
@@ -185,6 +188,9 @@ private struct SectionNote: View {
 private struct SettingRow<Control: View>: View {
     let title: String
     let detail: String
+    /// Lines the detail always takes, for one that changes, so the row (and the window) keeps
+    /// its height as it does.
+    var detailLines: Int? = nil
     @ViewBuilder let control: Control
 
     var body: some View {
@@ -194,6 +200,7 @@ private struct SettingRow<Control: View>: View {
                 Text(detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .lineLimit(detailLines ?? .max, reservesSpace: detailLines != nil)
             }
             Spacer(minLength: 8)
             control
@@ -266,7 +273,105 @@ private struct AppearanceSettingsTab: View {
             } header: {
                 Text("Preview")
             }
+            QuickReactionsSection(layout: layout)
         }
+    }
+}
+
+/// The six quick reactions, each a button that opens the emoji picker to put another in its
+/// place, and how many of them a message's bar shows. Where that's three, a line sets them apart.
+private struct QuickReactionsSection: View {
+    let layout: MessageLayout
+    @State private var editing: Int?
+
+    private var reactions: QuickReactions { .shared }
+
+    var body: some View {
+        Section {
+            SettingRow(title: "Quick reactions", detail: "At the top of the reaction picker. Click one to choose another.",
+                       detailLines: 2) {
+                HStack(spacing: 3) {
+                    ForEach(Array(reactions.emoji.enumerated()), id: \.offset) { index, emoji in
+                        if index == reactions.onBarCount {
+                            Divider().frame(height: 18).padding(.horizontal, 3)
+                        }
+                        slot(emoji, at: index)
+                    }
+                }
+            }
+            SettingRow(title: "On a message’s bar", detail: barDetail, detailLines: 2) {
+                Picker("On a message’s bar", selection: Binding(
+                    get: { reactions.onBarCount },
+                    set: { count in withAnimation(.snappy(duration: 0.2)) { reactions.setOnBarCount(count) } }
+                )) {
+                    Text("Three").tag(3)
+                    Text("Six").tag(6)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+        } header: {
+            Text("Reactions")
+        } footer: {
+            HStack {
+                Spacer()
+                Button("Restore Defaults") {
+                    withAnimation(.snappy(duration: 0.2)) { reactions.restoreDefaults() }
+                }
+                .disabled(reactions.areDefaults)
+            }
+        }
+    }
+
+    /// Bubbles have no bar of their own; a thread's messages, always in the modern layout, do.
+    private var barDetail: String {
+        layout == .bubbles
+            ? "In threads, three where six won’t fit; bubbles keep them in the picker."
+            : "As the pointer rests on a message; three where six won’t fit."
+    }
+
+    private func slot(_ emoji: String, at index: Int) -> some View {
+        QuickReactionSlot(emoji: emoji, index: index, isEditing: editing == index) { editing = index }
+            .popover(isPresented: Binding(get: { editing == index }, set: { if !$0 { editing = nil } }),
+                     arrowEdge: .bottom) {
+                EmojiPicker(recordsUse: false) { picked in
+                    editing = nil
+                    withAnimation(.snappy(duration: 0.2)) { reactions.set(picked, at: index) }
+                }
+            }
+    }
+}
+
+/// One quick reaction in Settings: a small well that lights up under the pointer, and outlined
+/// in the accent colour while its picker is open.
+private struct QuickReactionSlot: View {
+    let emoji: String
+    let index: Int
+    let isEditing: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(emoji)
+                .font(.system(size: 17))
+                .frame(width: 30, height: 28)
+                .background(Color.primary.opacity(isHovering || isEditing ? 0.1 : 0.05),
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(isEditing ? AnyShapeStyle(.tint) : AnyShapeStyle(.separator),
+                                      lineWidth: isEditing ? 1.5 : 0.5)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("Choose another emoji")
+        .accessibilityLabel("Quick reaction \(index + 1)")
+        .accessibilityValue(emoji)
+        .accessibilityHint("Chooses another emoji")
     }
 }
 
