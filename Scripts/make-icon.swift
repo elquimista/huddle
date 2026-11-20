@@ -38,7 +38,7 @@ func draw(pixels: Int) -> NSBitmapImageRep {
                        : NSColor(srgbRed: 0.08, green: 0.70, blue: 0.24, alpha: 1)
     NSGradient(starting: top, ending: bottom)!.draw(in: shape, angle: -90)
 
-    // Two round speech bubbles with curved tails: a faded one behind, a solid one in front.
+    // Two round white speech bubbles with curved tails, one behind the other.
     func bubble(_ rect: NSRect, tailLeft: Bool) -> NSBezierPath {
         // The tail is defined for a 600x500 oval and scaled to `rect`.
         let path = NSBezierPath(ovalIn: rect)
@@ -60,15 +60,13 @@ func draw(pixels: Int) -> NSBitmapImageRep {
     let gradient = NSGradient(starting: top, ending: bottom)!
     let context = NSGraphicsContext.current!.cgContext
 
-    // Back bubble: oval and tail filled as one shape, then faded together.
-    context.saveGState()
-    context.setAlpha(0.6)
-    context.beginTransparencyLayer(auxiliaryInfo: nil)
+    // Back bubble: as solid as the front one. Faded, white over the green came out a greyish
+    // mint that made the whole icon look disabled, in the Dock above all.
+    // The oval on its own too: mirrored, the tail winds against it, and their overlap would
+    // otherwise be left out.
     NSColor.white.setFill()
     NSBezierPath(ovalIn: backRect).fill()
     bubble(backRect, tailLeft: false).fill()
-    context.endTransparencyLayer()
-    context.restoreGState()
 
     // A plate-coloured halo around the front bubble keeps the two apart.
     context.saveGState()
