@@ -134,7 +134,10 @@ struct SettingsView: View {
     /// The tab showing, kept across launches; set it to open Settings at a tab.
     static let tabKey = "settingsTab"
 
-    @AppStorage(Self.tabKey) private var tab = Tab.notifications
+    @AppStorage(Self.tabKey) private var storedTab = Tab.notifications
+    /// The tab view's selection, kept in step with the stored tab both ways. On macOS 13 a tab
+    /// view bound straight to the stored tab changes tabs once and then no more.
+    @State private var tab = UserDefaults.standard.string(forKey: SettingsView.tabKey).flatMap(Tab.init) ?? .notifications
     /// The height the tabs are given, which the window follows: the tab's own, reached in
     /// steps when it changes (WindowHeightAnimation).
     @State private var shownHeight: CGFloat?
@@ -164,6 +167,10 @@ struct SettingsView: View {
             resize.run(from: from, to: height) { shownHeight = $0 }
         }
         .frame(height: shownHeight, alignment: .top)
+        // Set while the window was closed (by the emoji picker's link to Appearance, say).
+        .onAppear { if tab != storedTab { tab = storedTab } }
+        .onChanged(of: tab) { if storedTab != tab { storedTab = tab } }
+        .onChanged(of: storedTab) { if tab != storedTab { tab = storedTab } }
     } }
 }
 

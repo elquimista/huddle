@@ -719,6 +719,12 @@ struct TimelineView: View {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { proxy.scrollTo(id, anchor: anchor) }
+        // macOS 13 lines the end up with the scroll view's own foot, under the composer, so a
+        // new line there stays hidden: AppKit's view, which knows the composer's inset, goes
+        // the rest of the way once SwiftUI's scroll has landed.
+        if #unavailable(macOS 14), AnyHashable(id) == AnyHashable(Self.bottomID) {
+            DispatchQueue.main.async { [place] in place.scrollViewToEnd() }
+        }
     }
 
     /// The width messages are laid out at: the timeline's whole width, less a scroll bar that
@@ -1180,6 +1186,11 @@ struct TimelineView: View {
         stagedImages = []
         stagedFiles = []
         imageNotice = nil
+        // The emptied composer kept, and no longer typing, said here: on macOS 13 the change
+        // can go by without `onChanged(of: draft)` hearing of it, and the sent text would stay
+        // on as the room's draft, back in the composer next time.
+        keepDraft()
+        noteTyping()
         scrollToBottom(proxy)
         if attachments.isEmpty {
             Task { await timeline.send(text, mentions: mentions, replyTo: replyTo) }

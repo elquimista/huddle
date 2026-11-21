@@ -383,7 +383,7 @@ private struct RoomListRow: View {
             .onHoverInFrontWindow { isHovering = $0 }
             .onAppear { if DevHooks.hoveredNames.contains(room.name) { isHovering = true } }
             .tag(room.id)
-            .draggable(room.id) {
+            .listRowDraggable(room.id) {
                 Label(room.name, systemImage: "bubble.left")
                     .padding(6)
             }

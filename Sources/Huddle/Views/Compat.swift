@@ -178,14 +178,16 @@ private final class KeyWatcher {
     }
 
     private static func matches(_ event: NSEvent, _ key: KeyEquivalent) -> Bool {
-        switch key {
-        case .return: return event.keyCode == 36 || event.keyCode == 76
-        case .escape: return event.keyCode == 53
-        case .tab: return event.keyCode == 48
-        case .upArrow: return event.keyCode == 126
-        case .downArrow: return event.keyCode == 125
-        case .leftArrow: return event.keyCode == 123
-        case .rightArrow: return event.keyCode == 124
+        // By their characters: KeyEquivalent itself is Equatable only from macOS 14, and comparing
+        // two of them here, on 13, crashes.
+        switch key.character {
+        case KeyEquivalent.return.character: return event.keyCode == 36 || event.keyCode == 76
+        case KeyEquivalent.escape.character: return event.keyCode == 53
+        case KeyEquivalent.tab.character: return event.keyCode == 48
+        case KeyEquivalent.upArrow.character: return event.keyCode == 126
+        case KeyEquivalent.downArrow.character: return event.keyCode == 125
+        case KeyEquivalent.leftArrow.character: return event.keyCode == 123
+        case KeyEquivalent.rightArrow.character: return event.keyCode == 124
         default: return event.charactersIgnoringModifiers == String(key.character)
         }
     }
@@ -263,6 +265,13 @@ extension View {
     /// No focus ring, on macOS 14.
     @ViewBuilder func noFocusEffect() -> some View {
         if #available(macOS 14, *) { focusEffectDisabled() } else { self }
+    }
+
+    /// A list row that can be dragged, on macOS 14. On macOS 13 a draggable row (`draggable` or
+    /// `onDrag` alike) takes the click meant to select it, so there it can't be dragged: its menu
+    /// moves it instead.
+    @ViewBuilder func listRowDraggable<T: Transferable, Preview: View>(_ payload: T, @ViewBuilder preview: () -> Preview) -> some View {
+        if #available(macOS 14, *) { draggable(payload, preview: preview) } else { self }
     }
 }
 
