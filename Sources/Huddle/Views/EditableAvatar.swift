@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 /// A large picture that can be changed: a click asks for a new one, or, when there is one,
 /// offers to see it large or remove it too. "Edit" shows on hover, and a spinner while a change
 /// is saved. One that can't be changed opens large when clicked, if there's a picture.
-/// Room Info and Edit Profile use it.
+/// Room Info, Edit Profile and a space's page use it.
 struct EditableAvatar<Picture: View>: View {
     let canChange: Bool
     let isBusy: Bool
@@ -16,8 +16,14 @@ struct EditableAvatar<Picture: View>: View {
     let remove: () -> Void
     /// Shows the picture large; nil when there's none to show (only an initial).
     var showLarge: (() -> Void)? = nil
+    /// A space's picture is a rounded square, with corners this round; others are circles.
+    var cornerRadius: CGFloat? = nil
     @ViewBuilder let picture: Picture
     @State private var isHovering = false
+
+    private var shape: AnyShape {
+        cornerRadius.map { AnyShape(RoundedRectangle(cornerRadius: $0, style: .continuous)) } ?? AnyShape(Circle())
+    }
     @State private var anchor = MenuAnchor()
 
     private var isEnabled: Bool { canChange && !isBusy }
@@ -29,7 +35,7 @@ struct EditableAvatar<Picture: View>: View {
             button
         } else if let showLarge {
             Button(action: showLarge) {
-                picture.contentShape(Circle())
+                picture.contentShape(shape)
             }
             .buttonStyle(.plain)
             .help("View picture")
@@ -44,16 +50,16 @@ struct EditableAvatar<Picture: View>: View {
             picture
                 .overlay {
                     if isBusy {
-                        Circle().fill(.black.opacity(0.35))
+                        shape.fill(.black.opacity(0.35))
                         ProgressView().controlSize(.small).tint(.white)
                     } else if isEnabled, isHovering {
-                        Circle().fill(.black.opacity(0.4))
+                        shape.fill(.black.opacity(0.4))
                         Text("Edit")
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.white)
                     }
                 }
-                .contentShape(Circle())
+                .contentShape(shape)
         }
         .buttonStyle(.plain)
         // Not `.disabled` while a change is saved, which would dim the picture under the spinner.

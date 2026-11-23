@@ -138,6 +138,7 @@ private struct RailSpaceButton: View {
                 }
             },
             browse: { if let spaceID { account.browse(space: spaceID) } },
+            edit: { if let spaceID { account.editDetails(ofSpace: spaceID) } },
             newRoom: { if let spaceID { account.sheet = .newRoom(inSpace: spaceID) } },
             addRooms: { if let spaceID { account.sheet = .addRooms(toSpace: spaceID) } },
             newSection: { if let spaceID { account.askForNewSection(inSpace: spaceID) } },
@@ -169,6 +170,7 @@ private struct RailIcon: View, Equatable {
     struct Actions {
         let select: () -> Void
         let browse: () -> Void
+        let edit: () -> Void
         let newRoom: () -> Void
         let addRooms: () -> Void
         let newSection: () -> Void
@@ -309,6 +311,7 @@ private struct RailIcon: View, Equatable {
         case .space:
             Button("Browse Rooms", action: actions.browse)
             if canEdit {
+                Button("Edit Space…", action: actions.edit)
                 Button("New Room…", action: actions.newRoom)
                 Button("Add Existing Rooms…", action: actions.addRooms)
             }
@@ -367,6 +370,7 @@ struct SpaceListHeader: View {
             Menu {
                 Button("Browse Rooms") { account.browse(space: spaceID) }
                 if account.editableSpaceIDs.contains(spaceID) {
+                    Button("Edit Space…") { account.editDetails(ofSpace: spaceID) }
                     Button("New Room…") { account.sheet = .newRoom(inSpace: spaceID) }
                     Button("Add Existing Rooms…") { account.sheet = .addRooms(toSpace: spaceID) }
                 }
@@ -546,6 +550,15 @@ private struct SpaceLevelView: View {
     @State private var joining: Set<String> = []
     @State private var failure: String?
     @State private var inviter: Inviter?
+    /// The space's own details, once joined: its name, topic and picture as they change, and
+    /// which of them this account may change.
+    @State private var details: RoomDetails?
+    @State private var isEditing = false
+    @State private var draftName = ""
+    @State private var draftTopic = ""
+    @State private var isSaving = false
+    @State private var isChangingPicture = false
+    @FocusState private var isNameFocused: Bool
 
     private struct Inviter {
         let userID: String
@@ -572,6 +585,19 @@ private struct SpaceLevelView: View {
         }
         .onAppear {
             if directory == nil { directory = SpaceDirectory(account: account, spaceID: spaceID) }
+            followDetails()
+        }
+        // Joined just now, from the invitation on this page.
+        .onChange(of: invite == nil) { followDetails() }
+        // Edit Space… in the space's menu: its name and topic, ready to change, once it's known
+        // which of them may be.
+        .task(id: account.asksToEditSpace) {
+            guard account.asksToEditSpace == spaceID else { return }
+            account.asksToEditSpace = nil
+            for _ in 0..<40 where !canEditText {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            if canEditText { startEditing() }
         }
         .task(id: invite?.id) {
             guard invite != nil, let member = try? await account.room(id: spaceID)?.inviter() else { return }
@@ -581,6 +607,8 @@ private struct SpaceLevelView: View {
         .onDisappear {
             directory?.stop()
             directory = nil
+            details?.stop()
+            details = nil
         }
         // Rooms joined, added or taken out, here or on another device.
         .onChange(of: account.roomIDs(inSpace: spaceID)) {
@@ -590,45 +618,167 @@ private struct SpaceLevelView: View {
 
     // MARK: Header
 
+    private var canEditText: Bool { details.map { $0.canChangeName || $0.canChangeTopic } ?? false }
+
+    /// The space's details followed once it's joined (not while only invited, or for one inside
+    /// it not joined, which can't be changed from here).
+    private func followDetails() {
+        guard details == nil, invite == nil, let room = account.room(id: spaceID), room.membership() == .joined else { return }
+        details = RoomDetails(room: room, ownUserID: account.userID, loadsMembers: false)
+    }
+
     private var header: some View {
         let space = directory?.space
-        let name = space?.displayName ?? account.spaceName(spaceID)
+        // As the space has them now, changed here or elsewhere; the server's description of the
+        // space until they're known.
+        let name = details.flatMap { $0.name.isEmpty ? nil : $0.name } ?? space?.displayName ?? account.spaceName(spaceID)
+        let topic = details.map(\.topic) ?? space?.topic
         return HStack(alignment: .top, spacing: 16) {
-            AvatarView(media: account.media, url: space?.avatarUrl ?? invite?.avatarURL, name: name,
-                       seed: spaceID, size: 64, isSquare: true)
+            picture(name: name, fallbackURL: space?.avatarUrl ?? invite?.avatarURL)
             VStack(alignment: .leading, spacing: 6) {
-                Text(name)
-                    .font(.title2.weight(.semibold))
-                    .textSelection(.enabled)
-                if let topic = space?.topic, !topic.isEmpty {
-                    Text(topic)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let inviter, invite != nil {
-                    HStack(spacing: 6) {
-                        AvatarView(media: account.media, url: inviter.avatarURL, name: inviter.name,
-                                   seed: inviter.userID, size: 18)
-                        Text("\(Text(inviter.name).fontWeight(.semibold)) invited you")
-                    }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .help(inviter.userID)
-                } else if let space, let summary = summary(of: space) {
-                    Text(summary)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                actions
-                    .padding(.top, 6)
-                if let failure {
-                    Text(failure)
-                        .font(.callout)
-                        .foregroundStyle(.red)
+                if isEditing, let details {
+                    editor(details)
+                } else {
+                    text(name: name, topic: topic)
                 }
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    /// The space's picture: clicked to change it, where that's allowed.
+    @ViewBuilder private func picture(name: String, fallbackURL: String?) -> some View {
+        if let details {
+            let url = details.avatarURL
+            EditableAvatar(
+                canChange: details.canChangeAvatar, isBusy: isChangingPicture, hasPicture: url != nil,
+                chooseMessage: "Choose a picture for “\(name)”",
+                choose: { file in changePicture { try await details.setAvatar(from: file) } },
+                remove: { changePicture { try await details.removeAvatar() } },
+                showLarge: url.map { url in { viewPicture(url, name: name) } },
+                cornerRadius: 64 * 0.27,
+                picture: {
+                    AvatarView(media: account.media, url: url, name: name, seed: spaceID, size: 64, isSquare: true)
+                })
+        } else {
+            AvatarView(media: account.media, url: fallbackURL, name: name, seed: spaceID, size: 64, isSquare: true)
+        }
+    }
+
+    private func changePicture(_ work: @escaping () async throws -> Void) {
+        isChangingPicture = true
+        failure = nil
+        Task {
+            do { try await work() } catch { failure = error.actionMessage }
+            isChangingPicture = false
+        }
+    }
+
+    /// The picture at full size, in the viewer messages' pictures open in.
+    private func viewPicture(_ url: String, name: String) {
+        guard let image = ImageAttachment(picture: url, name: name) else { return }
+        ImageViewerState.shared.open(image, media: account.media, placeholder: account.media.cached(url: url, size: 64))
+    }
+
+    /// The name and topic, changed where they show, as a room's are in Room Info.
+    private func editor(_ details: RoomDetails) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if details.canChangeName {
+                TextField("Name", text: $draftName, prompt: Text("Name"))
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isNameFocused)
+                    .onSubmit(save)
+            }
+            if details.canChangeTopic {
+                TextField("Topic", text: $draftTopic, prompt: Text("What the space is for"), axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...6)
+            }
+            if let failure {
+                Text(failure)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                if isSaving { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel") {
+                    isEditing = false
+                    failure = nil
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Save", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isSaving || details.canChangeName && draftName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .frame(maxWidth: 420)
+        .task {
+            // Once the field is in the window: asked for as it appears, the keyboard can stay where it was.
+            try? await Task.sleep(for: .milliseconds(60))
+            isNameFocused = details.canChangeName
+        }
+    }
+
+    private func startEditing() {
+        guard let details else { return }
+        draftName = details.name
+        draftTopic = details.topic ?? ""
+        failure = nil
+        isEditing = true
+    }
+
+    private func save() {
+        guard let details, !isSaving else { return }
+        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let topic = draftTopic.trimmingCharacters(in: .whitespacesAndNewlines)
+        isSaving = true
+        failure = nil
+        Task {
+            do {
+                if details.canChangeName, !name.isEmpty, name != details.name { try await details.setName(name) }
+                if details.canChangeTopic, topic != (details.topic ?? "") { try await details.setTopic(topic) }
+                isEditing = false
+            } catch {
+                failure = error.actionMessage
+            }
+            isSaving = false
+        }
+    }
+
+    @ViewBuilder private func text(name: String, topic: String?) -> some View {
+        let space = directory?.space
+        Text(name)
+            .font(.title2.weight(.semibold))
+            .textSelection(.enabled)
+        if let topic, !topic.isEmpty {
+            Text(topic)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if let inviter, invite != nil {
+            HStack(spacing: 6) {
+                AvatarView(media: account.media, url: inviter.avatarURL, name: inviter.name,
+                           seed: inviter.userID, size: 18)
+                Text("\(Text(inviter.name).fontWeight(.semibold)) invited you")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .help(inviter.userID)
+        } else if let space, let summary = summary(of: space) {
+            Text(summary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        actions
+            .padding(.top, 6)
+        if let failure {
+            Text(failure)
+                .font(.callout)
+                .foregroundStyle(.red)
         }
     }
 
@@ -650,6 +800,9 @@ private struct SpaceLevelView: View {
                 .disabled(joining.contains(space.roomId))
         } else {
             HStack(spacing: 8) {
+                if canEditText {
+                    Button("Edit Name and Topic…", action: startEditing)
+                }
                 if account.editableSpaceIDs.contains(spaceID) {
                     Button("New Room…") { account.sheet = .newRoom(inSpace: spaceID) }
                     Button("Add Existing Rooms…") { account.sheet = .addRooms(toSpace: spaceID) }

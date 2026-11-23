@@ -58,7 +58,9 @@ final class RoomDetails {
     /// The power levels given to people, last seen: when they change, so do roles.
     @ObservationIgnored private var userLevels: [String: Int64] = [:]
 
-    init(room: Room, ownUserID: String) {
+    /// - Parameter loadsMembers: false where only the room's own details are wanted (a space's
+    ///   page): a large space's members are many to fetch for nothing.
+    init(room: Room, ownUserID: String, loadsMembers: Bool = true) {
         self.room = room
         self.ownUserID = ownUserID
         roomID = room.id()
@@ -67,7 +69,7 @@ final class RoomDetails {
         })
         Task {
             if let info = try? await room.roomInfo() { update(from: info) }
-            loadMembers()
+            if loadsMembers { loadMembers() }
         }
     }
 

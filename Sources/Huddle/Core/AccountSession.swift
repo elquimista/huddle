@@ -119,6 +119,9 @@ final class AccountSession: Identifiable {
     }
     /// Set by File > New Section…: the room list asks for the new section's name.
     var asksForNewSection = false
+    /// A space whose page is to open ready to change its name and topic (Edit Space… in its
+    /// menu), taken up by the page.
+    var asksToEditSpace: String?
     /// The sections folded away in the list, by ID.
     var collapsedSections: Set<String> = [] {
         didSet { UserDefaults.standard.set(Array(collapsedSections), forKey: "collapsedSections.\(id)") }
@@ -803,6 +806,13 @@ final class AccountSession: Identifiable {
         if let top = topLevelSpace(containing: spaceID) { selectedSpaceID = top }
         selectedRoomID = nil
         browsingSpaceID = spaceID
+    }
+
+    /// Edit Space…: the space's page, open on changing its name and topic (its picture is changed
+    /// there too, by clicking it).
+    func editDetails(ofSpace spaceID: String) {
+        asksToEditSpace = spaceID
+        browse(space: spaceID)
     }
 
     /// Joins a space the account was invited to, and goes on showing it, now as one of the
