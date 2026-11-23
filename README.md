@@ -133,7 +133,7 @@ Both builds write a few notes about scrolling a room's conversation to the syste
 
 ## Releases
 
-Pushing a tag builds the release app on GitHub Actions (`.github/workflows/release.yml`) and publishes it, zipped, as that tag's release: `v1.2.0` becomes version 1.2.0, and a tag with a hyphen (`v1.3.0-beta1`) a pre-release.
+Pushing a tag builds the release app on GitHub Actions (`.github/workflows/release.yml`) and publishes it, zipped, as that tag's release in the public releases repository (see Updates): `v1.2.0` becomes version 1.2.0, and a tag with a hyphen (`v1.3.0-beta1`) a pre-release.
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0
@@ -145,7 +145,7 @@ To sign releases with your Apple Development certificate, add two repository sec
 
 ### Updates
 
-The app finds updates in an appcast, a feed listing each release with its EdDSA signature. Since this repository is private, the workflow also publishes every release, and the appcast, to a public repository, `huddle-releases` under the same owner (or the `UPDATES_REPO` repository variable, as `owner/name`). The app reads `appcast.xml` on that repository's `main` branch; `Scripts/build-app.sh` puts that address and the public key in the release app's Info.plist. Pre-releases go in the appcast's beta channel, offered only to those who turn on beta versions.
+The app finds updates in an appcast, a feed listing each release with its EdDSA signature. Since this repository is private, the workflow publishes every release, and the appcast, to a public repository instead, `huddle-releases` under the same owner (or the `UPDATES_REPO` repository variable, as `owner/name`). The app reads `appcast.xml` on that repository's `main` branch; `Scripts/build-app.sh` puts that address and the public key in the release app's Info.plist. Pre-releases go in the appcast's beta channel, offered only to those who turn on beta versions.
 
 To set it up:
 

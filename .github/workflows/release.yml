@@ -1,4 +1,4 @@
-# Builds the release app for every pushed tag and publishes it as that tag's GitHub release.
+# Builds the release app for every pushed tag and publishes it as a GitHub release for that tag.
 # A tag like v1.2.0 stamps version 1.2.0; a tag with a hyphen (v1.3.0-beta1) makes a pre-release.
 #
 # Matrix SDK: Element only publishes it prebuilt for iOS, so it is compiled here from source
@@ -10,12 +10,13 @@
 # certificate, so it keeps its Team ID and the Keychain doesn't ask again after updating. Without
 # them it is signed ad hoc.
 #
-# Updates: with the SPARKLE_PRIVATE_KEY and RELEASES_TOKEN secrets set, each release is also signed
-# for Sparkle and published, with the appcast the app checks, to a public repository (the
-# UPDATES_REPO variable, else <owner>/huddle-releases), so the app can find and install updates
-# while this repository stays private. Without them the release isn't offered as an update.
+# Updates: with the SPARKLE_PRIVATE_KEY and RELEASES_TOKEN secrets set, each release is signed for
+# Sparkle and published, with the appcast the app checks, to a public repository (the UPDATES_REPO
+# variable, else <owner>/huddle-releases), so the app can find and install updates while this
+# repository stays private. Only there: this repository gets no release of its own. Without the
+# secrets the release is published here instead, and isn't offered as an update.
 #
-# The app is Apple Silicon only.
+# The app is one for both Apple Silicon and Intel Macs.
 name: Release
 
 on:
@@ -89,21 +90,8 @@ jobs:
           HUDDLE_VERSION="$version" HUDDLE_UPDATES_REPO="$UPDATES_REPO" Scripts/build-app.sh
           ditto -c -k --keepParent build/Huddle.app "Huddle-$version.zip"
 
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          prerelease=""
-          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "Huddle-$version.zip" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" "Huddle-$version.zip" --verify-tag \
-              --title "Huddle $version" --generate-notes $prerelease
-          fi
-
       - name: Publish the update
+        id: update
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
@@ -152,6 +140,24 @@ jobs:
           git -C "$updates" add appcast.xml
           git -C "$updates" commit -q -m "Huddle $version"
           git -C "$updates" push -q origin HEAD
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      # Only when the update wasn't published, for want of its secrets: the build is kept as a
+      # release here instead, so it isn't lost.
+      - name: Publish the release here
+        if: steps.update.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "Huddle-$version.zip" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "Huddle-$version.zip" --verify-tag \
+              --title "Huddle $version" --generate-notes $prerelease
+          fi
 
       - name: Remove the signing keychain
         if: always()
