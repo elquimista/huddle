@@ -45,6 +45,9 @@ final class CallCenter {
         let key = "\(account.id)|\(roomID)"
         guard placing.insert(key).inserted else { return }
         Task {
+            // Asked for here, before either kind of call's page wants it (see MicrophoneAccess).
+            // Refused, the call goes on and says so, pointing to where it can be allowed.
+            _ = await MicrophoneAccess.request()
             let legacy = await usesLegacyCall(account: account, roomID: roomID)
             placing.remove(key)
             guard call(for: account, roomID: roomID) == nil else { return }

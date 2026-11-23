@@ -247,6 +247,8 @@ final class LegacyCall: HuddleCall {
         wasAnswered = true
         timeoutTask?.cancel()
         Task {
+            // Asked for before the call's page wants it (see MicrophoneAccess).
+            _ = await MicrophoneAccess.request()
             let servers = await Self.iceServers(for: account)
             do {
                 streamID = try await media.open(iceServers: servers)

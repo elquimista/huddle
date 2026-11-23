@@ -185,15 +185,23 @@ final class VoiceRecorder {
     }
 
     private static func askForMicrophone() async throws {
-        if DevHooks.deniesMicrophone { throw Failure.microphoneDenied }
+        guard await MicrophoneAccess.request() else { throw Failure.microphoneDenied }
+    }
+}
+
+/// The microphone, asked for: the first time, macOS asks the user, and from then on Huddle is
+/// listed in System Settings › Privacy & Security › Microphone, where it can be allowed or not.
+/// Voice messages ask before recording, and calls before their page takes the microphone: on
+/// macOS 13, WebKit doesn't ask for it itself, so a call's page was refused it without a prompt,
+/// and Huddle, never having asked, wasn't listed to be allowed (that list has no Add button).
+enum MicrophoneAccess {
+    /// Whether Huddle may use the microphone, asking first if it hasn't yet.
+    static func request() async -> Bool {
+        if DevHooks.deniesMicrophone { return false }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return
-        case .notDetermined:
-            if await AVCaptureDevice.requestAccess(for: .audio) { return }
-            throw Failure.microphoneDenied
-        default:
-            throw Failure.microphoneDenied
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
+        default: return false
         }
     }
 }
