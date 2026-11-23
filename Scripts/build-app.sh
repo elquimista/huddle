@@ -8,8 +8,11 @@
 #   HUDDLE_ARCHS="arm64 x86_64" Scripts/build-app.sh debug   # which Macs it runs on (see below)
 # Icons come from Resources/*.icns; regenerate them with Scripts/make-icons.sh.
 # Updates: Sparkle is bundled; see "Updates" below for the feed and the key updates are signed with.
-# Signing: an "Apple Development" certificate if one is in your keychain (Keychain access then
-# survives rebuilds), otherwise ad hoc. HUDDLE_SIGN_IDENTITY overrides.
+# Signing: the release app with a "Developer ID Application" certificate if one is in your keychain
+# (the release workflow imports one: the kind other Macs open, once notarized), with a secure
+# timestamp, which notarization requires; otherwise, and the Dev build always, with an "Apple
+# Development" one. Either way Keychain access survives rebuilds; without either, ad hoc, and it
+# doesn't. HUDDLE_SIGN_IDENTITY overrides.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -118,11 +121,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+IDENTITIES="$(security find-identity -v -p codesigning)"
 if [ -n "${HUDDLE_SIGN_IDENTITY:-}" ]; then
   IDENTITY="$HUDDLE_SIGN_IDENTITY"
 else
-  IDENTITY="$(security find-identity -v -p codesigning | awk '/"Apple Development:/ { print $2; exit }')"
+  IDENTITY=""
+  if [ "$CONFIG" = release ]; then
+    IDENTITY="$(awk '/"Developer ID Application:/ { print $2; exit }' <<< "$IDENTITIES")"
+  fi
+  if [ -z "$IDENTITY" ]; then
+    IDENTITY="$(awk '/"Apple Development:/ { print $2; exit }' <<< "$IDENTITIES")"
+  fi
   IDENTITY="${IDENTITY:--}"
+fi
+# Developer ID signatures carry Apple's secure timestamp: notarization takes nothing without it.
+TIMESTAMP=()
+if [ "$IDENTITY" != "-" ] && grep -F "$IDENTITY" <<< "$IDENTITIES" | grep -q '"Developer ID Application:'; then
+  TIMESTAMP=(--timestamp)
 fi
 # With a real certificate, the hardened runtime: no other process can inject code into the app
 # (DYLD_INSERT_LIBRARIES and the like) and with it read the sessions in the Keychain, and only
@@ -143,14 +158,17 @@ fi
 # Sparkle's parts, innermost first, then the framework, then the app that holds it.
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
 for part in XPCServices/Installer.xpc XPCServices/Downloader.xpc Autoupdate Updater.app; do
-  codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} --preserve-metadata=entitlements "$SPARKLE/Versions/B/$part"
+  codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} ${TIMESTAMP[@]+"${TIMESTAMP[@]}"} \
+    --preserve-metadata=entitlements "$SPARKLE/Versions/B/$part"
 done
-codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} "$SPARKLE"
-codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} ${ENTITLEMENTS[@]+"${ENTITLEMENTS[@]}"} "$APP"
+codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} ${TIMESTAMP[@]+"${TIMESTAMP[@]}"} "$SPARKLE"
+codesign --force --sign "$IDENTITY" ${RUNTIME[@]+"${RUNTIME[@]}"} ${TIMESTAMP[@]+"${TIMESTAMP[@]}"} \
+  ${ENTITLEMENTS[@]+"${ENTITLEMENTS[@]}"} "$APP"
 touch "$APP"  # Make Finder and the Dock pick up icon changes.
 TEAM="$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+KIND="$(codesign -dv --verbose=2 "$APP" 2>&1 | sed -E -n 's/^Authority=(Developer ID Application|Apple Development):.*/\1/p' | head -1)"
 if [ "$IDENTITY" = "-" ]; then
   echo "Built $APP $VERSION ($BUILD) ($CONFIG, ad-hoc signed: the Keychain will ask again after each rebuild)"
 else
-  echo "Built $APP $VERSION ($BUILD) ($CONFIG, Team ID $TEAM)"
+  echo "Built $APP $VERSION ($BUILD) ($CONFIG, $KIND, Team ID $TEAM)"
 fi

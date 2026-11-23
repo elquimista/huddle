@@ -143,7 +143,16 @@ git tag v0.2.0 && git push origin v0.2.0
 
 The workflow compiles the Matrix SDK and caches it, so the first run, and the first after the pinned SDK commit changes, takes much longer than the rest.
 
-To sign releases with your Apple Development certificate, add two repository secrets: `MACOS_CERTIFICATE_P12`, the base64 of the certificate and its private key exported from Keychain Access as a .p12 (`base64 -i cert.p12 | pbcopy`), and `MACOS_CERTIFICATE_PASSWORD`, the export password. Without them releases are signed ad hoc.
+### Signing and notarization
+
+Releases should be signed with a **Developer ID Application** certificate and notarized, so Huddle opens on any Mac without being allowed first, and macOS recognises it as the same app from one launch and update to the next: the Keychain item with your sessions, and the microphone permission, stay allowed. Without a certificate, releases are signed ad hoc, a new identity every build: Gatekeeper turns them away, and the Keychain asks for access again and again.
+
+1. **The certificate** (needs a paid Apple Developer Program membership; only the account holder can make one): Xcode › Settings › Accounts › your team › Manage Certificates › + › Developer ID Application. Export it with its private key from Keychain Access as a .p12, with a password.
+2. **A key for notarization:** App Store Connect › Users and Access › Integrations › App Store Connect API › Team Keys, a new key with the Developer role. Download the .p8 (it can only be downloaded once), and note its Key ID and the Issuer ID shown above the list.
+3. **The repository secrets:** `MACOS_CERTIFICATE_P12`, the base64 of the .p12 (`base64 -i cert.p12 | pbcopy`); `MACOS_CERTIFICATE_PASSWORD`, its password; `NOTARY_API_KEY`, the base64 of the .p8 (`base64 -i AuthKey_XXXXXXXXXX.p8 | pbcopy`); `NOTARY_KEY_ID`; and `NOTARY_ISSUER_ID`.
+4. **Try them** before a release: Actions › Release › Run workflow builds, signs and notarizes as a release would, keeps the archive with the run for three days, and publishes nothing. Its Notarize step ends with Gatekeeper's verdict, which should say "Notarized Developer ID".
+
+`Scripts/build-app.sh` signs a release with a Developer ID certificate if one is in the keychain, with the secure timestamp notarization needs, and otherwise, as it does the Dev build, with an Apple Development one (which keeps Keychain access across rebuilds on your own Mac, but which Gatekeeper turns away elsewhere). The certificate is part of how macOS knows the app, so the first build signed differently from the one before asks for Keychain access once; Always Allow settles it.
 
 ### Updates
 
@@ -161,7 +170,7 @@ The signing key is in the login Keychain under the account `huddle`. Sparkle's t
 ## Before distributing
 
 - `AppInfo.clientURI` in `Sources/Huddle/Core/LoginFlow.swift` is the website Huddle reports when registering as an OAuth client. It is a placeholder (`https://huddle.invalid`); replace it with a real site.
-- Releases are not notarized, so other Macs will block the app until it is allowed in System Settings → Privacy & Security.
+- Releases are notarized only once the Developer ID certificate and the notarization key are set up (see Signing and notarization); until then other Macs block the app until it is allowed in System Settings → Privacy & Security.
 
 ## Layout
 
