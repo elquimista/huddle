@@ -280,12 +280,20 @@ extension MediaLoader {
     /// unasked, when the sender didn't send one. Larger ones wait to be played.
     static let largestPosterDownload: UInt64 = 20 * 1024 * 1024
 
+    /// A video's still, if it has been made already: for drawing it in the first frame its
+    /// message is drawn in, rather than a frame later.
+    func cachedVideoPoster(for file: FileAttachment, side: Int) -> NSImage? {
+        guard let video = file.video else { return nil }
+        let id = file.media?.source.url() ?? video.localURL?.absoluteString ?? file.filename
+        return cachedImage(forKey: "\(id)#poster\(side)")
+    }
+
     /// A still for a video, about `side` pixels on its longer edge: the sender's, or else one
     /// taken from the film, if it's here already, or small enough to fetch.
     func videoPoster(for file: FileAttachment, side: Int) async -> NSImage? {
         guard let video = file.video else { return nil }
         let id = file.media?.source.url() ?? video.localURL?.absoluteString ?? file.filename
-        if let cached = cachedImage(forKey: "\(id)#poster\(side)") { return cached }
+        if let cached = cachedVideoPoster(for: file, side: side) { return cached }
         var still: CGImage?
         if let thumbnail = video.thumbnail,
            let data = try? await client.getMediaContent(mediaSource: thumbnail.source) {

@@ -41,8 +41,23 @@ struct ImageMessageView: View {
                           maxWidth: contentWidth)
     }
 
+    /// How many pixels across the copy for the timeline is: sharp on this screen, with a little to
+    /// spare for images cropped to fit.
+    private var loadSide: Int {
+        let size = displaySize
+        return max(Int((max(size.width, size.height) * displayScale * 1.2).rounded(.up)), 64)
+    }
+
+    /// The picture, from the cache in the first frame the message is drawn in, where it's there:
+    /// left to `task`, it came a frame later, so a conversation drawn anew (another room, another
+    /// space) showed its placeholders for a moment first.
+    private var shownStill: NSImage? {
+        still ?? localPreview ?? media.cachedDisplayImage(for: image, side: loadSide)
+    }
+
     var body: some View {
         let size = displaySize
+        let still = shownStill
         // Rounded like everything else in the timeline, but gently on an image that is itself small.
         let radius = image.isSticker ? 0 : min(10, min(size.width, size.height) * 0.18)
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -117,10 +132,7 @@ struct ImageMessageView: View {
             still = localPreview
             return
         }
-        let size = displaySize
-        // Sharp on this screen, with a little to spare for images cropped to fit.
-        let side = Int((max(size.width, size.height) * displayScale * 1.2).rounded(.up))
-        guard let loaded = await media.displayImage(for: image, side: max(side, 64), isLocal: sendState != nil) else {
+        guard let loaded = await media.displayImage(for: image, side: loadSide, isLocal: sendState != nil) else {
             if !Task.isCancelled { hasFailed = still == nil }
             return
         }

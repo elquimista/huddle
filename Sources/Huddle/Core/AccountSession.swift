@@ -155,7 +155,8 @@ final class AccountSession: Identifiable {
             guard selectedRoomID != oldValue else { return }
             // The room left: its row says what was being written there.
             if let oldValue { refreshDraftPreview(forRoom: oldValue) }
-            PerfLog.began("room selected")
+            // From the click in the rail, when the room came with a space.
+            if railChoice == nil { PerfLog.began("room selected") } else { PerfLog.mark("room selected") }
             updatePresenceWatch()
         }
     }
@@ -700,9 +701,8 @@ final class AccountSession: Identifiable {
         openRoom(forSpace: spaceID)
     }
 
-    /// What was just chosen in the spaces rail. The rail shows it at once; the room list and the
-    /// main area follow, each as soon as it has been drawn, rather than all three waiting on the
-    /// conversation, which takes longest to draw.
+    /// What was just chosen in the spaces rail. The rail shows it at once, rather than waiting
+    /// on the room list and the conversation, which take a moment to draw.
     var railChoice: RailChoice?
 
     enum RailChoice: Equatable {
@@ -711,28 +711,28 @@ final class AccountSession: Identifiable {
         case invite(String)
     }
 
-    /// A choice in the spaces rail: shown there in this frame, the room list narrowed in the
-    /// next, and the room or space opened in the one after. A newer choice before then wins.
+    /// A choice in the spaces rail: shown there in this frame, then the room list narrowed and
+    /// the room or space opened together in the next. Apart, the new list showed for a moment
+    /// beside the last space's conversation, which read as a flicker. A newer choice before then
+    /// wins.
     func choose(inRail choice: RailChoice) {
+        PerfLog.began("space chosen")
         railChoice = choice
         afterThisFrame { [weak self] in
             guard let self, self.railChoice == choice else { return }
             switch choice {
-            case .home: self.selectedSpaceID = nil
-            case .space(let spaceID): self.selectedSpaceID = spaceID
-            case .invite: break
+            case .home:
+                self.selectedSpaceID = nil
+                self.openRoom(forSpace: nil)
+            case .space(let spaceID):
+                self.selectedSpaceID = spaceID
+                self.openRoom(forSpace: spaceID)
+            case .invite(let inviteID):
+                self.selectedRoomID = nil
+                self.browsingSpaceID = inviteID
             }
-            self.afterThisFrame { [weak self] in
-                guard let self, self.railChoice == choice else { return }
-                switch choice {
-                case .home: self.openRoom(forSpace: nil)
-                case .space(let spaceID): self.openRoom(forSpace: spaceID)
-                case .invite(let inviteID):
-                    self.selectedRoomID = nil
-                    self.browsingSpaceID = inviteID
-                }
-                self.railChoice = nil
-            }
+            self.railChoice = nil
+            PerfLog.markDrawn("room list and room shown")
         }
     }
 
