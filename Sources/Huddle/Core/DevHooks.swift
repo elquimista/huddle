@@ -21,7 +21,7 @@ import Foundation
 ///   HUDDLE_DEV_FRESH     start with no accounts loaded (stored ones are left alone), to see first run
 ///   HUDDLE_DEV_CLEAR_CACHES  comma-separated usernames whose caches to empty at launch (keys are kept),
 ///                        for a store that has fallen out of step with the server
-///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance
+///   HUDDLE_DEV_APPEARANCE  "light" or "dark", overriding the system appearance and the one chosen in Settings
 ///   HUDDLE_DEV_ASSUME_ACTIVE  mark rooms as read even while the app is in the background; call windows
 ///                             and the ringing panel open behind other windows, not over them
 ///   HUDDLE_DEV_CALL      with HUDDLE_DEV_SELECT "user/Room": start a voice call there at launch

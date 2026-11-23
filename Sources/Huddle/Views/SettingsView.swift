@@ -1,5 +1,46 @@
 import SwiftUI
 
+/// Light or dark: as the Mac is set, or one of them whatever it's set to.
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case automatic, light, dark
+
+    static let key = "appearance"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .automatic: "Light or dark, as your Mac is set"
+        case .light: "Light, even when your Mac is dark"
+        case .dark: "Dark, even when your Mac is light"
+        }
+    }
+
+    /// The one chosen in Settings.
+    static var chosen: AppAppearance {
+        UserDefaults.standard.string(forKey: key).flatMap(AppAppearance.init) ?? .automatic
+    }
+
+    /// Puts the chosen appearance on every window, sheet and menu of the app's (nil: the Mac's
+    /// own). A Dev build started with HUDDLE_DEV_APPEARANCE keeps that one.
+    @MainActor static func apply() {
+        NSApp.appearance = switch chosen {
+        case .automatic: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+        DevHooks.applyAppearance()
+    }
+}
+
 /// How messages are laid out in a room.
 enum MessageLayout: String, CaseIterable, Identifiable {
     /// Avatar, then the sender's name above their messages.
@@ -290,11 +331,25 @@ private struct NotificationSettingsTab: View {
 // MARK: - Appearance
 
 private struct AppearanceSettingsTab: View {
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.automatic
     @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
     @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
 
     var body: some View {
         SettingsForm {
+            Section {
+                SettingRow(title: "Appearance", detail: appearance.summary) {
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                }
+            }
+            .onChange(of: appearance) { AppAppearance.apply() }
             Section {
                 SettingRow(title: "Layout", detail: layout.summary) {
                     Picker("Layout", selection: $layout) {

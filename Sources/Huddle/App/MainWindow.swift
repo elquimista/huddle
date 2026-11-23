@@ -82,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // One window, without tabs: a second, from a tab bar's "+", would show the same account.
         NSWindow.allowsAutomaticWindowTabbing = false
         Notifier.shared.attach()
+        // Before any window is drawn, so none shows in the Mac's appearance first.
+        AppAppearance.apply()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
