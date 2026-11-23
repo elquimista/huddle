@@ -73,6 +73,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let senderID: String
         let body: String
         var threadRoot: String?
+        var eventID: String?
 
         switch item.event {
         case .timeline(let event):
@@ -82,6 +83,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                   let content = try? event.content(),
                   let text = Self.describe(content, contactName: { [account] in account.contactName(for: $0) }) else { return }
             body = text
+            eventID = event.eventId()
             threadRoot = item.threadId ?? event.threadRootEventId()
             key = "\(account.id)|\(roomID)|\(event.eventId())"
             guard seen.insert(key).inserted else { return }
@@ -151,7 +153,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.body = body
         content.threadIdentifier = Self.group(accountID: account.id, roomID: roomID)
         content.userInfo = ["account": account.id, "room": roomID, "thread": threadRoot ?? "",
-                            "roomName": item.roomInfo.displayName]
+                            "event": eventID ?? "", "roomName": item.roomInfo.displayName]
         if item.isNoisy == true, NotificationSettings.playsSound { content.sound = .default }
         // A message can be answered from its alert; an invitation is answered in the app.
         if case .timeline = item.event { content.categoryIdentifier = Self.messageCategory }
@@ -167,6 +169,21 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 let thread = threadRoot
                 let roomName = item.roomInfo.displayName
                 Task { await self.reply(text, accountID: account.id, roomID: roomID, thread: thread, roomName: roomName) }
+            }
+            // And as if Mark as Read, or one of its reactions, had been chosen.
+            if DevHooks.notificationMarksRead, content.categoryIdentifier == Self.messageCategory,
+               store?.selected?.id == account.id {
+                let thread = threadRoot
+                Task { await self.markRead(accountID: account.id, roomID: roomID, thread: thread) }
+            }
+            if let reaction = DevHooks.notificationReaction, content.categoryIdentifier == Self.messageCategory,
+               store?.selected?.id == account.id, let eventID {
+                let thread = threadRoot
+                let roomName = item.roomInfo.displayName
+                Task {
+                    await self.react(reaction, accountID: account.id, roomID: roomID, eventID: eventID,
+                                     thread: thread, roomName: roomName)
+                }
             }
         }
         guard NotificationSettings.isEnabled else { return }
@@ -298,12 +315,22 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let roomName = info["roomName"] as? String ?? ""
         let replyText = response.actionIdentifier == Self.replyAction
             ? (response as? UNTextInputNotificationResponse)?.userText : nil
+        let reaction = response.actionIdentifier.hasPrefix(Self.reactionAction)
+            ? String(response.actionIdentifier.dropFirst(Self.reactionAction.count)) : nil
+        let eventID = (info["event"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let identifier = response.notification.request.identifier
         Task { @MainActor in
             if let replyText, let accountID, let roomID {
                 // Answered: the alert has done its job.
                 UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
                 await self.reply(replyText, accountID: accountID, roomID: roomID, thread: thread, roomName: roomName)
+            } else if let reaction, let accountID, let roomID, let eventID {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+                await self.react(reaction, accountID: accountID, roomID: roomID, eventID: eventID, thread: thread,
+                                 roomName: roomName)
+            } else if response.actionIdentifier == Self.markReadAction, let accountID, let roomID {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+                await self.markRead(accountID: accountID, roomID: roomID, thread: thread)
             } else if let accountID, verify {
                 await self.waitForAccount(accountID)
                 self.openVerification(accountID: accountID)
