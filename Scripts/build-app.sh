@@ -26,10 +26,12 @@ if [ ! -d Vendor/MatrixRustSDK/MatrixSDKFFI.xcframework ]; then
 fi
 
 # HUDDLE_VERSION (e.g. from a release tag) stamps the version, else the latest v-tag does; the build
-# number counts commits, so builds after a tag still tell apart.
+# number counts commits, so builds after a tag still tell apart. It counts from 1000: Sparkle offers
+# whichever release has the higher build number, not version, and the macOS 13 line
+# (legacy/macos-13) counts its own commits from 0, so every 1.x has to come out above every 0.13.x.
 VERSION="${HUDDLE_VERSION:-$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null | sed 's/^v//' || true)}"
 VERSION="${VERSION:-0.1.0}"
-BUILD="${HUDDLE_BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
+BUILD="${HUDDLE_BUILD:-$((1000 + $(git rev-list --count HEAD 2>/dev/null || echo 0)))}"
 # The commit it's built from, shown in About ("+": with changes not yet committed).
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)"
 if [ -n "$COMMIT" ] && ! git diff --quiet HEAD -- 2>/dev/null; then COMMIT="$COMMIT+"; fi

@@ -3,12 +3,15 @@
 
   Scripts/appcast.py <appcast.xml> --version 0.2.0 --build 45 --url <archive URL> \\
       --length <bytes> --signature <EdDSA signature from sign_update> \\
-      [--changes <file, one change per line>] [--beta]
+      [--changes <file, one change per line>] [--beta] \\
+      [--minimum-system 14.0] [--maximum-system 13.99]
 
 The release workflow runs it for every tag (.github/workflows/release.yml). It makes the appcast if
 there isn't one, and replaces the item for the same version (when a tag's workflow runs again).
 Newest first. Sparkle compares --build with an app's CFBundleVersion; --beta puts the release in
-the "beta" channel, offered only to those who chose beta versions in Settings.
+the "beta" channel, offered only to those who chose beta versions in Settings. --minimum-system and
+--maximum-system are the macOS versions a release is offered on (Sparkle checks both), so each line
+reaches only the Macs it is for.
 """
 import argparse
 import email.utils
@@ -35,6 +38,7 @@ def main():
     parser.add_argument("--changes")
     parser.add_argument("--beta", action="store_true")
     parser.add_argument("--minimum-system", default="14.0")
+    parser.add_argument("--maximum-system")
     args = parser.parse_args()
 
     if os.path.exists(args.appcast):
@@ -56,6 +60,8 @@ def main():
     ET.SubElement(item, sparkle("version")).text = args.build
     ET.SubElement(item, sparkle("shortVersionString")).text = args.version
     ET.SubElement(item, sparkle("minimumSystemVersion")).text = args.minimum_system
+    if args.maximum_system:
+        ET.SubElement(item, sparkle("maximumSystemVersion")).text = args.maximum_system
     if args.beta:
         ET.SubElement(item, sparkle("channel")).text = "beta"
     if args.changes:

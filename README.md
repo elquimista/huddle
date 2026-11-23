@@ -145,7 +145,7 @@ To sign releases with your Apple Development certificate, add two repository sec
 
 ### Updates
 
-The app finds updates in an appcast, a feed listing each release with its EdDSA signature. Since this repository is private, the workflow publishes every release, and the appcast, to a public repository instead, `huddle-releases` under the same owner (or the `UPDATES_REPO` repository variable, as `owner/name`). The app reads `appcast.xml` on that repository's `main` branch; `Scripts/build-app.sh` puts that address and the public key in the release app's Info.plist. Pre-releases go in the appcast's beta channel, offered only to those who turn on beta versions.
+The app finds updates in an appcast, a feed listing each release with its EdDSA signature. Since this repository is private, the workflow publishes every release, and the appcast, to a public repository instead, `huddle-releases` under the same owner (or the `UPDATES_REPO` repository variable, as `owner/name`). The app reads `appcast.xml` on that repository's `main` branch; `Scripts/build-app.sh` puts that address and the public key in the release app's Info.plist. Pre-releases go in the appcast's beta channel, offered only to those who turn on beta versions. Sparkle offers the release with the highest build number, so build numbers count commits from 1000, above any of the macOS 13 line's (`legacy/macos-13`), whose releases the appcast offers only to macOS 13.
 
 To set it up:
 
