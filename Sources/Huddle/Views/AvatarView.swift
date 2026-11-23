@@ -19,9 +19,17 @@ struct AvatarView: View {
     /// among its people, so a room's avatar keeps its own colour.
     @Environment(\.nameColorRoom) private var room
 
+    /// The picture, from the cache in the first frame this is drawn in, where it's there: left to
+    /// `task`, it came a frame later, and every avatar in a list or conversation drawn anew
+    /// (another space, another room) showed its letter for a moment first.
+    private var shownImage: NSImage? {
+        guard let url else { return nil }
+        return media.cached(url: url, size: Int(size)) ?? image
+    }
+
     var body: some View { WithPerceptionTracking {
         ZStack {
-            if let image {
+            if let image = shownImage {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)

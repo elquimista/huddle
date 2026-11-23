@@ -1421,12 +1421,18 @@ struct TimelineView: View {
     private func restoreDraft() {
         guard draft.isEmpty, stagedImages.isEmpty, stagedFiles.isEmpty,
               let saved = account?.draft(for: draftKey) else { return }
-        restoredDraft = saved.text
-        draft = saved.text
-        composedMentions = saved.mentions
-        replyTarget = saved.reply
-        stagedImages = saved.images
-        stagedFiles = saved.files
+        // Back as it was left, not animated in: the send button turned from the microphone into
+        // the arrow every time the room was opened.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            restoredDraft = saved.text
+            draft = saved.text
+            composedMentions = saved.mentions
+            replyTarget = saved.reply
+            stagedImages = saved.images
+            stagedFiles = saved.files
+        }
     }
 
     /// The cursor at the end of what's in the composer, with nothing selected.

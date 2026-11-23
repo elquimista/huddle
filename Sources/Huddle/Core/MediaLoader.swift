@@ -32,7 +32,7 @@ final class MediaLoader: @unchecked Sendable {
     ///   - side: the longer edge wanted, in pixels.
     ///   - isLocal: the image is being sent from here and isn't on the server yet.
     func displayImage(for image: ImageAttachment, side: Int, isLocal: Bool) async -> NSImage? {
-        let key = "\(image.media.source.url())#display\(side)" as NSString
+        let key = Self.displayKey(for: image, side: side) as NSString
         if let cached = cache.object(forKey: key) { return cached }
         if DevHooks.imageLoadDelay > 0 { try? await Task.sleep(for: .seconds(DevHooks.imageLoadDelay)) }
 
@@ -145,6 +145,16 @@ final class MediaLoader: @unchecked Sendable {
         let playable = try AudioPreparer.playableData(from: try await audioFile(source: source))
         playableFiles.setObject(playable as NSData, forKey: key, cost: playable.count)
         return playable
+    }
+
+    /// A picture's copy for the timeline, if it has been made already: for drawing it in the
+    /// first frame its message is drawn in, rather than a frame later.
+    func cachedDisplayImage(for image: ImageAttachment, side: Int) -> NSImage? {
+        cache.object(forKey: Self.displayKey(for: image, side: side) as NSString)
+    }
+
+    private static func displayKey(for image: ImageAttachment, side: Int) -> String {
+        "\(image.media.source.url())#display\(side)"
     }
 
     func cachedImage(forKey key: String) -> NSImage? {

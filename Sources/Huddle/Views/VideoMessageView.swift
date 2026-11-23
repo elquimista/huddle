@@ -114,7 +114,7 @@ struct VideoMessageView: View {
         ZStack {
             Button(action: play) {
                 ZStack {
-                    if let poster {
+                    if let poster = shownPoster {
                         Image(nsImage: poster)
                             .resizable()
                             .interpolation(.high)
@@ -157,7 +157,7 @@ struct VideoMessageView: View {
             }
         }
         .frame(width: size.width, height: size.height)
-        .animation(.easeOut(duration: 0.2), value: poster != nil)
+        .animation(.easeOut(duration: 0.2), value: shownPoster != nil)
     }
 
     /// Play, in a dark disc that reads over any picture; a spinner while it downloads, which a
@@ -235,10 +235,21 @@ struct VideoMessageView: View {
         playback.play(id: id, file: file, media: media, owner: owner)
     }
 
-    private func loadPoster() async {
+    /// How many pixels across the still is: sharp on this screen, with a little to spare.
+    private var posterSide: Int {
         let size = filmSize
-        let side = Int((max(size.width, size.height) * displayScale * 1.2).rounded(.up))
-        if let loaded = await media.videoPoster(for: file, side: max(side, 64)), !Task.isCancelled {
+        return max(Int((max(size.width, size.height) * displayScale * 1.2).rounded(.up)), 64)
+    }
+
+    /// The still, from the cache in the first frame the message is drawn in, where it's there:
+    /// left to `task`, it came a frame later, so a conversation drawn anew showed a dark tile for
+    /// a moment first.
+    private var shownPoster: NSImage? {
+        poster ?? media.cachedVideoPoster(for: file, side: posterSide)
+    }
+
+    private func loadPoster() async {
+        if let loaded = await media.videoPoster(for: file, side: posterSide), !Task.isCancelled {
             poster = loaded
         }
     }
