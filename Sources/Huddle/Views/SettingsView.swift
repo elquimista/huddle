@@ -1,6 +1,47 @@
 import SwiftUI
 import Perception
 
+/// Light or dark: as the Mac is set, or one of them whatever it's set to.
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case automatic, light, dark
+
+    static let key = "appearance"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .automatic: "Light or dark, as your Mac is set"
+        case .light: "Light, even when your Mac is dark"
+        case .dark: "Dark, even when your Mac is light"
+        }
+    }
+
+    /// The one chosen in Settings.
+    static var chosen: AppAppearance {
+        UserDefaults.standard.string(forKey: key).flatMap(AppAppearance.init) ?? .automatic
+    }
+
+    /// Puts the chosen appearance on every window, sheet and menu of the app's (nil: the Mac's
+    /// own). A Dev build started with HUDDLE_DEV_APPEARANCE keeps that one.
+    @MainActor static func apply() {
+        NSApp.appearance = switch chosen {
+        case .automatic: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+        DevHooks.applyAppearance()
+    }
+}
+
 /// How messages are laid out in a room.
 enum MessageLayout: String, CaseIterable, Identifiable {
     /// Avatar, then the sender's name above their messages.
@@ -134,7 +175,7 @@ struct SettingsView: View {
     /// The tab showing, kept across launches; set it to open Settings at a tab.
     static let tabKey = "settingsTab"
 
-    @AppStorage(Self.tabKey) private var storedTab = Tab.notifications
+    @AppSetting(Self.tabKey) private var storedTab = Tab.notifications
     /// The tab view's selection, kept in step with the stored tab both ways. On macOS 13 a tab
     /// view bound straight to the stored tab changes tabs once and then no more.
     @State private var tab = UserDefaults.standard.string(forKey: SettingsView.tabKey).flatMap(Tab.init) ?? .notifications
@@ -270,8 +311,8 @@ private struct SettingRow<Control: View>: View {
 // MARK: - Notifications
 
 private struct NotificationSettingsTab: View {
-    @AppStorage(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault
-    @AppStorage(NotificationSettings.soundKey) private var notificationSound = true
+    @AppSetting(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault
+    @AppSetting(NotificationSettings.soundKey) private var notificationSound = true
 
     var body: some View { WithPerceptionTracking {
         SettingsForm {
@@ -298,11 +339,25 @@ private struct NotificationSettingsTab: View {
 // MARK: - Appearance
 
 private struct AppearanceSettingsTab: View {
-    @AppStorage(MessageLayout.key) private var layout = MessageLayout.modern
-    @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
+    @AppSetting(AppAppearance.key) private var appearance = AppAppearance.automatic
+    @AppSetting(MessageLayout.key) private var layout = MessageLayout.modern
+    @AppSetting(EmojiSize.key) private var emojiSize = EmojiSize.large
 
     var body: some View { WithPerceptionTracking {
         SettingsForm {
+            Section {
+                SettingRow(title: "Appearance", detail: appearance.summary) {
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { option in WithPerceptionTracking {
+                            Text(option.title).tag(option)
+                        } }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                }
+            }
+            .onChanged(of: appearance) { AppAppearance.apply() }
             Section {
                 SettingRow(title: "Layout", detail: layout.summary) {
                     Picker("Layout", selection: $layout) {
@@ -559,9 +614,9 @@ private struct ConversationPreview: View {
 
 private struct PrivacySettingsTab: View {
     @Environment(AccountStore.self) private var store
-    @AppStorage(OwnPresence.sharingKey) private var sharesPresence = true
-    @AppStorage(HistoryIndexer.defaultsKey) private var indexesFullHistory = true
-    @AppStorage(EncryptionPreferences.excludesInsecureDevicesKey) private var excludesInsecureDevices = false
+    @AppSetting(OwnPresence.sharingKey) private var sharesPresence = true
+    @AppSetting(HistoryIndexer.defaultsKey) private var indexesFullHistory = true
+    @AppSetting(EncryptionPreferences.excludesInsecureDevicesKey) private var excludesInsecureDevices = false
 
     /// Every account's full-history pass, taken together.
     private var progress: (done: Int, total: Int)? {

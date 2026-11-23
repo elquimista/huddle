@@ -12,7 +12,7 @@ struct RoomView: View {
     }
 
     /// The thread panel's width as the user last dragged it; 0 until they have.
-    @AppStorage("threadPanelWidth") private var preferredPanelWidth: Double = 0
+    @AppSetting("threadPanelWidth") private var preferredPanelWidth: Double = 0
     /// The width when a drag of the divider began.
     @State private var dragStartWidth: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

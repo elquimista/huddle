@@ -39,7 +39,6 @@ final class AccountStore {
     var totalBadgeCount: Int { accounts.reduce(0) { $0 + $1.badgeCount } }
 
     func restore() async {
-        DevHooks.applyAppearance()
         IndexingSchedule.shared.start()
         RoomHistory.shared.store = self
         NavigationKeys.shared.start(store: self)

@@ -84,6 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWindow.allowsAutomaticWindowTabbing = false
         Notifier.shared.attach()
         PerceptionCheck.start()
+        // Before any window is drawn, so none shows in the Mac's appearance first.
+        AppAppearance.apply()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

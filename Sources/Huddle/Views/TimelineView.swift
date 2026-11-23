@@ -84,9 +84,9 @@ struct TimelineView: View {
     /// Paging back through a thread for a message, while it goes on.
     @State private var searchTask: Task<Void, Never>?
     @Environment(\.accountSession) private var account
-    @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
+    @AppSetting(MessageLayout.key) private var chosenLayout = MessageLayout.modern
     @Environment(\.forcedMessageLayout) private var forcedLayout
-    @AppStorage(EmojiSize.key) private var emojiSize = EmojiSize.large
+    @AppSetting(EmojiSize.key) private var emojiSize = EmojiSize.large
     /// Which message shows its hover actions.
     @State private var hoverState = MessageHoverState()
     @Environment(\.controlActiveState) private var windowState

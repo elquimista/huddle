@@ -243,6 +243,45 @@ struct ViewportReader<Content: View>: View {
     }
 }
 
+// MARK: - Stored settings
+
+/// `AppStorage`, with the value also held in the view itself. On macOS 13 a view's content in
+/// `WithPerceptionTracking` is drawn again only if what it captured of the view has changed, and
+/// an `AppStorage` holds no more than a reference to where its value is kept: a new value would
+/// leave the view as it was (Settings showing the old choice, a panel its old width).
+@propertyWrapper
+struct AppSetting<Value>: DynamicProperty {
+    private let storage: AppStorage<Value>
+    /// The value as of this drawing, so that one view and the next differ when it changes.
+    private var current: Value
+
+    var wrappedValue: Value {
+        get { storage.wrappedValue }
+        nonmutating set { storage.wrappedValue = newValue }
+    }
+
+    var projectedValue: Binding<Value> { storage.projectedValue }
+
+    mutating func update() { current = storage.wrappedValue }
+}
+
+extension AppSetting {
+    init(wrappedValue: Value, _ key: String) where Value == Bool {
+        storage = AppStorage(wrappedValue: wrappedValue, key)
+        current = storage.wrappedValue
+    }
+
+    init(wrappedValue: Value, _ key: String) where Value == Double {
+        storage = AppStorage(wrappedValue: wrappedValue, key)
+        current = storage.wrappedValue
+    }
+
+    init(wrappedValue: Value, _ key: String) where Value: RawRepresentable, Value.RawValue == String {
+        storage = AppStorage(wrappedValue: wrappedValue, key)
+        current = storage.wrappedValue
+    }
+}
+
 // MARK: - Small things
 
 extension View {

@@ -201,7 +201,7 @@ private struct ThreadTimelineHost: View {
     let roomID: String
     let root: String
     @State private var timeline: RoomTimeline?
-    @AppStorage(MessageLayout.key) private var chosenLayout = MessageLayout.modern
+    @AppSetting(MessageLayout.key) private var chosenLayout = MessageLayout.modern
 
     var body: some View { WithPerceptionTracking {
         Group {
