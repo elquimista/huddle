@@ -134,10 +134,12 @@ jobs:
           fi
 
           # Listed in the appcast only now, so nobody is offered an archive that isn't there yet.
-          # Each release listed with the macOS it needs, so Sparkle offers a Mac only what runs on it:
-          # macOS 13 gets this line, macOS 14 and later the newer one.
+          # Each release listed with the macOS versions it is for, so Sparkle offers a Mac only its own
+          # line: macOS 13 gets this one, and only macOS 13 (Sparkle compares build numbers, not
+          # versions, and these may be higher than the newer line's), macOS 14 and later the newer one.
           minimum="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' build/Huddle.app/Contents/Info.plist)"
-          Scripts/appcast.py "$updates/appcast.xml" --version "$version" --build "$build" --minimum-system "$minimum" \
+          Scripts/appcast.py "$updates/appcast.xml" --version "$version" --build "$build" \
+            --minimum-system "$minimum" --maximum-system 13.99 \
             --url "https://github.com/$UPDATES_REPO/releases/download/$GITHUB_REF_NAME/$zip" \
             --length "$length" --signature "$signature" --changes "$RUNNER_TEMP/changes.txt" $beta
           git -C "$updates" add appcast.xml

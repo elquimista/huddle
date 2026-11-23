@@ -26,7 +26,8 @@ if [ ! -d Vendor/MatrixRustSDK/MatrixSDKFFI.xcframework ]; then
 fi
 
 # HUDDLE_VERSION (e.g. from a release tag) stamps the version, else the latest v-tag does; the build
-# number counts commits, so builds after a tag still tell apart.
+# number counts commits, so builds after a tag still tell apart. Main's count from 1000, so that its
+# releases (1.x) always come out above these: keep this one counting from 0.
 VERSION="${HUDDLE_VERSION:-$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null | sed 's/^v//' || true)}"
 VERSION="${VERSION:-0.1.0}"
 BUILD="${HUDDLE_BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
