@@ -363,6 +363,9 @@ private struct RoomListRow: View {
         let isSelected = account.selectedRoomID == room.id
         RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id],
                 threadReply: account.threadReplyDates[room.id],
+                ringing: room.lastCallInvite.flatMap {
+                    CallCenter.shared.ringingPreview(account: account, roomID: room.id, invite: $0)
+                },
                 presence: room.directUserID.flatMap { account.presence.people[$0] },
                 // Seen only where this account shares its own typing, as in the conversation,
                 // and not in a muted room, which is meant to be quiet.
@@ -522,6 +525,9 @@ private struct RoomRow: View {
     var reaction: ReactionPreview?
     /// The date of the room's newest reply in a thread, when known.
     var threadReply: Date?
+    /// Said in place of the newest message, a call's invite, while the call rings:
+    /// "You’re calling", as its line in the conversation says.
+    var ringing: String?
     /// The other person's, in a direct chat.
     var presence: PresenceInfo?
     /// Who is typing in the room.
@@ -541,7 +547,7 @@ private struct RoomRow: View {
         if room.isInvite { return room.lastMessage ?? "Invitation" }
         // The newest message is that reply: say it's in a thread.
         let inThread = threadReply != nil && threadReply == room.timestamp ? room.lastMessageInThread : nil
-        return latestReaction?.text ?? inThread ?? room.lastMessage ?? " "
+        return latestReaction?.text ?? inThread ?? ringing ?? room.lastMessage ?? " "
     }
 
     /// Who is typing, said in place of the newest message while they are: "typing…" in a direct
