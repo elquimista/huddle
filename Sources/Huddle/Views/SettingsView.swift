@@ -371,13 +371,10 @@ private struct AppearanceSettingsTab: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                 }
-            } header: {
-                Text("Messages")
-            }
-            Section {
+                // What the two choices above look like, in the box with them.
                 ConversationPreview(layout: layout, emojiSize: emojiSize)
             } header: {
-                Text("Preview")
+                Text("Messages")
             }
             QuickReactionsSection(layout: layout)
         }
@@ -394,8 +391,7 @@ private struct QuickReactionsSection: View {
 
     var body: some View {
         Section {
-            SettingRow(title: "Quick reactions", detail: "At the top of the reaction picker. Click one to choose another.",
-                       detailLines: 2) {
+            SettingRow(title: "Quick reactions", detail: "Click one to choose another.") {
                 HStack(spacing: 3) {
                     ForEach(Array(reactions.emoji.enumerated()), id: \.offset) { index, emoji in
                         if index == reactions.onBarCount {
@@ -405,7 +401,7 @@ private struct QuickReactionsSection: View {
                     }
                 }
             }
-            SettingRow(title: "On a message’s bar", detail: barDetail, detailLines: 2) {
+            SettingRow(title: "On a message’s bar", detail: barDetail, detailLines: 1) {
                 Picker("On a message’s bar", selection: Binding(
                     get: { reactions.onBarCount },
                     set: { count in withAnimation(.snappy(duration: 0.2)) { reactions.setOnBarCount(count) } }
@@ -431,10 +427,11 @@ private struct QuickReactionsSection: View {
     }
 
     /// Bubbles have no bar of their own; a thread's messages, always in the modern layout, do.
+    /// (Where six won't fit, as in a thread beside the conversation, the bar shows three.)
     private var barDetail: String {
         layout == .bubbles
-            ? "In threads, three where six won’t fit; bubbles keep them in the picker."
-            : "As the pointer rests on a message; three where six won’t fit."
+            ? "In threads only, as bubbles have no bar."
+            : "As the pointer rests on a message."
     }
 
     private func slot(_ emoji: String, at index: Int) -> some View {
@@ -481,8 +478,8 @@ private struct QuickReactionSlot: View {
     }
 }
 
-/// A few messages as a room would show them with the choices above: the layout, and an
-/// emoji-only message at its size. Always as tall as the tallest choice needs, the messages
+/// Two messages as a room would show them with the choices above: the layout, and an
+/// emoji-only reply at its size. Always as tall as the tallest choice needs, the messages
 /// sitting at its foot as in a room, so the window keeps its height as the choices change.
 private struct ConversationPreview: View {
     let layout: MessageLayout
@@ -496,96 +493,97 @@ private struct ConversationPreview: View {
         let time: String
         let text: String
         var isEmoji = false
-        /// The first of a run of messages from one person, which carries their name.
-        var startsGroup = true
     }
 
+    /// Two people, so each layout shows how it tells them apart.
     private let lines = [
         Line(id: 0, sender: "Bob", color: 5, time: "9:41 AM", text: "Shall we ship the build today?"),
-        Line(id: 1, sender: "Alice", color: 3, time: "9:42 AM", text: "Yes, right after lunch"),
-        Line(id: 2, sender: "Alice", color: 3, time: "9:42 AM", text: "🎉🙌", isEmoji: true, startsGroup: false),
+        Line(id: 1, sender: "Alice", color: 3, time: "9:42 AM", text: "🎉🙌", isEmoji: true),
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(lines) { line in
-                switch layout {
-                case .modern: modernRow(line)
-                case .bubbles: bubbleRow(line, next: lines.first { $0.id == line.id + 1 })
-                case .irc: ircRow(line)
-                }
+        ZStack(alignment: .bottomLeading) {
+            // Each layout with the largest emoji, unseen: the height the choices can need.
+            ForEach(MessageLayout.allCases) { layout in
+                messages(in: layout, emojiSize: .extraLarge).hidden()
             }
+            messages(in: layout, emojiSize: emojiSize)
         }
-        // The section's own box frames it: a card of its own inside would be a box in a box.
+        // A row of the Messages box, which frames it: a card of its own would be a box in a box.
         .padding(.bottom, 6)
-        .frame(maxWidth: .infinity, minHeight: 160, alignment: .bottomLeading)
+        .frame(maxWidth: .infinity, alignment: .bottomLeading)
         .animation(.snappy(duration: 0.25), value: layout)
         .animation(.snappy(duration: 0.25), value: emojiSize)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Preview of messages in the \(layout.title) layout, with emoji \(emojiSize.title.lowercased())")
     }
 
-    private func text(_ line: Line) -> some View {
+    private func messages(in layout: MessageLayout, emojiSize: EmojiSize) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines) { line in
+                switch layout {
+                case .modern: modernRow(line, emojiSize: emojiSize)
+                case .bubbles: bubbleRow(line, emojiSize: emojiSize)
+                case .irc: ircRow(line, emojiSize: emojiSize)
+                }
+            }
+        }
+    }
+
+    private func text(_ line: Line, emojiSize: EmojiSize) -> some View {
         Text(line.text)
             .font(line.isEmoji ? emojiSize.pointSize.map { .system(size: $0) } ?? .body : .body)
     }
 
-    private func modernRow(_ line: Line) -> some View {
+    private func modernRow(_ line: Line, emojiSize: EmojiSize) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            if line.startsGroup {
-                Circle()
-                    .fill(Decorative.avatarBackground[line.color])
-                    .frame(width: 28, height: 28)
-                    .overlay {
-                        Text(String(line.sender.prefix(1)))
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-            } else {
-                Color.clear.frame(width: 28, height: 1)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                if line.startsGroup {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(line.sender)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Decorative.text[line.color])
-                        Text(line.time)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+            Circle()
+                .fill(Decorative.avatarBackground[line.color])
+                .frame(width: 28, height: 28)
+                .overlay {
+                    Text(String(line.sender.prefix(1)))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
                 }
-                text(line)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(line.sender)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Decorative.text[line.color])
+                    Text(line.time)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                text(line, emojiSize: emojiSize)
             }
         }
-        .padding(.top, line.startsGroup ? 9 : 3)
+        .padding(.top, 9)
     }
 
-    /// Alice's messages stand for yours, on the right.
-    private func bubbleRow(_ line: Line, next: Line?) -> some View {
+    /// Alice's message stands for yours, on the right.
+    private func bubbleRow(_ line: Line, emojiSize: EmojiSize) -> some View {
         let isOwn = line.sender == "Alice"
-        let endsRun = next?.sender != line.sender
         return HStack {
             if isOwn { Spacer(minLength: 40) }
             Group {
                 if line.isEmoji {
-                    text(line).padding(isOwn ? .trailing : .leading, Bubble.tailWidth)
+                    text(line, emojiSize: emojiSize).padding(isOwn ? .trailing : .leading, Bubble.tailWidth)
                 } else {
-                    text(line)
+                    text(line, emojiSize: emojiSize)
                         .padding(Bubble.textInset)
                         .padding(isOwn ? .trailing : .leading, Bubble.tailWidth)
                         .background {
-                            BubbleShape(isOwn: isOwn, joinsAbove: !line.startsGroup, joinsBelow: !endsRun)
+                            BubbleShape(isOwn: isOwn, joinsAbove: false, joinsBelow: false)
                                 .fill(isOwn ? Bubble.own : Bubble.others)
                         }
                 }
             }
             if !isOwn { Spacer(minLength: 40) }
         }
-        .padding(.top, line.startsGroup ? 8 : 2)
+        .padding(.top, 8)
     }
 
-    private func ircRow(_ line: Line) -> some View {
+    private func ircRow(_ line: Line, emojiSize: EmojiSize) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(line.time)
                 .font(.caption)
@@ -596,7 +594,7 @@ private struct ConversationPreview: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(Decorative.text[line.color])
                 .frame(width: 44, alignment: .trailing)
-            text(line)
+            text(line, emojiSize: emojiSize)
         }
         .padding(.top, 3)
     }
