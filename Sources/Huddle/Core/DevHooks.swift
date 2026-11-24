@@ -46,6 +46,11 @@ import Foundation
 ///                        as if dropped there (in the room HUDDLE_DEV_SELECT names)
 ///   HUDDLE_DEV_DOWNLOAD_TO   a folder each file shown in a conversation is downloaded into, as Save File As would
 ///   HUDDLE_DEV_FREE_SCROLL   treat scrolling done through accessibility as the user's, so tests can scroll up
+///   HUDDLE_DEV_WHEEL     scroll the conversation when asked from outside, as a trackpad would: the
+///                        "app.huddle.dev.wheel" distributed notification, its object "points,events,ms"
+///                        (points per event, up toward older messages when positive). Scroll events posted
+///                        from outside don't reach a window in the background; these are handed to the app
+///                        from within, past its event monitors, as the reader's are.
 ///   HUDDLE_DEV_CROP_THUMBNAILS  send images with a square thumbnail cropped from the middle, as some phone apps do
 ///   HUDDLE_DEV_SLOW_ANIMATIONS  slow the timeline's animations down by this factor, to inspect them
 ///   HUDDLE_DEV_PRESENCE_INTERVAL  seconds between presence checks, instead of 30 and 90
@@ -224,6 +229,49 @@ enum DevHooks {
 
     static var didStageImages = false
 
+    /// The room's conversation, for HUDDLE_DEV_WHEEL to scroll.
+    static weak var conversationScrollView: NSScrollView?
+
+    private static func listenForWheel() {
+        DistributedNotificationCenter.default().addObserver(forName: .init("app.huddle.dev.wheel"), object: nil,
+                                                            queue: .main) { note in
+            let parts = (note.object as? String ?? "").split(separator: ",").compactMap { Double($0) }
+            guard parts.count == 3 else { return }
+            MainActor.assumeIsolated { wheel(points: parts[0], events: Int(parts[1]), gap: parts[2] / 1000) }
+        }
+    }
+
+    /// A trackpad scroll over the middle of the conversation: fingers down, `events` moves of
+    /// `points` each, `gap` seconds apart, fingers up.
+    private static func wheel(points: Double, events: Int, gap: Double) {
+        guard let scrollView = conversationScrollView, let window = scrollView.window else { return }
+        let middle = window.convertPoint(toScreen: scrollView.convert(NSPoint(x: scrollView.bounds.midX,
+                                                                              y: scrollView.bounds.midY), to: nil))
+        let location = CGPoint(x: middle.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - middle.y)
+        func post(_ delta: Int32, phase: Int64, after delay: Double) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard let cgEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                            wheel1: delta, wheel2: 0, wheel3: 0) else { return }
+                cgEvent.location = location
+                cgEvent.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                cgEvent.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+                cgEvent.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(delta))
+                cgEvent.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
+                cgEvent.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent,
+                                             value: Int64(window.windowNumber))
+                // Without a window (one can't be given it), the app can't route it: straight to
+                // the conversation, after the app's monitors (the conversation's, telling the
+                // reader's scrolling from its own) have seen it.
+                guard let event = NSEvent(cgEvent: cgEvent) else { return }
+                NSApp.sendEvent(event)
+                scrollView.scrollWheel(with: event)
+            }
+        }
+        post(0, phase: 1, after: 0)
+        for step in 1...max(events, 1) { post(Int32(points), phase: 2, after: gap * Double(step)) }
+        post(0, phase: 4, after: gap * Double(max(events, 1) + 1))
+    }
+
     static let freeScroll = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_FREE_SCROLL"] != nil
     /// Gives every message its actions as accessibility actions even without VoiceOver, so tests
     /// can reach them.
@@ -259,6 +307,7 @@ enum DevHooks {
     static func run(store: AccountStore) async {
         guard AppEnvironment.isDev, !startsFresh else { return }
         let env = ProcessInfo.processInfo.environment
+        if env["HUDDLE_DEV_WHEEL"] != nil { listenForWheel() }
 
         if let server = env["HUDDLE_DEV_SERVER"], let password = env["HUDDLE_DEV_PASSWORD"] {
             let names = (env["HUDDLE_DEV_ACCOUNTS"] ?? "").split(separator: ",").map(String.init)

@@ -323,6 +323,7 @@ struct TimelineView: View {
                 .environment(\.emojiSize, emojiSize)
                 .environment(\.ircNameWidth, nameWidth)
                 .environment(\.messageHover, hoverState)
+                .environment(\.readingPlace, place)
                 // A popover of the window's own (an emoji picker) leaves it active, not inactive.
                 .onChange(of: windowState, initial: true) { _, state in
                     hoverState.isWindowActive = state != .inactive || DevHooks.assumesActive
@@ -852,7 +853,9 @@ struct TimelineView: View {
         guard let middle = (returning ? place.heldRow : nil) ?? place.middleRow(among: shownRows.map(\.id)) else { return }
         place.heldRow = middle
         place.heldSince = Date()
-        if rowsKeepTheirSize, let frame = place.rows[middle.id] ?? nil {
+        // Rows only being added above: the view moves down by them as they are laid out.
+        let movesWithRows = rowsKeepTheirSize && place.changeAbove()
+        if rowsKeepTheirSize, !movesWithRows, let frame = place.rows[middle.id] ?? nil {
             let span = place.viewport - place.topInset
             if span > frame.height {
                 jump(proxy, to: middle.id, anchor: UnitPoint(x: 0, y: middle.top / (span - frame.height)))
@@ -3053,7 +3056,21 @@ private struct ScrollViewProbe: NSViewRepresentable {
         required init?(coder: NSCoder) { fatalError("not used") }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let scrollView = enclosingScrollView { place.scrollView = scrollView }
+            NotificationCenter.default.removeObserver(self)
+            if let scrollView = enclosingScrollView {
+                place.scrollView = scrollView
+                if AppEnvironment.isDev, window != nil { DevHooks.conversationScrollView = scrollView }
+                // The conversation's height, as AppKit lays it out (`ReadingPlace.changeAbove`).
+                if window != nil, let document = scrollView.documentView {
+                    document.postsFrameChangedNotifications = true
+                    NotificationCenter.default.addObserver(self, selector: #selector(documentResized(_:)),
+                                                           name: NSView.frameDidChangeNotification, object: document)
+                }
+            }
+        }
+
+        @objc private func documentResized(_ note: Notification) {
+            if let document = note.object as? NSView { place.documentResized(document) }
         }
     }
 }
@@ -3324,6 +3341,47 @@ final class ReadingPlace {
         guard let scrollView, let document = scrollView.documentView, document.isFlipped else { return nil }
         let clip = scrollView.contentView
         return endOrigin(of: clip).y - clip.bounds.origin.y
+    }
+
+    /// Rows are about to be added above what shows, or to change size up there, and nothing else
+    /// to: as the conversation grows (or shrinks) by them, the view moves down (or up) by as much,
+    /// so what's being read stays where it is on screen. Done as AppKit lays the conversation
+    /// out, in the same pass and before anything is drawn. A jump of SwiftUI's to hold the place
+    /// lands a frame later at best, and while the reader is scrolling with a trackpad it is lost
+    /// altogether: the scroll carries on from where it was, and the conversation stays moved by
+    /// everything drawn above. Returns false if AppKit's view isn't to hand.
+    @discardableResult
+    func changeAbove(for seconds: Double = 0.15) -> Bool {
+        guard let document = scrollView?.documentView, document.isFlipped else { return false }
+        let until = Date().addingTimeInterval(seconds)
+        addedAbove = (document.frame.height, max(until, addedAbove?.until ?? until))
+        return true
+    }
+
+    /// The conversation's height before rows were added above, and until when to follow it.
+    private var addedAbove: (height: CGFloat, until: Date)?
+
+    /// AppKit has laid the conversation out anew (ScrollViewProbe).
+    func documentResized(_ document: NSView) {
+        guard let pending = addedAbove else { return }
+        guard Date() < pending.until else {
+            addedAbove = nil
+            return
+        }
+        let grown = document.frame.height - pending.height
+        addedAbove = (document.frame.height, pending.until)
+        if abs(grown) > 0.5 { scroll(by: grown) }
+    }
+
+    /// Moves the view down the conversation by this much (up, if negative), at once, as the
+    /// reader scrolling would; SwiftUI follows.
+    func scroll(by distance: CGFloat) {
+        guard let scrollView else { return }
+        let clip = scrollView.contentView
+        var bounds = clip.bounds
+        bounds.origin.y += distance
+        clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+        scrollView.reflectScrolledClipView(clip)
     }
 
     /// Scrolls AppKit's view to the end, as the reader dragging it there would.

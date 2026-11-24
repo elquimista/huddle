@@ -113,6 +113,9 @@ extension EnvironmentValues {
     /// How wide a message's content (text, pictures, players) can be where it is shown.
     /// Pictures and players shrink to fit it instead of spilling out of a narrow column.
     @Entry var messageContentWidth: CGFloat = .infinity
+    /// Where the timeline around a message is being read, for a picture that changes size above
+    /// what shows to keep it there (`ReadingPlace.changeAbove`).
+    @Entry var readingPlace: ReadingPlace? = nil
     /// The width a timeline has been given, set by whatever lays it out. Measuring the timeline
     /// itself won't do: its content sizes itself to the measurement, and a picture that is too
     /// wide keeps the timeline too wide.
