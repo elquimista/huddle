@@ -114,6 +114,14 @@ struct DropTargetOverlay: View {
     }
 }
 
+extension NSEvent {
+    /// Paste: ⌘V, with no other modifier.
+    var isPaste: Bool {
+        type == .keyDown && modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+            && charactersIgnoringModifiers == "v"
+    }
+}
+
 /// Catches ⌘V in a composer when the clipboard holds a picture, which a text field would ignore.
 @MainActor
 final class PasteInterceptor {
@@ -127,21 +135,24 @@ final class PasteInterceptor {
     func start() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.isActive,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-                  event.charactersIgnoringModifiers == "v" else { return event }
-            let images = ImagePasteboard.images(on: .general)
-            if !images.isEmpty {
-                self.onImages?(images)
-                return nil
-            }
-            // Files copied in the Finder: attach them, rather than paste their names.
-            let files = (NSPasteboard.general.readObjects(forClasses: [NSURL.self],
-                                                          options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
-            guard !files.isEmpty else { return event }      // text: let the field paste it
-            self.onFiles?(files)
-            return nil
+            guard let self, self.isActive, event.isPaste else { return event }
+            return self.takeAttachments() ? nil : event      // text: let the field paste it
         }
+    }
+
+    /// Pictures or files on the clipboard, put in the composer; false when it holds text.
+    func takeAttachments() -> Bool {
+        let images = ImagePasteboard.images(on: .general)
+        if !images.isEmpty {
+            onImages?(images)
+            return true
+        }
+        // Files copied in the Finder: attach them, rather than paste their names.
+        let files = (NSPasteboard.general.readObjects(forClasses: [NSURL.self],
+                                                      options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        guard !files.isEmpty else { return false }
+        onFiles?(files)
+        return true
     }
 
     func stop() {
@@ -210,13 +221,16 @@ struct WindowReader: NSViewRepresentable {
 /// Sends typing to the room's composer when nothing that takes text has the keyboard: after
 /// clicking a room in the list, or a message, you can just start typing.
 ///
-/// Only plain typing is taken: letters, digits, punctuation, space, with or without Shift.
-/// Arrows, Return, Tab, Delete and anything with ⌘, ⌃ or ⌥ go where they always went, so the
-/// room list can still be moved through with the arrow keys and shortcuts keep working.
+/// Only plain typing is taken: letters, digits, punctuation, space, with or without Shift;
+/// and Paste (⌘V), so a picture or text can go straight in. Arrows, Return, Tab, Delete and
+/// other keys with ⌘, ⌃ or ⌥ go where they always went, so the room list can still be moved
+/// through with the arrow keys and shortcuts keep working.
 @MainActor
 final class TypeToCompose {
     /// Puts the keyboard in the composer.
     var focus: (() -> Void)?
+    /// Puts pictures or files on the clipboard in the composer; false when it holds text.
+    var takeAttachments: (() -> Bool)?
     /// The window the composer is in. Typing elsewhere (a sheet, a popover, Settings) is left alone.
     weak var window: NSWindow?
     private var monitor: Any?
@@ -231,9 +245,16 @@ final class TypeToCompose {
                 self.pending.append(event)
                 return nil
             }
-            guard self.shouldRoute(event, in: window) else { return event }
+            if event.isPaste {
+                guard self.takesKeys(in: window) else { return event }
+                self.focus?()
+                // Pictures and files are staged as they are; text waits for the field, as typing does.
+                if self.takeAttachments?() == true { return nil }
+            } else {
+                guard self.shouldRoute(event, in: window) else { return event }
+                self.focus?()
+            }
             self.pending = [event]
-            self.focus?()
             self.deliver(to: window, attempt: 0)
             return nil
         }
@@ -248,13 +269,17 @@ final class TypeToCompose {
     /// Keys waiting for the composer to take the keyboard, oldest first.
     private var pending: [NSEvent] = []
 
-    private func shouldRoute(_ event: NSEvent, in window: NSWindow) -> Bool {
-        // The composer's own window, not a sheet, popover or the settings window; and not while
-        // an image is open over it.
+    /// The composer's own window, not a sheet, popover or the settings window; not while an
+    /// image is open over it; and not when something that takes text already has the keyboard.
+    private func takesKeys(in window: NSWindow) -> Bool {
         guard window === self.window, window.attachedSheet == nil, ImageViewerState.shared.item == nil else { return false }
-        guard event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty else { return false }
-        // Something that takes text already has the keyboard: leave it be.
         if let editor = window.firstResponder as? NSTextView, editor.isEditable { return false }
+        return true
+    }
+
+    private func shouldRoute(_ event: NSEvent, in window: NSWindow) -> Bool {
+        guard takesKeys(in: window) else { return false }
+        guard event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty else { return false }
         guard let characters = event.characters, !characters.isEmpty else { return false }
         // Typed characters only: not Return, Tab, Delete, Escape or the arrow and function keys,
         // which AppKit gives as control characters or from a private range.
@@ -272,7 +297,8 @@ final class TypeToCompose {
             editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
             let keys = pending
             pending = []
-            keys.forEach(window.sendEvent)
+            // Paste as the Edit menu's Paste would, now the composer's field is there to take it.
+            for key in keys { if key.isPaste { editor.paste(nil) } else { window.sendEvent(key) } }
             return
         }
         guard attempt < 12 else {
