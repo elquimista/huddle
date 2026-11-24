@@ -17,6 +17,9 @@ final class CallCenter {
 
     @PerceptionIgnored private var incomingPanel: NSPanel?
     @PerceptionIgnored private var ringTask: Task<Void, Never>?
+    /// The ringtone playing while a call rings in.
+    @PerceptionIgnored private var ringtone: NSSound?
+    @PerceptionIgnored private var isRingtoneOn = false
     @PerceptionIgnored private var declineHandle: TaskHandle?
     /// Rooms a call is being placed in, while it's worked out which kind.
     @PerceptionIgnored private var placing: Set<String> = []
@@ -181,6 +184,7 @@ final class CallCenter {
                     }
                 })
         }
+        startRingtone()
         ringTask = Task { [weak self] in
             var first = true
             while !Task.isCancelled, Date() < call.expires {
@@ -193,7 +197,8 @@ final class CallCenter {
                     if !room.hasActiveRoomCall() || room.activeRoomCallParticipants().contains(ownID) { break }
                 }
                 first = false
-                if !DevHooks.mutesAudio { NSSound(named: "Submarine")?.play() }
+                // Without the ringtone, the alert sound now and then.
+                if self?.ringtone == nil, !DevHooks.mutesAudio { NSSound(named: "Submarine")?.play() }
                 try? await Task.sleep(for: .seconds(2.5))
             }
             guard !Task.isCancelled, let self else { return }
@@ -251,6 +256,7 @@ final class CallCenter {
     func dismissIncoming(keepingCall: Bool = false) {
         ringTask?.cancel()
         ringTask = nil
+        stopRingtone()
         declineHandle?.cancel()
         declineHandle = nil
         let legacy = incoming?.legacy
@@ -258,6 +264,30 @@ final class CallCenter {
         incomingPanel?.close()
         incomingPanel = nil
         if !keepingCall { legacy?.abandon() }
+    }
+
+    /// The Mac's own ringtone ("Opening", the iPhone's, which FaceTime has), round and round
+    /// until the call is answered, declined or over. Where a macOS doesn't have it, the ring is
+    /// the alert sound every couple of seconds instead.
+    private static let ringtoneURL = URL(fileURLWithPath:
+        "/System/Library/PrivateFrameworks/ToneLibrary.framework/Versions/A/Resources/Ringtones/Opening.m4r")
+
+    private func startRingtone() {
+        stopRingtone()
+        isRingtoneOn = true
+        // For scripted tests, which keep Dev quiet (HUDDLE_DEV_MUTE_AUDIO).
+        if AppEnvironment.isDev { print("DEV_RINGTONE on"); fflush(stdout) }
+        guard !DevHooks.mutesAudio, let sound = NSSound(contentsOf: Self.ringtoneURL, byReference: true) else { return }
+        sound.loops = true
+        if sound.play() { ringtone = sound }
+    }
+
+    private func stopRingtone() {
+        guard isRingtoneOn else { return }
+        isRingtoneOn = false
+        if AppEnvironment.isDev { print("DEV_RINGTONE off"); fflush(stdout) }
+        ringtone?.stop()
+        ringtone = nil
     }
 
     private func showIncomingPanel(for call: IncomingCall) {
