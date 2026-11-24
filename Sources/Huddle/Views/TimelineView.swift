@@ -19,11 +19,22 @@ struct TimelineView: View {
         self.placeholder = placeholder
         self.onOpenThread = onOpenThread
         self.room = room
-        // A view around an older message isn't at the newest one, from the very start.
-        _followsNewest = State(initialValue: timeline.focusedEvent == nil)
-        // Only the newest rows of a long timeline are drawn, from the very first frame.
+        // A view around an older message isn't at the newest one, from the very start; nor is
+        // one going back to where the room was left, up its history.
+        let spot = timeline.returnSpot
+        _returnSpot = State(initialValue: spot)
+        _followsNewest = State(initialValue: timeline.focusedEvent == nil && spot == nil)
+        if spot != nil {
+            _isAtBottom = State(initialValue: false)
+            _isAtEnd = State(initialValue: false)
+        }
+        // Only the newest rows of a long timeline are drawn, from the very first frame: from a
+        // few dozen above the message going back to, when there is one.
         let rows = timeline.rows
-        if timeline.focusedEvent == nil, rows.count > Self.rowsAtFirst {
+        if let spot, let index = rows.lastIndex(where: { $0.eventID == spot.eventID }) {
+            let first = index - Self.rowsAtFirst
+            _firstShownID = State(initialValue: first > rows.startIndex ? rows[first].id : nil)
+        } else if timeline.focusedEvent == nil, rows.count > Self.rowsAtFirst {
             _firstShownID = State(initialValue: rows[rows.count - Self.rowsAtFirst].id)
         }
     }
@@ -77,6 +88,9 @@ struct TimelineView: View {
     @State private var bannerAnimates = false
     /// Focused timeline: whether the message it was opened for has been shown.
     @State private var hasShownFocus = false
+    /// Where the room was left, up its history, to open there rather than at the newest
+    /// message; until it has.
+    @State private var returnSpot: ReadingSpot?
     /// Focused timeline: until when that message stays in the middle as earlier messages load
     /// above it, unless the reader scrolls first.
     @State private var centersFocusUntil: Date?
@@ -429,8 +443,21 @@ struct TimelineView: View {
                 guard let focus = timeline.focusedEvent, !hasShownFocus,
                       let row = timeline.rows.first(where: { $0.eventID == focus }) else { return }
                 hasShownFocus = true
+                // Back where the room was left: as it was, nothing lit up.
+                if let spot = returnSpot, spot.eventID == focus {
+                    returnSpot = nil
+                    DispatchQueue.main.async { returnToSpot(row.id, top: spot.top, proxy) }
+                    return
+                }
                 centersFocusUntil = Date().addingTimeInterval(2)
                 DispatchQueue.main.async { show(row.id, proxy, animated: false) }
+            }
+            // The stretch the room was left at couldn't be loaded (offline, say): the room as it
+            // is now, then, rather than an empty view.
+            .onChange(of: timeline.error) { _, error in
+                if error != nil, returnSpot != nil, timeline.focusedEvent != nil, timeline.rows.isEmpty {
+                    room?.returnToLive()
+                }
             }
             .task {
                 try? await Task.sleep(for: .seconds(1))
@@ -441,9 +468,14 @@ struct TimelineView: View {
                 if timeline.isLive { timeline.holdsUnread = false }
                 if timeline.threadRoot == nil { PerfLog.markDrawn("room on screen, \(shownRows.count) of \(timeline.rows.count) rows drawn") }
                 TimelineLog.log.notice("Opened a \(timeline.threadRoot == nil ? "room" : "thread", privacy: .public) with \(timeline.rows.count) rows loaded")
+                timeline.returnSpot = nil
                 if timeline.focusedEvent != nil {
                     followsNewest = false
+                } else if let spot = returnSpot, let row = timeline.rows.last(where: { $0.eventID == spot.eventID }) {
+                    returnSpot = nil
+                    returnToSpot(row.id, top: spot.top, proxy)
                 } else if !timeline.rows.isEmpty {
+                    returnSpot = nil
                     scrollToBottom(proxy)
                 }
             }
@@ -645,6 +677,8 @@ struct TimelineView: View {
         .animation(.easeOut(duration: 0.12), value: isDropTarget)
         .onDisappear {
             keepDraft()
+            // The room's own conversation opens here again, if it was up its history.
+            if room != nil { account?.keepReadingSpot(readingSpot, for: timeline.roomID) }
             searchTask?.cancel()
             input.stop()
             pasteInterceptor.stop()
@@ -696,6 +730,44 @@ struct TimelineView: View {
 
     private var replyCount: Int {
         max(timeline.rows.filter(\.isMessage).count - 1, 0)
+    }
+
+    /// Opens on the message the room was left at, its top where it was in the view. Near there
+    /// first, at once (the row's height, which lining its top up exactly takes, is known once
+    /// it has been drawn); then exactly there, and held there as the rows around it settle.
+    private func returnToSpot(_ rowID: String, top: CGFloat, _ proxy: ScrollViewProxy) {
+        TimelineLog.log.notice("Opened where the room was left\(timeline.focusedEvent == nil ? "" : ", in a view around it", privacy: .public): \(shownRows.count, privacy: .public) of \(timeline.rows.count, privacy: .public) rows drawn")
+        followsNewest = false
+        // No earlier rows drawn or loaded meanwhile: they would move it from under the view.
+        showingRowUntil = Date().addingTimeInterval(0.6)
+        place.heldRow = (rowID, top)
+        place.heldSince = Date()
+        place.returningUntil = Date().addingTimeInterval(0.6)
+        // The view's height isn't known yet as it opens: in the middle, then, where the message
+        // nearest the middle was.
+        let span = place.viewport - place.topInset
+        jump(proxy, to: rowID, anchor: UnitPoint(x: 0, y: span > 0 ? min(max(top / span, 0), 1) : 0.5))
+        for delay in [0.0, 0.05, 0.15, 0.3, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                restoreReadingPlace(proxy)
+                guard delay == 0.6, place.heldRow?.id == rowID else { return }
+                place.heldRow = nil
+                viewWillMove(for: 0)
+                // The newest message in view after all (a taller window): follow it again.
+                if isAtBottom, timeline.focusedEvent == nil { followsNewest = true }
+            }
+        }
+    }
+
+    /// Where the conversation is being read, unless it's at the newest message: the message
+    /// nearest the middle of the view, and where its top is.
+    private var readingSpot: ReadingSpot? {
+        let atNewest = timeline.focusedEvent == nil ? followsNewest : isAtBottom && !timeline.hasMoreNewer
+        guard !atNewest else { return nil }
+        let messages = shownRows.filter { $0.eventID != nil }
+        guard let middle = place.middleRow(among: messages.map(\.id)),
+              let eventID = messages.first(where: { $0.id == middle.id })?.eventID else { return nil }
+        return ReadingSpot(eventID: eventID, top: middle.top)
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
@@ -774,7 +846,10 @@ struct TimelineView: View {
     ///   rows drawn), so the held one is the same height after: it is put back in that same
     ///   update, before anything is drawn. Otherwise (the text re-wrapping) once laid out anew.
     private func holdReadingPlace(_ proxy: ScrollViewProxy, rowsKeepTheirSize: Bool = false) {
-        guard let middle = place.middleRow(among: timeline.rows.map(\.id)) else { return }
+        // Still on the way to where the room was left: that's the place, not wherever the view
+        // has got to.
+        let returning = Date() < place.returningUntil && !input.hasInput(since: place.heldSince)
+        guard let middle = (returning ? place.heldRow : nil) ?? place.middleRow(among: shownRows.map(\.id)) else { return }
         place.heldRow = middle
         place.heldSince = Date()
         if rowsKeepTheirSize, let frame = place.rows[middle.id] ?? nil {
@@ -834,7 +909,7 @@ struct TimelineView: View {
         place.anchorWork?.cancel()
         let work = DispatchWorkItem {
             guard !followsNewest, place.heldRow == nil else { return }
-            place.anchor = place.middleRow(among: timeline.rows.map(\.id))
+            place.anchor = place.middleRow(among: shownRows.map(\.id))
         }
         place.anchorWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
@@ -846,7 +921,7 @@ struct TimelineView: View {
     private func restoreReadingPlace(_ proxy: ScrollViewProxy) {
         guard !followsNewest, place.heldRow != nil else { return }
         if input.hasInput(since: place.heldSince) {
-            if let middle = place.middleRow(among: timeline.rows.map(\.id)) {
+            if let middle = place.middleRow(among: shownRows.map(\.id)) {
                 place.heldRow = middle
                 place.heldSince = Date()
             }
@@ -3289,8 +3364,12 @@ final class ReadingPlace {
     var contentChanged = Date.distantPast
     /// When `heldRow` was taken: the reader's own scrolling after it wins over it.
     var heldSince = Date.distantPast
+    /// Until when `heldRow` is where the room was left, as it opens there again.
+    var returningUntil = Date.distantPast
 
-    /// The row nearest the middle of the view, and where its top is.
+    /// The row nearest the middle of the view, and where its top is: among the rows drawn, which
+    /// callers pass, since one no longer drawn (as history arrives, those drawn can change) still
+    /// has where it last was.
     func middleRow(among order: [String]) -> (id: String, top: CGFloat)? {
         let middle = viewport / 2
         var best: (id: String, top: CGFloat, distance: CGFloat)?
