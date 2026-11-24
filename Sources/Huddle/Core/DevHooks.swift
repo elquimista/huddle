@@ -51,6 +51,9 @@ import Foundation
 ///                        (points per event, up toward older messages when positive). Scroll events posted
 ///                        from outside don't reach a window in the background; these are handed to the app
 ///                        from within, past its event monitors, as the reader's are.
+///   HUDDLE_DEV_POINTER   where the room list takes the pointer to be, when asked from outside: the
+///                        "app.huddle.dev.pointer" distributed notification, its object "x,y" in points from the
+///                        main window's top left, or "none" for the real pointer again (which is left alone)
 ///   HUDDLE_DEV_CROP_THUMBNAILS  send images with a square thumbnail cropped from the middle, as some phone apps do
 ///   HUDDLE_DEV_SLOW_ANIMATIONS  slow the timeline's animations down by this factor, to inspect them
 ///   HUDDLE_DEV_PRESENCE_INTERVAL  seconds between presence checks, instead of 30 and 90
@@ -265,6 +268,21 @@ enum DevHooks {
         post(0, phase: 4, after: gap * Double(max(events, 1) + 1))
     }
 
+    private static func listenForPointer() {
+        DistributedNotificationCenter.default().addObserver(forName: .init("app.huddle.dev.pointer"), object: nil,
+                                                            queue: .main) { note in
+            let parts = (note.object as? String ?? "").split(separator: ",").compactMap { Double($0) }
+            MainActor.assumeIsolated {
+                if parts.count == 2, let window = MainWindow.window {
+                    RoomListHover.devPointer = NSPoint(x: parts[0], y: window.frame.height - parts[1])
+                } else {
+                    RoomListHover.devPointer = nil
+                }
+                NotificationCenter.default.post(name: RoomListHover.devPointerMoved, object: nil)
+            }
+        }
+    }
+
     static let freeScroll = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_FREE_SCROLL"] != nil
     /// Gives every message its actions as accessibility actions even without VoiceOver, so tests
     /// can reach them.
@@ -301,6 +319,7 @@ enum DevHooks {
         guard AppEnvironment.isDev, !startsFresh else { return }
         let env = ProcessInfo.processInfo.environment
         if env["HUDDLE_DEV_WHEEL"] != nil { listenForWheel() }
+        if env["HUDDLE_DEV_POINTER"] != nil { listenForPointer() }
 
         if let server = env["HUDDLE_DEV_SERVER"], let password = env["HUDDLE_DEV_PASSWORD"] {
             let names = (env["HUDDLE_DEV_ACCOUNTS"] ?? "").split(separator: ",").map(String.init)

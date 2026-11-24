@@ -10,6 +10,8 @@ struct RoomListView: View {
     @State private var renaming: RoomSection?
     @State private var deleting: RoomSection?
     @State private var failure: Failure?
+    /// The row the pointer is on, which shows a wash.
+    @State private var hover = RoomListHover()
 
     private struct NewSection {
         var roomID: String?
@@ -38,6 +40,10 @@ struct RoomListView: View {
                 if !account.searchText.isEmpty { account.showInList(roomID) }
                 proxy.scrollTo(roomID)
             }
+            .environment(\.roomListHover, hover)
+            .background(RoomListPointerArea(hover: hover))
+            // Rooms changing places under a still pointer: the wash goes to the row now there.
+            .onChanged(of: account.sections.flatMap { $0.rooms.map(\.id) }) { hover.rowsMoved() }
         } }
         .listStyle(.sidebar)
         .searchable(text: $account.searchText, placement: .sidebar, prompt: "Search rooms")
@@ -357,10 +363,11 @@ private struct RoomListRow: View {
     let account: AccountSession
     let room: RoomSummary
     let actions: RoomListSection.Actions
-    @State private var isHovering = false
+    @Environment(\.roomListHover) private var hover
 
     var body: some View { WithPerceptionTracking {
         let isSelected = account.selectedRoomID == room.id
+        let isPointedAt = hover?.row(room.id).isPointedAt == true || DevHooks.hoveredNames.contains(room.name)
         RoomRow(room: room, media: account.media, reaction: account.reactionPreviews[room.id],
                 threadReply: account.threadReplyDates[room.id],
                 ringing: room.lastCallInvite.flatMap {
@@ -375,16 +382,17 @@ private struct RoomListRow: View {
                 isSelected: isSelected)
             // Pointed at, a faint wash where the selection would be: which row a click opens.
             .background {
-                if isHovering && !isSelected {
+                if isPointedAt && !isSelected {
                     RoundedRectangle(cornerRadius: RoomHoverWash.corner, style: .continuous)
                         .fill(Color.primary.opacity(0.04))
                         .padding(RoomHoverWash.outset)
                         .transition(.opacity)
                 }
             }
-            .animation(.easeOut(duration: 0.12), value: isHovering)
-            .onHoverInFrontWindow { isHovering = $0 }
-            .onAppear { if DevHooks.hoveredNames.contains(room.name) { isHovering = true } }
+            .animation(.easeOut(duration: 0.12), value: isPointedAt)
+            // Where the row is, as far as the wash reaches, for the list to tell which row the
+            // pointer is on (RoomListHover).
+            .background { RoomHoverProbe(id: room.id, hover: hover).padding(RoomHoverWash.outset) }
             .tag(room.id)
             .listRowDraggable(room.id) {
                 Label(room.name, systemImage: "bubble.left")
