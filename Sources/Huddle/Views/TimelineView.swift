@@ -208,14 +208,16 @@ struct TimelineView: View {
         }
         .onAppear {
             restoreDraft()
-            // Ready to type in. Not when the room was reached with the arrow keys, though: the
-            // keyboard stays in the room list so the arrows keep moving through it (typing
-            // still lands here, by way of `typeToCompose`).
+            // Ready to type in. Not when the room was reached with the arrow keys or a click in the
+            // room list, though: the keyboard stays in the list, as a Mac sidebar keeps it, so its
+            // row stays highlighted and the arrows carry on through it (typing and ⌘V still land
+            // here, by way of `typeToCompose`).
             let chosenToWriteIn = account?.wantsComposerFocus == true && timeline.threadRoot == nil
             if chosenToWriteIn { account?.wantsComposerFocus = false }
-            if NSApp.currentEvent?.type != .keyDown || chosenToWriteIn {
+            let event = NSApp.currentEvent
+            if (event?.type != .keyDown && !Self.isClickInRoomList(event)) || chosenToWriteIn {
                 composerFocused = true
-                // Clicking a row in the list leaves the keyboard with the list for a moment.
+                // A click elsewhere can leave the keyboard where it was for a moment.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { composerFocused = true }
                 // A draft put back is carried on with, not typed over: a field taking the keyboard
                 // selects all it holds.
@@ -225,6 +227,7 @@ struct TimelineView: View {
             }
             if timeline.threadRoot == nil {
                 typeToCompose.focus = { composerFocused = true }
+                typeToCompose.takeAttachments = { [pasteInterceptor] in pasteInterceptor.takeAttachments() }
                 typeToCompose.start()
             }
             input.onInput = { viewWillMove(for: 0.15) }
@@ -1433,6 +1436,14 @@ struct TimelineView: View {
             stagedImages = saved.images
             stagedFiles = saved.files
         }
+    }
+
+    /// Whether a room was chosen by clicking it in the room list, which took the keyboard as it
+    /// was clicked. The list is the window's only table (SwiftUI's List is one underneath).
+    private static func isClickInRoomList(_ event: NSEvent?) -> Bool {
+        guard let event, [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type),
+              let list = event.window?.firstResponder as? NSTableView else { return false }
+        return list.visibleRect.contains(list.convert(event.locationInWindow, from: nil))
     }
 
     /// The cursor at the end of what's in the composer, with nothing selected.
