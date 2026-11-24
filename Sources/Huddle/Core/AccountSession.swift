@@ -35,6 +35,9 @@ struct RoomSummary: Identifiable, Equatable {
     /// False when the room's details could not be read, so the counts above mean nothing.
     var hasCounts = false
     var lastMessage: String?
+    /// The newest message is the invite of a one-to-one call of the older kind: the row says
+    /// it's ringing while it does (`CallCenter.ringingPreview`).
+    var lastCallInvite: CallInvitePreview?
     /// A call is going on in the room (MatrixRTC: someone is in it).
     var hasCall = false
     /// How many are in the call going on, counting each device.
@@ -62,6 +65,13 @@ struct RoomSummary: Identifiable, Equatable {
     /// gathered (a space's badge in the rail, Next Unread Room), as Element leaves them out of a
     /// space's badge. A count, a mention, or marking it unread on purpose still counts.
     var isLowPriorityActivity: Bool { isLowPriority && !isHighlighted && !isMarkedUnread }
+}
+
+/// A call's invite as the newest message in a room: who the preview says sent it.
+struct CallInvitePreview: Equatable {
+    /// "You", their name, or nobody in a direct chat, where it goes without saying.
+    let sender: String?
+    let isOwn: Bool
 }
 
 /// One logged-in account: its client, sliding sync and room list.
@@ -1720,10 +1730,12 @@ extension RoomSummary {
             let prefix = isOwn ? "You" : (isOneToOneChat ? nil : names[sender] ?? profile.name(fallback: sender))
             summary.lastMessage = content.preview(sender: prefix, contactName: { names[$0] })
             summary.lastMessageInThread = Self.inThread(prefix, content).flatMap { content.preview(sender: $0, contactName: { names[$0] }) }
+            if case .callInvite = content { summary.lastCallInvite = CallInvitePreview(sender: prefix, isOwn: isOwn) }
         case .local(let timestamp, _, _, let content, _):
             summary.timestamp = Date(matrixTimestamp: timestamp)
             summary.lastMessage = content.preview(sender: "You")
             summary.lastMessageInThread = Self.inThread("You", content).flatMap { content.preview(sender: $0) }
+            if case .callInvite = content { summary.lastCallInvite = CallInvitePreview(sender: "You", isOwn: true) }
         case .remoteInvite(let timestamp, let inviter, let profile):
             summary.timestamp = Date(matrixTimestamp: timestamp)
             summary.lastMessage = inviter.map { "Invited by \(names[$0] ?? profile.name(fallback: $0))" } ?? "Invitation"

@@ -95,9 +95,16 @@ enum CallHistory {
         }
         // Nothing yet: still ringing, or it rang out with nobody saying so.
         if now < invite.date.addingTimeInterval(invite.lifetime ?? 60) {
-            return isOwn ? "You’re calling" : "\(callerName) is calling"
+            return ringing(callerName: callerName, isOwn: isOwn)
         }
         return isOwn ? "\(called) · No answer" : "\(called) · Missed"
+    }
+
+    /// A call still ringing: "You’re calling", "Bob is calling", or "Calling you" where who it
+    /// is goes without saying (in a direct chat's preview, as "Called you" does).
+    static func ringing(callerName: String?, isOwn: Bool) -> String {
+        if isOwn { return "You’re calling" }
+        return callerName.map { "\($0) is calling" } ?? "Calling you"
     }
 
     /// The line for an Element Call call's start, from what the SDK knows of it: declined, in

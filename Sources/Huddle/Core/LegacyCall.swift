@@ -77,6 +77,8 @@ final class LegacyCall: HuddleCall {
 
     @ObservationIgnored var onEnded: (() -> Void)?
     @ObservationIgnored let media = CallMedia()
+    /// What the caller hears while the other person is rung.
+    @ObservationIgnored private let ringback = Ringback()
     var page: WKWebView? { media.webView }
     @ObservationIgnored private let signals = CallSignals()
     @ObservationIgnored private var offerSDP: String?
@@ -200,6 +202,7 @@ final class LegacyCall: HuddleCall {
                 return
             }
             state = .calling
+            ringback.start()
             hasSignalled = true
             flushCandidates()
             timeoutTask = Task { [weak self] in
@@ -392,6 +395,7 @@ final class LegacyCall: HuddleCall {
     private func accept(_ sdp: String, from party: String?, content: [String: Any]) {
         opponentPartyID = party
         state = .connecting
+        ringback.stop()
         timeoutTask?.cancel()
         if let muted = Self.isAudioMuted(in: content) { peerIsMuted = muted }
         Task {
@@ -482,6 +486,7 @@ final class LegacyCall: HuddleCall {
         guard !isEnded else { return }
         Self.log("\(account.userID) ended: \(ending)\(event.map { ", sending \($0.type)" } ?? "")")
         state = .ended(ending)
+        ringback.stop()
         timeoutTask?.cancel()
         flushTask?.cancel()
         media.close()

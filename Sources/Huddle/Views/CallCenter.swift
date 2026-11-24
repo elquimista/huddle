@@ -34,6 +34,20 @@ final class CallCenter {
         call(for: account, roomID: roomID) != nil
     }
 
+    /// What a room's preview says while its newest message, the invite of a call of the older
+    /// kind, still rings: placed from here and not yet answered, or ringing in here. Nil once it
+    /// isn't, when the preview says who called, as before.
+    func ringingPreview(account: AccountSession, roomID: String, invite: CallInvitePreview) -> String? {
+        if invite.isOwn {
+            guard let call = call(for: account, roomID: roomID) as? LegacyCall, call.isOutgoing,
+                  call.state == .starting || call.state == .calling else { return nil }
+        } else {
+            guard let incoming, incoming.account === account, incoming.roomID == roomID,
+                  incoming.legacy?.isRinging == true else { return nil }
+        }
+        return CallHistory.ringing(callerName: invite.sender, isOwn: invite.isOwn)
+    }
+
     /// Starts a call in a room, or joins the one going on there: a voice call in a direct chat
     /// rings the other person. One call at a time: another going on is left first.
     ///
