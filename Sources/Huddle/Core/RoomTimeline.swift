@@ -263,6 +263,9 @@ final class RoomTimeline {
     /// Where a view of this timeline opens instead of at the newest message: where the room
     /// was left, up its history. The view takes it as it opens.
     @PerceptionIgnored var returnSpot: ReadingSpot?
+    /// Called just before older messages are put above the oldest one (`prependCount`), for
+    /// the view to get ready to hold its place as they are laid out.
+    @PerceptionIgnored var willAddAbove: (() -> Void)?
     private(set) var rows: [TimelineRow] = []
     private(set) var isLoading = true
     private(set) var hasMoreHistory = true
@@ -650,9 +653,11 @@ final class RoomTimeline {
         // Detect history landing above what was the oldest message, so the view can hold its place.
         let oldFirst = self.rows.first(where: \.isMessage)?.id
         let newFirst = rows.first(where: \.isMessage)?.id
+        let addsAbove = oldFirst != nil && oldFirst != newFirst && rows.contains(where: { $0.id == oldFirst })
+        if addsAbove { willAddAbove?() }
         self.rows = rows
         if isLive { updateLatestReaction() }
-        if let oldFirst, oldFirst != newFirst, rows.contains(where: { $0.id == oldFirst }) {
+        if addsAbove, let oldFirst {
             prependAnchorID = oldFirst
             prependCount += 1
         }

@@ -25,9 +25,13 @@ struct ImageMessageView: View {
     @State private var hasFailed = false
     @State private var attempt = 0
     @State private var isOnScreen = false
+    /// Whether all of the picture is above the middle of what shows of the conversation, where
+    /// what's being read is (`ReadingPlace`).
+    @State private var isAboveReading = false
     @Environment(\.displayScale) private var displayScale
     /// The scroll view's size, for what's in view on macOS 13 (Compat.swift).
     @Environment(\.scrollViewport) private var scrollViewport
+    @Environment(\.readingPlace) private var readingPlace
 
     private struct LoadKey: Equatable {
         let url: String
@@ -118,14 +122,24 @@ struct ImageMessageView: View {
                 shape.strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: still != nil)
         // An animation only runs while it can be seen.
-        .onGeometryChange(for: Bool.self) { [scrollViewport] proxy in
-            guard let visible = ScrollSpace.visibleBounds(proxy, viewport: scrollViewport) else { return true }
-            return visible.intersects(proxy.frame(in: .local))
-        } action: { isOnScreen = $0 }
+        .onGeometryChange(for: Placement.self) { [scrollViewport] proxy in
+            guard let visible = ScrollSpace.visibleBounds(proxy, viewport: scrollViewport) else {
+                return Placement(isOnScreen: true, isAboveReading: false)
+            }
+            let frame = proxy.frame(in: .local)
+            return Placement(isOnScreen: visible.intersects(frame), isAboveReading: frame.maxY <= visible.midY)
+        } action: { placement in
+            isOnScreen = placement.isOnScreen
+            isAboveReading = placement.isAboveReading
+        }
         .task(id: LoadKey(url: image.media.source.url(), attempt: attempt, isLocal: sendState != nil)) { await load() }
     } }
+
+    private struct Placement: Equatable {
+        let isOnScreen: Bool
+        let isAboveReading: Bool
+    }
 
     // MARK: Loading
 
@@ -140,12 +154,16 @@ struct ImageMessageView: View {
             return
         }
         // Reshape the frame if the picture turns out not to be the shape the sender said, and
-        // remember that, so the frame is right from the start next time it is drawn.
+        // remember that, so the frame is right from the start next time it is drawn. At once,
+        // not as the picture fades in: a frame changing size over several frames carries every
+        // message under it along. Above what's being read, the conversation moves with it, so
+        // that stays put, and the picture grows or shrinks upward.
         if let corrected = image.correctedPixelSize(seeing: loaded.size) {
             ImageShapes.remember(corrected, for: image)
+            if isAboveReading { readingPlace?.changeAbove(for: 0.1) }
             correctedSize = corrected
         }
-        still = loaded
+        withAnimation(.easeOut(duration: 0.2)) { still = loaded }
         if image.isAnimated, sendState == nil {
             animation = await media.animatedImage(for: image)
         }
