@@ -1612,7 +1612,11 @@ extension RoomSummary {
     ///   chat's name and whoever wrote the newest message.
     static func make(from room: Room, names: [String: String] = [:]) async -> RoomSummary {
         var summary = RoomSummary(id: room.id(), name: room.displayName() ?? room.id())
+        // A direct chat with one other person: who wrote its newest message goes without saying.
+        // One with more names them, as a room does (and as its notifications do).
+        var isOneToOneChat = false
         if let info = try? await room.roomInfo() {
+            isOneToOneChat = info.isDirect && info.joinedMembersCount <= 2
             summary.name = info.displayName ?? info.canonicalAlias ?? "Empty room"
             summary.avatarURL = info.avatarUrl
             summary.isDirect = info.isDirect
@@ -1645,7 +1649,7 @@ extension RoomSummary {
             break
         case .remote(let timestamp, let sender, let isOwn, let profile, let content):
             summary.timestamp = Date(matrixTimestamp: timestamp)
-            let prefix = isOwn ? "You" : (summary.isDirect ? nil : names[sender] ?? profile.name(fallback: sender))
+            let prefix = isOwn ? "You" : (isOneToOneChat ? nil : names[sender] ?? profile.name(fallback: sender))
             summary.lastMessage = content.preview(sender: prefix, contactName: { names[$0] })
             summary.lastMessageInThread = Self.inThread(prefix, content).flatMap { content.preview(sender: $0, contactName: { names[$0] }) }
         case .local(let timestamp, _, _, let content, _):
@@ -1660,8 +1664,8 @@ extension RoomSummary {
     }
 
     /// Who a message is from, said as a reply in a thread, as notifications say it: "Bob in a
-    /// thread", or "In a thread" in a direct chat. Nil for an emote, worded around its sender,
-    /// and for anything but a message.
+    /// thread", or "In a thread" in a direct chat with one other person. Nil for an emote,
+    /// worded around its sender, and for anything but a message.
     private static func inThread(_ sender: String?, _ content: TimelineItemContent) -> String? {
         guard case .msgLike(let message) = content else { return nil }
         if case .message(let body) = message.kind, case .emote = body.msgType { return nil }
