@@ -164,6 +164,12 @@ struct HuddleApp: App {
                 }
                 .keyboardShortcut("i", modifiers: .command)
                 .disabled(roomID == nil || account?.browsingSpaceID != nil)
+                Button("Media and Files") {
+                    if let account, let roomID {
+                        account.sidePanels[roomID] = account.sidePanels[roomID] == .media ? nil : .media
+                    }
+                }
+                .disabled(roomID == nil || account?.browsingSpaceID != nil)
                 // Into the room's own composer, as its microphone button does.
                 let voice = VoiceRecorder.shared
                 let isRecording = roomID.map { voice.key == $0 } ?? false

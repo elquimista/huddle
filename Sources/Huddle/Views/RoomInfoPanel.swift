@@ -8,12 +8,14 @@ import Perception
 struct RoomInfoPanelView: View {
     let account: AccountSession
     let roomID: String
+    /// Goes to the room's pictures, videos, sounds and files.
+    let showMedia: () -> Void
     @State private var details: RoomDetails?
 
     var body: some View { WithPerceptionTracking {
         Group {
             if let details {
-                RoomInfoContent(account: account, details: details)
+                RoomInfoContent(account: account, details: details, showMedia: showMedia)
             } else {
                 Color.clear
             }
@@ -33,6 +35,7 @@ struct RoomInfoPanelView: View {
 private struct RoomInfoContent: View {
     let account: AccountSession
     let details: RoomDetails
+    let showMedia: () -> Void
     @State private var isEditing = false
     @State private var draftName = ""
     @State private var draftTopic = ""
@@ -98,6 +101,8 @@ private struct RoomInfoContent: View {
                 }
                 Divider()
                 notifications
+                Divider()
+                mediaRow
                 Divider()
                 members
                 Divider()
@@ -403,6 +408,30 @@ private struct RoomInfoContent: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    // MARK: Media and files
+
+    /// To everything sent in the room as a picture, video, sound or file.
+    private var mediaRow: some View {
+        Button(action: showMedia) {
+            HStack(spacing: 12) {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22)
+                Text("Media and Files")
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Images, videos, audio, PDFs and other files sent in this \(noun.lowercased())")
     }
 
     // MARK: Notifications
