@@ -861,9 +861,14 @@ struct TimelineView: View {
                 jump(proxy, to: middle.id, anchor: UnitPoint(x: 0, y: middle.top / (span - frame.height)))
             }
         }
+        // Moved with the rows by AppKit, the view is where it was: SwiftUI's measure of the rows
+        // can lag that by everything drawn above (the more so on a busy main thread), and a jump
+        // back by it, which SwiftUI doesn't always drop mid-scroll, would undo the move. Not on
+        // the way back to where the room was left, which isn't where the view is yet.
+        let checksPlace = !movesWithRows || returning
         for delay in [0.0, 0.05, 0.3] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                restoreReadingPlace(proxy)
+                if checksPlace { restoreReadingPlace(proxy) }
                 if delay == 0.3 {
                     place.heldRow = nil
                     viewWillMove(for: 0)
@@ -881,7 +886,8 @@ struct TimelineView: View {
     /// jumped up. The place is noted once the reader stops scrolling (and after the view's own
     /// moves), and the row put back whenever it moves for any other reason.
     private func keepReadingPlace(_ proxy: ScrollViewProxy) {
-        guard !followsNewest, place.heldRow == nil, let anchor = place.anchor,
+        // Not while AppKit's view moves with rows laid out above (`restoreReadingPlace`).
+        guard !followsNewest, place.heldRow == nil, !place.movesWithRows, let anchor = place.anchor,
               let frame = place.rows[anchor.id] ?? nil, abs(frame.minY - anchor.top) > 0.5 else { return }
         let span = place.viewport - place.topInset
         guard span > frame.height else { return }
@@ -896,6 +902,9 @@ struct TimelineView: View {
     /// it: it goes back. Otherwise the view was scrolled (its scroll bar's track clicked, say,
     /// which isn't noticed as scrolling), and where the row is now is the place.
     private func readingRowMoved(_ proxy: ScrollViewProxy) {
+        // Moved by rows laid out above, with AppKit's view moving by as much: it's where it was,
+        // whatever SwiftUI's measure of it, which can lag, says (`restoreReadingPlace`).
+        guard !place.movesWithRows else { return }
         if Date().timeIntervalSince(place.contentChanged) < 0.15 {
             keepReadingPlace(proxy)
         } else if let anchor = place.anchor, let frame = place.rows[anchor.id] ?? nil {
@@ -930,6 +939,10 @@ struct TimelineView: View {
             }
             return
         }
+        // AppKit's view is still moving with rows laid out above (`ReadingPlace.changeAbove`),
+        // ahead of the rows' places as SwiftUI measures them: going by those, the row would seem
+        // out of place, and the jump back would undo the move. The last pass checks it.
+        guard !place.movesWithRows else { return }
         guard let held = place.heldRow, let frame = place.rows[held.id] ?? nil,
               abs(frame.minY - held.top) > 0.5 else { return }    // already where it was
         // Rows are measured from just below the pinned banner, and scrolling to a point of a row
@@ -3360,6 +3373,9 @@ final class ReadingPlace {
 
     /// The conversation's height before rows were added above, and until when to follow it.
     private var addedAbove: (height: CGFloat, until: Date)?
+
+    /// Whether the view is moving with rows added above as they are laid out (`changeAbove`).
+    var movesWithRows: Bool { addedAbove.map { Date() < $0.until } ?? false }
 
     /// AppKit has laid the conversation out anew (ScrollViewProbe).
     func documentResized(_ document: NSView) {
