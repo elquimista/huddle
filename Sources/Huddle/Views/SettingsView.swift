@@ -482,8 +482,8 @@ private struct QuickReactionSlot: View {
 }
 
 /// Two messages as a room would show them with the choices above: the layout, and an
-/// emoji-only reply at its size. Always as tall as the tallest choice needs, the messages
-/// sitting at its foot as in a room, so the window keeps its height as the choices change.
+/// emoji-only reply at its size. As tall as they are, with nothing kept free for a taller
+/// choice: the window follows as the choices change (`WindowHeightAnimation`).
 private struct ConversationPreview: View {
     let layout: MessageLayout
     let emojiSize: EmojiSize
@@ -505,16 +505,10 @@ private struct ConversationPreview: View {
     ]
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            // Each layout with the largest emoji, unseen: the height the choices can need.
-            ForEach(MessageLayout.allCases) { layout in
-                messages(in: layout, emojiSize: .extraLarge).hidden()
-            }
-            messages(in: layout, emojiSize: emojiSize)
-        }
+        messages(in: layout, emojiSize: emojiSize)
         // A row of the Messages box, which frames it: a card of its own would be a box in a box.
         .padding(.bottom, 6)
-        .frame(maxWidth: .infinity, alignment: .bottomLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .animation(.snappy(duration: 0.25), value: layout)
         .animation(.snappy(duration: 0.25), value: emojiSize)
         .accessibilityElement(children: .ignore)
