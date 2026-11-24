@@ -8,6 +8,8 @@ struct ThreadPanel: View {
         case pinned
         case search
         case info
+        /// The room's pictures, videos, sounds and files.
+        case media
     }
 
     let account: AccountSession
@@ -19,6 +21,8 @@ struct ThreadPanel: View {
 
     /// True when the open thread was reached from the list, so there is a way back to it.
     @State private var cameFromList = false
+    /// True when Media and Files was reached from Room Info, so there is a way back to it.
+    @State private var cameFromInfo = false
     /// False for a moment as the panel arrives, so its content can fade in just behind it.
     @State private var hasSettled = false
     /// The pages laid out side by side, left to right: the one showing, or while moving from
@@ -84,7 +88,12 @@ struct ThreadPanel: View {
         case .search:
             SearchPanelView(account: account, roomID: roomID)
         case .info:
-            RoomInfoPanelView(account: account, roomID: roomID)
+            RoomInfoPanelView(account: account, roomID: roomID) {
+                cameFromInfo = true
+                show(.media)
+            }
+        case .media:
+            MediaListView(account: account, roomID: roomID) { root in show(.thread(root)) }
         }
     }
 
@@ -93,6 +102,7 @@ struct ThreadPanel: View {
     /// moves on the next turn, once both are in place. Reduce Motion swaps them with a fade.
     private func move(to new: Content) {
         if new == .threadList { cameFromList = false }
+        if new != .media, new != .info { cameFromInfo = false }
         let visible = (showsLast ? pages.last : pages.first) ?? new
         moveCount += 1
         guard visible != new else {
@@ -113,6 +123,9 @@ struct ThreadPanel: View {
         switch (visible, new) {
         case (_, .thread): forward = true
         case (.thread, _): forward = false
+        // Media and Files is a page of Room Info's.
+        case (.info, .media): forward = true
+        case (.media, .info): forward = false
         default:
             withAnimation(.easeOut(duration: 0.18)) {
                 pages = [new]
@@ -143,8 +156,13 @@ struct ThreadPanel: View {
         case .threadList: "Threads"
         case .pinned: "Pinned Messages"
         case .search: "Search"
-        case .info: account.allRooms.first { $0.id == roomID }?.isDirect == true ? "Chat Info" : "Room Info"
+        case .info: infoTitle
+        case .media: "Media and Files"
         }
+    }
+
+    private var infoTitle: String {
+        account.allRooms.first { $0.id == roomID }?.isDirect == true ? "Chat Info" : "Room Info"
     }
 
     private var header: some View {
@@ -161,6 +179,19 @@ struct ThreadPanel: View {
                 .buttonStyle(.plain)
                 .help("All threads")
                 .accessibilityLabel("All threads")
+                .transition(.opacity)
+            } else if cameFromInfo, content == .media {
+                Button {
+                    show(.info)
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(infoTitle)
+                .accessibilityLabel(infoTitle)
                 .transition(.opacity)
             }
             VStack(alignment: .leading, spacing: 1) {

@@ -1481,6 +1481,11 @@ final class AccountSession: Identifiable {
         room(id: roomID).map { prepared(RoomTimeline(room: $0, isPinnedList: true)) }
     }
 
+    /// A room's pictures, videos, audio and files, for Media and Files in its side panel.
+    func mediaTimeline(roomID: String) -> RoomTimeline? {
+        room(id: roomID).map { prepared(RoomTimeline(room: $0, isMediaList: true)) }
+    }
+
     /// The pinned messages for a room's banner, kept as long as the room's own timeline is
     /// kept warm: coming back to the room, the banner is there from the first frame instead of
     /// arriving a moment later and pushing the conversation down.

@@ -105,6 +105,8 @@ struct MessageRow: Equatable {
     var sendState: SendState?
     /// Present on a message that has thread replies.
     var thread: ThreadInfo?
+    /// A reply in a thread: its root message's event ID.
+    var threadRootID: String?
     /// Read receipts placed on this message, as the SDK reports them. Resolved into `readers`.
     var receipts: [RawReceipt] = []
     /// The sender's HTML formatting for a text message, if their client sent any.
@@ -235,12 +237,15 @@ final class RoomTimeline {
     let threadRoot: String?
     /// True for the timeline of the room's pinned messages, which is only read, never sent to.
     let isPinnedList: Bool
+    /// True for the timeline of the room's pictures, videos, audio and files, thread replies
+    /// among them (`MediaListView`): only read, never sent to.
+    let isMediaList: Bool
     /// Set for a timeline around one message far back in the room, opened to show it without
     /// loading everything since: that message's event ID.
     let focusedEvent: String?
     /// The room's own conversation as it is now, rather than a thread, the pinned messages, or
     /// a stretch around an older message.
-    var isLive: Bool { threadRoot == nil && !isPinnedList && focusedEvent == nil }
+    var isLive: Bool { threadRoot == nil && !isPinnedList && !isMediaList && focusedEvent == nil }
     /// Focused timeline only: whether there are newer messages still to load before the present.
     private(set) var hasMoreNewer = true
     /// Focused timeline only: counts finished requests for newer messages.
@@ -336,11 +341,13 @@ final class RoomTimeline {
     /// The typing notices sent so far, each after the one before, so the room hears them in order.
     @ObservationIgnored private var typingNotice: Task<Void, Never>?
 
-    init(room: Room, threadRoot: String? = nil, isPinnedList: Bool = false, focusedOn focusedEvent: String? = nil) {
+    init(room: Room, threadRoot: String? = nil, isPinnedList: Bool = false, isMediaList: Bool = false,
+         focusedOn focusedEvent: String? = nil) {
         self.room = room
         roomID = room.id()
         self.threadRoot = threadRoot
         self.isPinnedList = isPinnedList
+        self.isMediaList = isMediaList
         self.focusedEvent = focusedEvent
         ownUserID = room.ownUserId()
         updatesTask = Task { [weak self] in await self?.run() }
@@ -406,7 +413,7 @@ final class RoomTimeline {
     /// the message is sent or cleared), if the user shares that.
     func setTyping(_ isTyping: Bool) {
         if isTyping {
-            guard sharesTyping(), !isPinnedList else { return }
+            guard sharesTyping(), !isPinnedList, !isMediaList else { return }
             lastKeystroke = .now
             if typingKeeper == nil { typingKeeper = Task { [weak self] in await self?.keepTyping() } }
         } else if let keeper = typingKeeper {
@@ -472,6 +479,9 @@ final class RoomTimeline {
             let focus: TimelineFocus
             if isPinnedList {
                 focus = .pinnedEvents
+            } else if isMediaList {
+                // Thread replies' too: everything sent in the room.
+                focus = .live(hideThreadedEvents: false)
             } else if let focusedEvent {
                 focus = .event(eventId: focusedEvent, numContextEvents: 40,
                                threadMode: .automatic(hideThreadedEvents: true))
@@ -480,7 +490,7 @@ final class RoomTimeline {
             }
             let timeline = try await room.timelineWithConfiguration(configuration: TimelineConfiguration(
                 focus: focus,
-                filter: .all,
+                filter: isMediaList ? .onlyMessage(types: [.image, .video, .audio, .file]) : .all,
                 internalIdPrefix: nil,
                 dateDividerMode: .daily,
                 trackReadReceipts: .messageLikeEvents,
@@ -634,7 +644,7 @@ final class RoomTimeline {
             return rows[index]
         }
 
-        if threadRoot == nil, !isPinnedList {
+        if threadRoot == nil, !isPinnedList, !isMediaList {
             for index in rows.indices {
                 guard case .message(var message) = rows[index].kind, var thread = message.thread,
                       let root = message.eventID, let latest = thread.latestDate else { continue }
@@ -1188,7 +1198,7 @@ final class RoomTimeline {
     func markAsRead() async {
         // A stretch of older messages isn't where the room has been read up to; nor is a room
         // the user has just marked unread.
-        guard let timeline, focusedEvent == nil, !isPinnedList, !holdsUnread else { return }
+        guard let timeline, focusedEvent == nil, !isPinnedList, !isMediaList, !holdsUnread else { return }
         try? await timeline.markAsRead(receiptType: .read)
         hasReadToEnd = true
         guard threadRoot != nil else { return }
@@ -1323,6 +1333,7 @@ extension TimelineRow.Kind {
             },
             sendState: sendState,
             thread: ThreadInfo(content.threadSummary),
+            threadRootID: content.threadRoot,
             // Sorted so the same receipts always compare equal (dictionary order varies).
             receipts: event.readReceipts
                 .map { userID, receipt in
