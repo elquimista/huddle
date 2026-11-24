@@ -434,7 +434,7 @@ struct NewMessageSheet: View {
         if let inviteRoomID { return invite(to: inviteRoomID) }
         if goesToExisting, let roomID = chosen.count == 1 ? chosen[0].roomID : existingGroupID {
             dismiss()
-            account.showRoom(roomID)
+            account.showRoom(roomID, atNewest: true)
             return
         }
         isStarting = true
@@ -451,7 +451,7 @@ struct NewMessageSheet: View {
                     ? try await account.directChat(with: people[0].userID, encrypted: isEncrypted)
                     : try await account.groupChat(with: people.map(\.userID), name: groupName, encrypted: isEncrypted)
                 dismiss()
-                account.showRoom(roomID)
+                account.showRoom(roomID, atNewest: true)
             } catch {
                 failure = "Couldn’t start the chat: \(error.actionMessage)"
             }

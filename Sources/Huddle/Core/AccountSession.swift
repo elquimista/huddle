@@ -158,6 +158,7 @@ final class AccountSession: Identifiable {
             guard selectedRoomID != oldValue else { return }
             // The room left: its row says what was being written there.
             if let oldValue { refreshDraftPreview(forRoom: oldValue) }
+            forgetUnshownReturns()
             // From the click in the rail, when the room came with a space.
             if railChoice == nil { PerfLog.began("room selected") } else { PerfLog.mark("room selected") }
             updatePresenceWatch()
@@ -165,6 +166,17 @@ final class AccountSession: Identifiable {
     }
     /// Who is around, for the direct chats on screen.
     let presence: PresenceTracker
+    /// Where each room was left, scrolled up through its history, so that it opens there again.
+    /// For as long as Huddle is open.
+    @PerceptionIgnored private var readingSpots: [String: ReadingSpot] = [:]
+    /// Rooms closed since they were last shown: they open at their reading spot, if they have
+    /// one. (A room's conversation also closes and notes its spot when the room swaps it for a
+    /// view around an older message, or back, but stays open.)
+    @PerceptionIgnored private var closedRooms: Set<String> = []
+    /// A view around the message a room was left at, made as the room opens again, for it to
+    /// show from the first frame: its own timeline no longer had that message (see
+    /// `returnView(for:)`).
+    @PerceptionIgnored private var returnViews: [String: RoomTimeline] = [:]
     /// Unsent messages, by room (and thread): what was being written there, kept while away.
     /// The text is kept across launches too; a reply and attachments, for this one.
     @PerceptionIgnored private var drafts: [String: StashedDraft] = [:]
@@ -463,6 +475,8 @@ final class AccountSession: Identifiable {
         searchBackfill = nil
         timelines.values.forEach { $0.stop() }
         timelines.removeAll()
+        returnViews.values.forEach { $0.stop() }
+        returnViews.removeAll()
         bannerPinTimelines.values.forEach { $0.stop() }
         bannerPinTimelines.removeAll()
         searchModel?.stop()
@@ -767,6 +781,8 @@ final class AccountSession: Identifiable {
     /// message there.
     func open(_ hit: SearchHit) {
         search.selectedEventID = hit.eventID
+        // To the message found, not to where the room was left.
+        readingSpots[hit.roomID] = nil
         if hit.roomID != selectedRoomID {
             sidePanels[hit.roomID] = .search
             // Into the list too: a room outside the space shown would be open but not in it.
@@ -1070,8 +1086,11 @@ final class AccountSession: Identifiable {
         return failures
     }
 
-    /// Shows a room, with the room list where it can be seen (see `showInList`).
-    func showRoom(_ roomID: String) {
+    /// Shows a room, with the room list where it can be seen (see `showInList`). At its newest
+    /// message, for something new there (a notification, a message about to be written), rather
+    /// than where it was left.
+    func showRoom(_ roomID: String, atNewest: Bool = false) {
+        if atNewest { readingSpots[roomID] = nil }
         showInList(roomID)
         selectedRoomID = roomID
     }
@@ -1148,6 +1167,7 @@ final class AccountSession: Identifiable {
         try await handle.leave(roomIds: ordered.isEmpty ? [spaceID] : ordered)
         for roomID in leaving {
             timelines.removeValue(forKey: roomID)?.stop()
+            readingSpots[roomID] = nil
             dropBannerPins(for: roomID)
         }
         if let selected = selectedRoomID, leaving.contains(selected) { selectedRoomID = nil }
@@ -1567,6 +1587,7 @@ final class AccountSession: Identifiable {
     /// out each time the room is shown, so coming back to it would be slow. Opening it again
     /// starts from the local cache, which is quick, and earlier messages load as before.
     func roomWasLeft(_ roomID: String) {
+        closedRooms.insert(roomID)
         guard let timeline = timelines[roomID], timeline.rows.count > Self.longestWarmTimeline else { return }
         timelines.removeValue(forKey: roomID)
         dropBannerPins(for: roomID)
@@ -1576,6 +1597,52 @@ final class AccountSession: Identifiable {
     }
 
     private static let longestWarmTimeline = 150
+
+    /// Notes where a room's conversation was as it closed: nil at its newest message.
+    func keepReadingSpot(_ spot: ReadingSpot?, for roomID: String) {
+        readingSpots[roomID] = spot
+    }
+
+    /// Readies a room to open where it was left, up its history, and gives the view to show it
+    /// in, if it needs one. Called as the room's view is made (again and again while it is on
+    /// screen: only the first time after the room was closed does anything). Its own timeline,
+    /// kept warm, is told where, if it has that message among the newest it would draw to show
+    /// it; otherwise (let go meanwhile, as one with a long history loaded is, or the message too
+    /// far back) a view around the message is made, as for a search result.
+    func returnView(for roomID: String) -> RoomTimeline? {
+        if closedRooms.remove(roomID) != nil, returnViews[roomID] == nil,
+           let spot = readingSpots.removeValue(forKey: roomID) {
+            if let live = timelines[roomID], let index = live.rows.lastIndex(where: { $0.eventID == spot.eventID }),
+               live.rows.endIndex - index <= Self.longestWarmTimeline {
+                live.returnSpot = spot
+            } else if let view = focusedTimeline(roomID: roomID, eventID: spot.eventID) {
+                view.returnSpot = spot
+                returnViews[roomID] = view
+            }
+        }
+        return returnViews[roomID]
+    }
+
+    /// Another room was chosen before one readied to open where it was left had shown (the
+    /// arrow keys going by it): its place is kept for next time, and a view made for it let go.
+    private func forgetUnshownReturns() {
+        for (roomID, timeline) in timelines where roomID != selectedRoomID {
+            guard let spot = timeline.returnSpot else { continue }
+            timeline.returnSpot = nil
+            readingSpots[roomID] = spot
+            closedRooms.insert(roomID)
+        }
+        for (roomID, view) in returnViews where roomID != selectedRoomID {
+            returnViews[roomID] = nil
+            if let spot = view.returnSpot { readingSpots[roomID] = spot }
+            closedRooms.insert(roomID)
+            view.stop()
+        }
+    }
+
+    /// The room has taken its view to show; it stops it when done.
+    @discardableResult
+    func takeReturnView(for roomID: String) -> RoomTimeline? { returnViews.removeValue(forKey: roomID) }
 
     private func touch(_ roomID: String) {
         timelineOrder.removeAll { $0 == roomID }
@@ -1596,6 +1663,7 @@ final class AccountSession: Identifiable {
     func leave(roomID: String) async throws {
         try await room(id: roomID)?.leave()
         timelines.removeValue(forKey: roomID)?.stop()
+        readingSpots[roomID] = nil
         dropBannerPins(for: roomID)
         if selectedRoomID == roomID { selectedRoomID = nil }
     }

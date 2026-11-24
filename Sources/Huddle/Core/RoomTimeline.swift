@@ -220,6 +220,13 @@ extension String {
     }
 }
 
+/// Where a room was left, scrolled up through its history: the message nearest the middle of
+/// the view, and how far down the view its top was.
+struct ReadingSpot: Equatable {
+    let eventID: String
+    let top: CGFloat
+}
+
 @MainActor @Perceptible
 final class RoomTimeline {
     let room: Room
@@ -253,6 +260,9 @@ final class RoomTimeline {
     /// A message another view wants this one to go to and light up, such as one picked from
     /// the pinned messages in the side panel. Cleared once it has been dealt with.
     var requestedJump: String?
+    /// Where a view of this timeline opens instead of at the newest message: where the room
+    /// was left, up its history. The view takes it as it opens.
+    @PerceptionIgnored var returnSpot: ReadingSpot?
     private(set) var rows: [TimelineRow] = []
     private(set) var isLoading = true
     private(set) var hasMoreHistory = true

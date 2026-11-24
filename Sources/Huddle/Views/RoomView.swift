@@ -36,6 +36,14 @@ struct RoomView: View {
     /// so that it starts afresh rather than moving over from what it showed.
     @State private var panelGeneration = 0
 
+    init(account: AccountSession, roomID: String) {
+        self.account = account
+        self.roomID = roomID
+        // Left up its history, the room opens where it was: readied before anything is drawn,
+        // in a view of its own around that message if it needs one.
+        _focused = State(initialValue: account.returnView(for: roomID))
+    }
+
     private var summary: RoomSummary? {
         account.rooms.first { $0.id == roomID }
     }
@@ -183,6 +191,10 @@ struct RoomView: View {
             }
         }
         .environment(\.accountSession, account)
+        .onAppear {
+            // The room's now, to stop when done (`focused` took it as the room was made).
+            if let view = account.takeReturnView(for: roomID), view !== focused { view.stop() }
+        }
         .onDisappear {
             focused?.stop()
             focused = nil

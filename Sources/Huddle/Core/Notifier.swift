@@ -317,7 +317,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func open(accountID: String, roomID: String, thread: String?) {
-        guard show(accountID: accountID, roomID: roomID, thread: thread) else { return }
+        // At the newest message, which is what the notification was about.
+        guard show(accountID: accountID, roomID: roomID, thread: thread, atNewest: true) else { return }
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
             if window.isMiniaturized { window.deminiaturize(nil) }
@@ -342,11 +343,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// Goes to a notification's account and room, with the room list on the room's space, and
     /// its thread if it's a reply in one. False if the account has gone.
     @discardableResult
-    func show(accountID: String, roomID: String, thread: String?) -> Bool {
+    func show(accountID: String, roomID: String, thread: String?, atNewest: Bool = false) -> Bool {
         guard let store, let account = store.accounts.first(where: { $0.id == accountID }) else { return false }
         store.selectedID = accountID
         account.searchText = ""
-        account.showRoom(roomID)
+        account.showRoom(roomID, atNewest: atNewest)
         if let thread, !thread.isEmpty { account.sidePanels[roomID] = .thread(thread) }
         return true
     }
