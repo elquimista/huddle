@@ -123,6 +123,9 @@ struct TimelineView: View {
 
     /// Whether the newest message is on screen.
     @State private var isAtBottom = true
+    /// Whether any of the window shows: not behind other windows, on another Space, on a
+    /// display that's asleep or a Mac that's locked.
+    @State private var isWindowVisible = true
     /// All the way at the end, not only near it (`isAtBottom` allows a few points' slack, so
     /// that the reader nudging the view doesn't stop it following the newest message).
     @State private var isAtEnd = true
@@ -131,6 +134,7 @@ struct TimelineView: View {
     /// Only the user scrolling away ends it.
     @State private var followsNewest = true
     @State private var input = ScrollInputTracker()
+    @State private var readCheck = ReadCheck()
     /// Notices the view scrolling itself over and over, for the log.
     @State private var jumps = JumpCounter()
     /// Whether the top of the loaded history is on screen, which is when to fetch more.
@@ -146,11 +150,20 @@ struct TimelineView: View {
         reduceMotion ? .opacity : .scale(scale: 0.7, anchor: .bottomTrailing).combined(with: .opacity)
     }
 
-    /// Whether the conversation is in front of the user: its window the one in front, and no
-    /// picture open over it. Messages arriving otherwise (the app in the background, Settings
-    /// in front, a picture being looked at, a sheet over the room) stay unread until it is.
+    /// Whether the conversation is in front of the user: its window the one in front, showing,
+    /// and no picture open over it. Messages arriving otherwise (the app in the background,
+    /// Settings in front, the Mac locked, a picture being looked at, a sheet over the room) stay
+    /// unread until it is.
     private var isInFrontOfUser: Bool {
-        (windowState == .key || DevHooks.assumesActive) && ImageViewerState.shared.item == nil
+        (windowState == .key || DevHooks.assumesActive) && isWindowVisible && ImageViewerState.shared.item == nil
+    }
+
+    /// The same, from AppKit as things are this moment, for checks made after SwiftUI's own
+    /// update (`windowState` is as the view was last drawn).
+    private var isInFrontNow: Bool {
+        guard let window = place.scrollView?.window else { return false }
+        return (DevHooks.assumesActive || (NSApp.isActive && window.isKeyWindow))
+            && window.occlusionState.contains(.visible) && ImageViewerState.shared.item == nil
     }
 
     private struct ReadTrigger: Equatable {
@@ -284,6 +297,7 @@ struct TimelineView: View {
                         .onGeometryChange(for: EndPlace.self, of: Self.endPlace) { end in
                             let visible = end != .away
                             isAtBottom = visible
+                            if visible { readSoon() }
                             isAtEnd = end == .atEnd
                             if visible {
                                 // Not while the messages re-wrap around a held reading place:
@@ -435,6 +449,7 @@ struct TimelineView: View {
                 DispatchQueue.main.async { jump(to: eventID, proxy) }
             }
             .onChange(of: timeline.rows.last?.id) { previousLast, _ in
+                readSoon()
                 // The first content, or a new message while following the newest.
                 guard timeline.focusedEvent == nil else { return }
                 if previousLast == nil {
@@ -617,10 +632,23 @@ struct TimelineView: View {
                 .animation(.snappy(duration: 0.2), value: identityWarning?.userID)
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { place.bottomInset = $0 }
             }
+            // The window coming to the front, or back into view (the Mac unlocked, the display
+            // awake): what arrived meanwhile is read if the room is at its newest message.
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+                guard let window = note.object as? NSWindow, window === place.scrollView?.window else { return }
+                cameToFront(proxy)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { note in
+                guard let window = note.object as? NSWindow, window === place.scrollView?.window else { return }
+                let visible = window.occlusionState.contains(.visible)
+                if visible != isWindowVisible { isWindowVisible = visible }
+                if visible { cameToFront(proxy) }
+            }
         }
-        // Runs when a new message arrives and when the newest one scrolls into view.
+        // When a new message arrives, the newest one scrolls into view, or the window comes in
+        // front (see `readSoon`, which also hears of the first two in other ways).
         .task(id: ReadTrigger(lastRow: timeline.rows.last?.id, isAtBottom: isAtBottom, isInFrontOfUser: isInFrontOfUser)) {
-            if isAtBottom, isInFrontOfUser, !timeline.rows.isEmpty { await timeline.markAsRead() }
+            readSoon()
         }
         .onAppear {
             restoreDraft()
@@ -788,6 +816,44 @@ struct TimelineView: View {
         isAtBottom = true
         followsNewest = true
         jump(proxy, to: Self.bottomID, anchor: .bottom)
+    }
+
+    /// Reads the room if its newest message is in view with the window in front: by how things
+    /// are a turn after whatever asked, once the frame's changes have all been made, rather than
+    /// by the values `ReadTrigger` was handed. SwiftUI drops changes of that trigger when several
+    /// come in one frame, as they do when a room's first messages arrive: the view lands short
+    /// of the end, then reaches it, and the change that would have read the room never runs. So
+    /// this is asked for by each thing that can bring the end into view, as well as the trigger.
+    private func readSoon() {
+        guard !readCheck.isPending else { return }
+        readCheck.isPending = true
+        DispatchQueue.main.async {
+            readCheck.isPending = false
+            guard isAtBottom, isInFrontNow, !timeline.rows.isEmpty else { return }
+            Task { await timeline.markAsRead() }
+        }
+    }
+
+    /// The window has come to the front, or back into view. Following the newest message, the
+    /// view goes to the end, with what arrived meanwhile, and the room is read: by AppKit's own
+    /// news of the window, not only `ReadTrigger`'s. SwiftUI drops a change of that when several
+    /// come in one frame, as they can while the window comes forward and lays out what arrived;
+    /// and the view can be short of the end for that moment, there in a frame or two.
+    private func cameToFront(_ proxy: ScrollViewProxy) {
+        guard timeline.focusedEvent == nil, followsNewest || isAtBottom else {
+            if isInFrontNow { TimelineLog.log.notice("Came to the front away from the newest message: left unread") }
+            return
+        }
+        if followsNewest, !isAtEnd { jump(proxy, to: Self.bottomID, anchor: .bottom) }
+        for delay in [0.15, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard isInFrontNow, followsNewest || isAtBottom, !timeline.rows.isEmpty else { return }
+                if delay == 0.15 {
+                    TimelineLog.log.notice("Came to the front at the newest message: marking it read (end in view \(isAtBottom, privacy: .public), \(shownRows.count) rows drawn)")
+                }
+                Task { await timeline.markAsRead() }
+            }
+        }
     }
 
     /// Scrolls at once, even in the middle of an animation (the thread panel sliding): a
@@ -2889,6 +2955,12 @@ private struct ReceiptView: View {
                          readDateIsExact: message.readDateIsExact)
         }
     }
+}
+
+/// Whether `TimelineView.readSoon` has a look on its way.
+@MainActor
+private final class ReadCheck {
+    var isPending = false
 }
 
 /// Notes when the user last scrolled (wheel or trackpad, the scroller, paging keys), to
