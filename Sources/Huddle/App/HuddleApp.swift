@@ -170,6 +170,20 @@ struct HuddleApp: App {
                     }
                 }
                 .disabled(roomID == nil || account?.browsingSpaceID != nil)
+                Button("Pinned Messages") {
+                    if let account, let roomID {
+                        account.sidePanels[roomID] = account.sidePanels[roomID] == .pinned ? nil : .pinned
+                    }
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(roomID == nil || account?.browsingSpaceID != nil)
+                let hasPins = roomID.flatMap { account?.timeline(for: $0)?.pinnedEventIDs.isEmpty == false } ?? false
+                let bannerHidden = roomID.map { account?.hiddenPinBanners.contains($0) ?? false } ?? false
+                Button(bannerHidden ? "Show Pinned Banner" : "Hide Pinned Banner") {
+                    guard let account, let roomID else { return }
+                    if bannerHidden { account.hiddenPinBanners.remove(roomID) } else { account.hiddenPinBanners.insert(roomID) }
+                }
+                .disabled(roomID == nil || account?.browsingSpaceID != nil || !hasPins)
                 // Into the room's own composer, as its microphone button does.
                 let voice = VoiceRecorder.shared
                 let isRecording = roomID.map { voice.key == $0 } ?? false

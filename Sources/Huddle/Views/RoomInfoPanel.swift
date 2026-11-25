@@ -10,12 +10,14 @@ struct RoomInfoPanelView: View {
     let roomID: String
     /// Goes to the room's pictures, videos, sounds and files.
     let showMedia: () -> Void
+    /// Goes to the room's pinned messages.
+    let showPinned: () -> Void
     @State private var details: RoomDetails?
 
     var body: some View { WithPerceptionTracking {
         Group {
             if let details {
-                RoomInfoContent(account: account, details: details, showMedia: showMedia)
+                RoomInfoContent(account: account, details: details, showMedia: showMedia, showPinned: showPinned)
             } else {
                 Color.clear
             }
@@ -36,6 +38,7 @@ private struct RoomInfoContent: View {
     let account: AccountSession
     let details: RoomDetails
     let showMedia: () -> Void
+    let showPinned: () -> Void
     @State private var isEditing = false
     @State private var draftName = ""
     @State private var draftTopic = ""
@@ -101,6 +104,8 @@ private struct RoomInfoContent: View {
                 }
                 Divider()
                 notifications
+                Divider()
+                pinnedRow
                 Divider()
                 mediaRow
                 Divider()
@@ -410,18 +415,30 @@ private struct RoomInfoContent: View {
         .padding(.vertical, 12)
     }
 
-    // MARK: Media and files
+    // MARK: Pinned messages and media
 
-    /// To everything sent in the room as a picture, video, sound or file.
-    private var mediaRow: some View {
-        Button(action: showMedia) {
+    /// To the room's pinned messages, with how many there are.
+    private var pinnedRow: some View {
+        let count = account.timeline(for: details.roomID)?.pinnedEventIDs.count ?? 0
+        return pageRow("Pinned Messages", systemImage: "pin", detail: count > 0 ? "\(count)" : nil,
+                       help: "Messages pinned in this \(noun.lowercased()), in full", action: showPinned)
+    }
+
+    private func pageRow(_ title: String, systemImage: String, detail: String?, help: String,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             HStack(spacing: 12) {
-                Image(systemName: "photo.on.rectangle.angled")
+                Image(systemName: systemImage)
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .frame(width: 22)
-                Text("Media and Files")
+                Text(title)
                 Spacer(minLength: 8)
+                if let detail {
+                    Text(detail)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
@@ -431,7 +448,13 @@ private struct RoomInfoContent: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Images, videos, audio, PDFs and other files sent in this \(noun.lowercased())")
+        .help(help)
+    }
+
+    /// To everything sent in the room as a picture, video, sound or file.
+    private var mediaRow: some View {
+        pageRow("Media and Files", systemImage: "photo.on.rectangle.angled", detail: nil,
+                help: "Images, videos, audio, PDFs and other files sent in this \(noun.lowercased())", action: showMedia)
     }
 
     // MARK: Notifications

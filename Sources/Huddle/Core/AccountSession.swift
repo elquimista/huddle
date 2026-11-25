@@ -136,6 +136,10 @@ final class AccountSession: Identifiable {
     var collapsedSections: Set<String> = [] {
         didSet { UserDefaults.standard.set(Array(collapsedSections), forKey: "collapsedSections.\(id)") }
     }
+    /// Rooms whose pinned messages banner has been put away, by ID (Room ▸ Show Pinned Banner).
+    var hiddenPinBanners: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(hiddenPinBanners), forKey: "hiddenPinBanners.\(id)") }
+    }
     /// False until the server has sent the first page of the room list.
     private(set) var hasLoadedRooms = false
     private(set) var syncState: SyncServiceState = .idle
@@ -327,6 +331,7 @@ final class AccountSession: Identifiable {
         // The space the room list was narrowed to last time (didSet doesn't run in init).
         selectedSpaceID = UserDefaults.standard.string(forKey: "selectedSpace.\(id)")
         collapsedSections = Set(UserDefaults.standard.stringArray(forKey: "collapsedSections.\(id)") ?? [])
+        hiddenPinBanners = Set(UserDefaults.standard.stringArray(forKey: "hiddenPinBanners.\(id)") ?? [])
         // And the room last open in each space, the one showing then to be opened again.
         lastRoomBySpace = UserDefaults.standard.dictionary(forKey: "lastRooms.\(id)") as? [String: String] ?? [:]
         roomToReopen = lastRoomBySpace[selectedSpaceID ?? ""]

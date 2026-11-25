@@ -1655,13 +1655,17 @@ struct TimelineView: View {
 
     @ViewBuilder private func pinnedBanner(_ proxy: ScrollViewProxy) -> some View {
         let messages = pinnedMessages
-        if let room, !messages.isEmpty {
+        if let room, !messages.isEmpty, account?.hiddenPinBanners.contains(timeline.roomID) != true {
             let index = min(room.pinIndex.wrappedValue, messages.count - 1)
             PinnedBanner(messages: messages, index: index, contactName: timeline.contactName, showAll: room.showPinned) {
                 guard let eventID = messages[index].eventID else { return }
-                // The next click goes on to the one pinned before it.
-                withAnimation(.snappy(duration: 0.3)) { room.pinIndex.wrappedValue = (index + 1) % messages.count }
                 jump(to: eventID, proxy)
+            } step: { step in
+                withAnimation(.snappy(duration: 0.3)) {
+                    room.pinIndex.wrappedValue = (index + step + messages.count) % messages.count
+                }
+            } hide: {
+                withAnimation(.snappy(duration: 0.25)) { _ = account?.hiddenPinBanners.insert(timeline.roomID) }
             }
             .transition(.move(edge: .top).combined(with: .opacity))
         }

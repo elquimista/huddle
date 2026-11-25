@@ -22,7 +22,8 @@ struct ThreadPanel: View {
 
     /// True when the open thread was reached from the list, so there is a way back to it.
     @State private var cameFromList = false
-    /// True when Media and Files was reached from Room Info, so there is a way back to it.
+    /// True when Media and Files or the pinned messages were reached from Room Info, so there
+    /// is a way back to it.
     @State private var cameFromInfo = false
     /// False for a moment as the panel arrives, so its content can fade in just behind it.
     @State private var hasSettled = false
@@ -85,13 +86,16 @@ struct ThreadPanel: View {
                 show(.thread(root))
             }
         case .pinned:
-            PinnedListView(account: account, roomID: roomID)
+            PinnedListView(account: account, roomID: roomID) { root in show(.thread(root)) }
         case .search:
             SearchPanelView(account: account, roomID: roomID)
         case .info:
             RoomInfoPanelView(account: account, roomID: roomID) {
                 cameFromInfo = true
                 show(.media)
+            } showPinned: {
+                cameFromInfo = true
+                show(.pinned)
             }
         case .media:
             MediaListView(account: account, roomID: roomID) { root in show(.thread(root)) }
@@ -103,7 +107,7 @@ struct ThreadPanel: View {
     /// moves on the next turn, once both are in place. Reduce Motion swaps them with a fade.
     private func move(to new: Content) {
         if new == .threadList { cameFromList = false }
-        if new != .media, new != .info { cameFromInfo = false }
+        if new != .media, new != .pinned, new != .info { cameFromInfo = false }
         let visible = (showsLast ? pages.last : pages.first) ?? new
         moveCount += 1
         guard visible != new else {
@@ -124,9 +128,9 @@ struct ThreadPanel: View {
         switch (visible, new) {
         case (_, .thread): forward = true
         case (.thread, _): forward = false
-        // Media and Files is a page of Room Info's.
-        case (.info, .media): forward = true
-        case (.media, .info): forward = false
+        // Media and Files and the pinned messages are pages of Room Info's.
+        case (.info, .media), (.info, .pinned): forward = true
+        case (.media, .info), (.pinned, .info): forward = false
         default:
             withAnimation(.easeOut(duration: 0.18)) {
                 pages = [new]
@@ -181,7 +185,7 @@ struct ThreadPanel: View {
                 .help("All threads")
                 .accessibilityLabel("All threads")
                 .transition(.opacity)
-            } else if cameFromInfo, content == .media {
+            } else if cameFromInfo, content == .media || content == .pinned {
                 Button {
                     show(.info)
                 } label: {
