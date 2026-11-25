@@ -46,6 +46,16 @@ struct TimelineView: View {
     /// While the view scrolls to a row just chosen (a pinned message, a reply's original): no
     /// earlier rows are drawn meanwhile.
     @State private var showingRowUntil = Date.distantPast
+    /// A row just gone to (`show`), kept in the middle while the rows around it settle: pictures
+    /// taking their true shape as they load, earlier rows just drawn. Until the reader scrolls,
+    /// or the moment has passed.
+    @State private var settling: SettlingRow?
+
+    private struct SettlingRow {
+        let id: String
+        let since: Date
+        let until: Date
+    }
     /// The message being looked for after clicking a quote, while older history loads.
     @State private var searchingFor: String?
     /// Images waiting in the composer to be sent.
@@ -337,7 +347,10 @@ struct TimelineView: View {
                 // and thread summaries arrive, more batches load. Whenever the content's height
                 // changes while following the newest message, go back to the end.
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height.rounded() }) { _ in
-                    if followsNewest {
+                    if let settling, Date() < settling.until, !input.hasInput(since: settling.since) {
+                        // Back to the middle, once this layout has taken its place.
+                        DispatchQueue.main.async { recentre(proxy) }
+                    } else if followsNewest {
                         jump(proxy, to: Self.bottomID, anchor: .bottom)
                         settleOnNewest(proxy)
                     } else if place.heldRow != nil {
@@ -1433,11 +1446,15 @@ struct TimelineView: View {
         place.heldRow = nil
         showingRowUntil = Date().addingTimeInterval(0.6)
         viewWillMove(for: 0.7)
+        // Where the row will be once what's around it has loaded isn't known yet: it's put back
+        // in the middle as that changes, and once more as the scroll comes to rest.
+        settling = SettlingRow(id: rowID, since: .now, until: .now.addingTimeInterval(3))
         if animated {
             withAnimation(.snappy(duration: 0.3)) {
                 proxy.scrollTo(rowID, anchor: .center)
                 highlightedRow = rowID
             }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { recentre(proxy) }
         } else {
             jump(proxy, to: rowID, anchor: .center)
             withAnimation(.easeOut(duration: 0.2)) { highlightedRow = rowID }
@@ -1448,6 +1465,16 @@ struct TimelineView: View {
                 withAnimation(.easeOut(duration: 0.6)) { highlightedRow = nil }
             }
         }
+    }
+
+    /// Puts the row just gone to back in the middle, while it settles.
+    private func recentre(_ proxy: ScrollViewProxy) {
+        guard let settling else { return }
+        guard Date() < settling.until, !input.hasInput(since: settling.since) else {
+            self.settling = nil
+            return
+        }
+        jump(proxy, to: settling.id, anchor: .center)
     }
 
     // MARK: Editing
@@ -3378,19 +3405,43 @@ final class ReadingPlace {
     /// The conversation's height before rows were added above, and until when to follow it.
     private var addedAbove: (height: CGFloat, until: Date)?
 
-    /// Whether the view is moving with rows added above as they are laid out (`changeAbove`).
-    var movesWithRows: Bool { addedAbove.map { Date() < $0.until } ?? false }
+    /// A picture above what's being read is about to change height by `delta` (taking its true
+    /// shape as it loads): as AppKit lays that out, the view moves by as much, and only that.
+    /// The conversation's height as a whole won't do here: pictures below can change in the same
+    /// moment, and moving by them too would shift what's being read.
+    func changeAbove(by delta: CGFloat) {
+        guard abs(delta) > 0.5, scrollView?.documentView?.isFlipped == true else { return }
+        let until = Date().addingTimeInterval(0.3)
+        pictureChange = ((pictureChange?.delta ?? 0) + delta, until)
+        movingUntil = max(movingUntil, until)
+    }
+
+    /// How much the pictures above have changed height in all, until laid out, and until when.
+    private var pictureChange: (delta: CGFloat, until: Date)?
+    /// Until when the view moves by what changes above it, ahead of SwiftUI's measure of the rows.
+    private var movingUntil = Date.distantPast
+
+    /// Whether the view is moving with rows added above, or pictures above changing size, as
+    /// they are laid out (`changeAbove`).
+    var movesWithRows: Bool { (addedAbove.map { Date() < $0.until } ?? false) || Date() < movingUntil }
 
     /// AppKit has laid the conversation out anew (ScrollViewProbe).
     func documentResized(_ document: NSView) {
-        guard let pending = addedAbove else { return }
-        guard Date() < pending.until else {
+        if let pending = addedAbove {
+            if Date() < pending.until {
+                let grown = document.frame.height - pending.height
+                addedAbove = (document.frame.height, pending.until)
+                // The conversation's growth takes in the pictures' as well.
+                pictureChange = nil
+                if abs(grown) > 0.5 { scroll(by: grown) }
+                return
+            }
             addedAbove = nil
-            return
         }
-        let grown = document.frame.height - pending.height
-        addedAbove = (document.frame.height, pending.until)
-        if abs(grown) > 0.5 { scroll(by: grown) }
+        if let change = pictureChange {
+            pictureChange = nil
+            if Date() < change.until { scroll(by: change.delta) }
+        }
     }
 
     /// Moves the view down the conversation by this much (up, if negative), at once, as the

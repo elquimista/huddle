@@ -154,8 +154,11 @@ struct ImageMessageView: View {
         // message under it along. Above what's being read, the conversation moves with it, so
         // that stays put, and the picture grows or shrinks upward.
         if let corrected = image.correctedPixelSize(seeing: loaded.size) {
+            let before = displaySize.height
             ImageShapes.remember(corrected, for: image)
-            if isAboveReading { readingPlace?.changeAbove(for: 0.1) }
+            if isAboveReading {
+                readingPlace?.changeAbove(by: image.displaySize(for: corrected, maxWidth: contentWidth).height - before)
+            }
             correctedSize = corrected
         }
         withAnimation(.easeOut(duration: 0.2)) { still = loaded }
