@@ -69,7 +69,7 @@ jobs:
 
       - name: Restore the Matrix SDK
         id: sdk
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             Vendor/MatrixRustSDK/MatrixSDKFFI.xcframework
@@ -83,6 +83,18 @@ jobs:
           rustup default stable
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
           Scripts/build-sdk.sh
+
+      # Kept as soon as it's built, not only once the whole job has gone well: a release that fails
+      # later on (a GitHub hiccup while publishing, say) and is run again then takes minutes, not
+      # another hour. A cache belongs to the tag it was made for, so it serves that tag's re-runs.
+      - name: Keep the Matrix SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Vendor/MatrixRustSDK/MatrixSDKFFI.xcframework
+            Vendor/MatrixRustSDK/Sources
+          key: ${{ steps.sdk.outputs.cache-primary-key }}
 
       - name: Import the signing certificate
         env:
@@ -175,38 +187,77 @@ jobs:
           beta="" prerelease="" exclude="--exclude=*-*"
           case "$GITHUB_REF_NAME" in *-*) beta="--beta" prerelease="--prerelease" exclude="" ;; esac
 
-          # What changed: the commits since the last release (the last stable one, for a stable release).
+          # What changed: the commits since the last release (the last stable one, for a stable release),
+          # but not those that only change how releases are made.
           previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' $exclude "$GITHUB_REF_NAME^" 2> /dev/null || true)"
-          git log --no-merges --format=%s "${previous:+$previous..}$GITHUB_REF_NAME" > "$RUNNER_TEMP/changes.txt"
+          git log --no-merges --format=%s "${previous:+$previous..}$GITHUB_REF_NAME" -- . ':(exclude).github' > "$RUNNER_TEMP/changes.txt"
           sed 's/^/- /' "$RUNNER_TEMP/changes.txt" > "$RUNNER_TEMP/notes.md"
+
+          # GitHub now and then fails a request (an HTTP 5xx, a timeout), sometimes one it carried out
+          # all the same. So each step below is tried up to five times, and is safe to repeat: it looks
+          # at what is there before it acts. (A function called like this doesn't stop at a failing
+          # command by itself, hence the "|| return"s.)
+          retry() {
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              "$@" && return 0
+              [ "$attempt" = 5 ] && break
+              echo "::warning::$1 failed (try $attempt of 5); trying again in $((attempt * 20)) s."
+              sleep $((attempt * 20))
+            done
+            echo "::error::$1 failed five times."
+            return 1
+          }
 
           # A new public repository needs a first commit for the release's tag to point at.
           updates="$RUNNER_TEMP/updates"
-          git clone -q "https://x-access-token:$GH_TOKEN@github.com/$UPDATES_REPO.git" "$updates"
-          git -C "$updates" config user.name "github-actions[bot]"
-          git -C "$updates" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          clone_updates() {
+            rm -rf "$updates"
+            git clone -q "https://x-access-token:$GH_TOKEN@github.com/$UPDATES_REPO.git" "$updates" || return
+            git -C "$updates" config user.name "github-actions[bot]" || return
+            git -C "$updates" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          }
+          retry clone_updates
           if ! git -C "$updates" rev-parse -q --verify HEAD > /dev/null; then
             git -C "$updates" checkout -q -b main
             printf '# Huddle releases\n\nBuilds of Huddle, and the appcast the app checks for updates.\n' > "$updates/README.md"
             git -C "$updates" add README.md
             git -C "$updates" commit -q -m "Start the releases repository"
-            git -C "$updates" push -q origin main
+            git -C "$updates" push -q -u origin main
           fi
 
-          if gh release view "$GITHUB_REF_NAME" -R "$UPDATES_REPO" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" \
-              --title "Huddle $version" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
-          fi
+          # The release, with the archive. gh makes it as a draft, uploads to it and then publishes it,
+          # so a try that failed partway can leave a draft behind: the archive then goes to that draft,
+          # and the draft is published.
+          publish_release() {
+            local draft
+            if ! draft="$(gh release view "$GITHUB_REF_NAME" -R "$UPDATES_REPO" --json isDraft -q .isDraft 2> "$RUNNER_TEMP/view.txt")"; then
+              # Not there yet, rather than GitHub failing to say.
+              grep -q 'release not found' "$RUNNER_TEMP/view.txt" || { cat "$RUNNER_TEMP/view.txt" >&2; return 1; }
+              gh release create "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" \
+                --title "Huddle $version" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+              return
+            fi
+            gh release upload "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" --clobber || return
+            if [ "$draft" = true ]; then
+              gh release edit "$GITHUB_REF_NAME" -R "$UPDATES_REPO" --draft=false
+            fi
+          }
+          retry publish_release
 
-          # Listed in the appcast only now, so nobody is offered an archive that isn't there yet.
-          Scripts/appcast.py "$updates/appcast.xml" --version "$version" --build "$build" \
-            --url "https://github.com/$UPDATES_REPO/releases/download/$GITHUB_REF_NAME/$zip" \
-            --length "$length" --signature "$signature" --changes "$RUNNER_TEMP/changes.txt" $beta
-          git -C "$updates" add appcast.xml
-          git -C "$updates" commit -q -m "Huddle $version"
-          git -C "$updates" push -q origin HEAD
+          # Listed in the appcast only now, so nobody is offered an archive that isn't there yet. Made
+          # from the appcast as it is on each try, so one another release has pushed meanwhile is kept.
+          publish_appcast() {
+            git -C "$updates" fetch -q origin || return
+            git -C "$updates" reset -q --hard '@{upstream}' || return
+            Scripts/appcast.py "$updates/appcast.xml" --version "$version" --build "$build" \
+              --url "https://github.com/$UPDATES_REPO/releases/download/$GITHUB_REF_NAME/$zip" \
+              --length "$length" --signature "$signature" --changes "$RUNNER_TEMP/changes.txt" $beta || return
+            git -C "$updates" add appcast.xml || return
+            git -C "$updates" commit -q -m "Huddle $version" || return
+            git -C "$updates" push -q origin HEAD
+          }
+          retry publish_appcast
           echo "published=true" >> "$GITHUB_OUTPUT"
 
       # Only when the update wasn't published, for want of its secrets: the build is kept as a
