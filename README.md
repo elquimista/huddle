@@ -136,8 +136,10 @@ Both builds write a few notes about scrolling a room's conversation to the syste
 
 Pushing a tag builds the release app on GitHub Actions (`.github/workflows/release.yml`) and publishes it, zipped, as that tag's release in the public releases repository (see Updates): `v1.2.0` becomes version 1.2.0, and a tag with a hyphen (`v1.3.0-beta1`) a pre-release.
 
+A release's notes are its tag's message: tag with `-a`, the first line the release's title, the rest what's new, as paragraphs and `- ` lists. Lines can be broken to fit the terminal (they're joined again), and trailers such as `Co-Authored-By` are left out. The workflow puts them on the release, and in the appcast, where the update window shows them (`Scripts/release-notes.py`, `Scripts/appcast.py`). A tag without a message gets the commits since the last release instead.
+
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag -a v1.4.3 -F notes.txt && git push origin v1.4.3
 ```
 
 The workflow compiles the Matrix SDK and caches it, so the first run, and the first after the pinned SDK commit changes, takes much longer than the rest.
@@ -148,23 +150,35 @@ Releases should be signed with a **Developer ID Application** certificate and no
 
 1. **The certificate** (needs a paid Apple Developer Program membership; only the account holder can make one): Xcode › Settings › Accounts › your team › Manage Certificates › + › Developer ID Application. Export it with its private key from Keychain Access as a .p12, with a password.
 2. **A key for notarization:** App Store Connect › Users and Access › Integrations › App Store Connect API › Team Keys, a new key with the Developer role. Download the .p8 (it can only be downloaded once), and note its Key ID and the Issuer ID shown above the list.
-3. **The repository secrets:** `MACOS_CERTIFICATE_P12`, the base64 of the .p12 (`base64 -i cert.p12 | pbcopy`); `MACOS_CERTIFICATE_PASSWORD`, its password; `NOTARY_API_KEY`, the base64 of the .p8 (`base64 -i AuthKey_XXXXXXXXXX.p8 | pbcopy`); `NOTARY_KEY_ID`; and `NOTARY_ISSUER_ID`.
+3. **The secrets,** in the release environment (see below): `MACOS_CERTIFICATE_P12`, the base64 of the .p12 (`base64 -i cert.p12 | pbcopy`); `MACOS_CERTIFICATE_PASSWORD`, its password; `NOTARY_API_KEY`, the base64 of the .p8 (`base64 -i AuthKey_XXXXXXXXXX.p8 | pbcopy`); `NOTARY_KEY_ID`; and `NOTARY_ISSUER_ID`.
 4. **Try them** before a release: Actions › Release › Run workflow builds, signs and notarizes as a release would, keeps the archive with the run for three days, and publishes nothing. Its Notarize step ends with Gatekeeper's verdict, which should say "Notarized Developer ID".
 
 `Scripts/build-app.sh` signs a release with a Developer ID certificate if one is in the keychain, with the secure timestamp notarization needs, and otherwise, as it does the Dev build, with an Apple Development one (which keeps Keychain access across rebuilds on your own Mac, but which Gatekeeper turns away elsewhere). The certificate is part of how macOS knows the app, so the first build signed differently from the one before asks for Keychain access once; Always Allow settles it.
 
 ### Updates
 
-The app finds updates in an appcast, a feed listing each release with its EdDSA signature. Since this repository is private, the workflow publishes every release, and the appcast, to a public repository instead, `huddle-releases` under the same owner (or the `UPDATES_REPO` repository variable, as `owner/name`). The app reads `appcast.xml` on that repository's `main` branch; `Scripts/build-app.sh` puts that address and the public key in the release app's Info.plist. Pre-releases go in the appcast's beta channel, offered only to those who turn on beta versions. Sparkle offers the release with the highest build number, so build numbers count commits from 1000, above any of the macOS 13 line's (`legacy/macos-13`), whose releases the appcast offers only to macOS 13.
+The app finds updates in an appcast, a feed listing each release with its EdDSA signature. The workflow publishes every release, and the appcast, to a repository of releases of their own, `huddle-releases` under the same owner (or the `UPDATES_REPO` repository variable, as `owner/name`). The app reads `appcast.xml` on that repository's `main` branch; `Scripts/build-app.sh` puts that address and the public key in the release app's Info.plist. Pre-releases go in the appcast's beta channel, offered only to those who turn on beta versions. Sparkle offers the release with the highest build number, so build numbers count commits from 1000, above any of the macOS 13 line's (`legacy/macos-13`), whose releases the appcast offers only to macOS 13.
 
 To set it up:
 
 1. Create the public repository `huddle-releases` (it can be empty).
-2. Add two secrets to this repository: `SPARKLE_PRIVATE_KEY`, the private signing key, and `RELEASES_TOKEN`, a fine-grained personal access token with read and write access to Contents on `huddle-releases` only.
+2. Add two secrets to the release environment (see below): `SPARKLE_PRIVATE_KEY`, the private signing key, and `RELEASES_TOKEN`, a fine-grained personal access token with read and write access to Contents on `huddle-releases` only.
 
 Without them, releases are still built and published here, but not offered as updates. Nor is a build without the `MACOS_CERTIFICATE_P12` secret: signed ad hoc, it would have no hardened runtime, so the workflow stops rather than publish it. The workflow hands the releases token to git only through a credential helper, never in a URL, and checks this repository out without leaving its own token behind.
 
 The signing key is in the login Keychain under the account `huddle`. Sparkle's tools export it again (`.build/artifacts/sparkle/Sparkle/bin/generate_keys --account huddle -x key.txt`) or show its public half (`-p`). Updates signed with any other key are refused, so keep it safe: a lost key means people have to download the next release by hand.
+
+### The release environment
+
+The release job runs in a GitHub environment called `release`, and every secret it uses (the certificate, the notarization key, the Sparkle key and the releases token) is the environment's own, not the repository's. Set up this way, only release tags (and the release branches, for trial runs) get the secrets, and each run waits for your approval: no one who can merely push to the repository, nor a stolen token that can, gets a signed update published.
+
+1. **Settings › Environments › New environment**, named `release`.
+2. **Required reviewers:** yourself. Leave "Prevent self-review" off when you're the only one.
+3. **Deployment branches and tags › Selected branches and tags:** the tag pattern `v*`, and the branches `main` and `legacy/macos-13` (for trial runs, which need the secrets too).
+4. **Environment secrets:** the secrets above, with the same values. GitHub can't show a secret's value again, so bring each from where it lives: the Sparkle key from the Keychain (below), the certificate re-exported, a new releases token (and revoke the old). Then delete them from **Settings › Secrets and variables › Actions**, so nothing outside the environment has them.
+5. **Settings › Rules › Rulesets › New tag ruleset:** target the tags `v*`, restrict creations, updates and deletions, with **Repository admin** allowed to bypass, so only you can make or move a release tag.
+
+After a tag is pushed, its run waits under **Actions** with "Review deployments": approve it there (or from the email GitHub sends) and it starts.
 
 ## Before distributing
 
