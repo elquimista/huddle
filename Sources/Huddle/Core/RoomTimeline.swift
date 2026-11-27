@@ -176,10 +176,11 @@ struct ReactionPreview: Equatable {
     var text: String
     var date: Date
 
-    /// The newest reaction among these messages, if it came after the newest of them.
+    /// The newest reaction among these messages, if it came after the newest of them. Found
+    /// first, then worded: wording one means formatting the message it's on.
     @MainActor
     static func newest(in rows: [TimelineRow], ownUserID: String, name: @escaping (String) -> String?) -> ReactionPreview? {
-        var newest: ReactionPreview?
+        var newest: (message: MessageRow, reaction: MessageRow.ReactionChip, sender: String, date: Date)?
         var lastMessageDate = Date.distantPast
         for row in rows {
             guard case .message(let message) = row.kind else { continue }
@@ -187,24 +188,24 @@ struct ReactionPreview: Equatable {
             for reaction in message.reactions {
                 guard let sender = reaction.latestSender, let date = reaction.latestDate,
                       date > (newest?.date ?? .distantPast) else { continue }
-                let target: String
-                switch message.body {
-                case .text(let text), .emote(let text):
-                    let plain = MessageFormatter.plainText(
-                        text: text, formatted: message.html.map { FormattedBody(format: .html, body: $0) }, contactName: name)
-                    target = "“\(plain.prefix(60))”"
-                case .image(let image): target = image.isSticker ? "a sticker" : (image.filename.isEmpty ? "an image" : image.filename)
-                case .audio(let audio): target = audio.isVoice ? "a voice message" : audio.filename
-                case .file(let file): target = file.filename
-                case .attachment(_, let name): target = name
-                default: target = "a message"
-                }
-                let who = sender == ownUserID ? "You" : (name(sender) ?? sender.matrixLocalpart)
-                newest = ReactionPreview(text: "\(who) reacted \(reaction.key) to \(target)", date: date)
+                newest = (message, reaction, sender, date)
             }
         }
-        if let found = newest, found.date <= lastMessageDate { return nil }
-        return newest
+        guard let (message, reaction, sender, date) = newest, date > lastMessageDate else { return nil }
+        let target: String
+        switch message.body {
+        case .text(let text), .emote(let text):
+            let plain = MessageFormatter.plainText(
+                text: text, formatted: message.html.map { FormattedBody(format: .html, body: $0) }, contactName: name)
+            target = "“\(plain.prefix(60))”"
+        case .image(let image): target = image.isSticker ? "a sticker" : (image.filename.isEmpty ? "an image" : image.filename)
+        case .audio(let audio): target = audio.isVoice ? "a voice message" : audio.filename
+        case .file(let file): target = file.filename
+        case .attachment(_, let name): target = name
+        default: target = "a message"
+        }
+        let who = sender == ownUserID ? "You" : (name(sender) ?? sender.matrixLocalpart)
+        return ReactionPreview(text: "\(who) reacted \(reaction.key) to \(target)", date: date)
     }
 }
 
@@ -379,11 +380,19 @@ final class RoomTimeline {
         guard let handle = try? await room.subscribeToIdentityStatusChanges(
             listener: IdentityChangeObserver { continuation.yield($0) }) else { return }
         identityHandle = handle
+        var isFirst = true
         for await changes in stream {
             guard !Task.isCancelled else { break }
             for change in changes { identityStates[change.userId] = change.changedTo }
             updateIdentityWarnings()
             onIdentityChanges?(changes)
+            // After how things stood: what messages are marked with (a device its owner hasn't
+            // verified, say) may have changed.
+            if !isFirst {
+                trustVersion += 1
+                rebuildRows()
+            }
+            isFirst = false
         }
     }
 
@@ -510,6 +519,14 @@ final class RoomTimeline {
             hasTwoPeople = room.activeMembersCount() <= 2
             refreshNameColors()
             isLoading = false
+            if isLive, let wanted = DevHooks.historyRows {
+                Task { [weak self] in
+                    while let self, self.rows.count < wanted, self.hasMoreHistory, !Task.isCancelled {
+                        await self.loadOlder()
+                        try? await Task.sleep(for: .milliseconds(50))
+                    }
+                }
+            }
             for await diffs in stream {
                 for diff in diffs { items.apply(diff.diff) }
                 rebuildRows()
@@ -541,7 +558,95 @@ final class RoomTimeline {
         return callEvent
     }
 
+    /// An item of the SDK's timeline as last read, kept for as long as the SDK keeps the same
+    /// item (it changes one by replacing it): the event copied out of it, and the row made from
+    /// that. Both cost (each copy crosses into the SDK and back; a row is formatted, its sender's
+    /// device checked), and with a few thousand messages loaded, doing it again for every one at
+    /// each update took most of a second. Now only new and changed items are read.
+    private struct ItemReading {
+        let item: TimelineItem
+        let id: String
+        let event: EventTimelineItem?
+        let virtual: VirtualTimelineItem?
+        let callKind: CallEvent.Kind?
+        /// The row the event makes (nil: none), once worked out, and under what.
+        var kind: TimelineRow.Kind?
+        var madeUnder: RowContext?
+
+        init(_ item: TimelineItem) {
+            self.item = item
+            id = item.uniqueId().id
+            event = item.asEvent()
+            virtual = event == nil ? item.asVirtual() : nil
+            callKind = event.flatMap { CallEvent.kind(of: $0.content) }
+        }
+    }
+
+    /// What a row made from an event depends on besides the event: people's names as known here,
+    /// and who is verified (the mark on a message from a device its owner hasn't verified, or on
+    /// this account's own while this Mac isn't). Rows made under another are made again.
+    private struct RowContext: Equatable {
+        let names: Int
+        let trust: Int
+        let thisMacIsVerified: Bool
+    }
+
+    /// By item, for as long as it's in the timeline.
+    @PerceptionIgnored private var readings: [ObjectIdentifier: ItemReading] = [:]
+    /// Goes up whenever what is known of people's identities changes.
+    @PerceptionIgnored private var trustVersion = 0
+
     private func rebuildRows() {
+        let started = PerfLog.isOn ? CACurrentMediaTime() : 0
+        var (rows, converted) = makeRows()
+        if DevHooks.checksRows {
+            // Dev: the same rows, every one made afresh, as before items were kept.
+            let kept = readings
+            readings = [:]
+            let (fresh, _) = makeRows()
+            readings = kept
+            if fresh != rows {
+                let differing = zip(rows, fresh).filter { $0 != $1 }.map(\.0.id)
+                print("DEV_ROWS_DIFFER count=\(rows.count)/\(fresh.count) first=\(differing.prefix(3))")
+                rows = fresh
+            } else {
+                print("DEV_ROWS_SAME count=\(rows.count) converted=\(converted)")
+            }
+            fflush(stdout)
+        }
+
+        // Detect history landing above what was the oldest message, so the view can hold its place.
+        let oldFirst = self.rows.first(where: \.isMessage)?.id
+        let newFirst = rows.first(where: \.isMessage)?.id
+        let addsAbove = oldFirst != nil && oldFirst != newFirst && rows.contains(where: { $0.id == oldFirst })
+        if addsAbove { willAddAbove?() }
+        self.rows = rows
+        if isLive { updateLatestReaction() }
+        if addsAbove, let oldFirst {
+            prependAnchorID = oldFirst
+            prependCount += 1
+        }
+        fetchMissingReplyDetails()
+        if PerfLog.isOn, isLive { PerfLog.rebuilt(items: items.count, rows: rows.count, converted: converted, started: started) }
+    }
+
+    /// The rows for the items, from what's kept of them where they haven't changed, and how
+    /// many rows had to be made.
+    private func makeRows() -> ([TimelineRow], Int) {
+        let context = RowContext(names: nameVersion, trust: trustVersion, thisMacIsVerified: isThisMacVerified())
+        var readings = items.map { self.readings[ObjectIdentifier($0)] ?? ItemReading($0) }
+        var converted = 0
+        /// The row an event makes, made again only if what it depends on has changed.
+        func kind(at index: Int, _ event: EventTimelineItem) -> TimelineRow.Kind? {
+            if readings[index].madeUnder != context {
+                readings[index].kind = TimelineRow.Kind(event: event, ownUserID: ownUserID, name: displayName(for:),
+                                                        contactName: contactName, thisMacIsVerified: context.thisMacIsVerified)
+                readings[index].madeUnder = context
+                converted += 1
+            }
+            return readings[index].kind
+        }
+
         var rows: [TimelineRow] = []
         rows.reserveCapacity(items.count)
         var previous: MessageRow?
@@ -551,15 +656,15 @@ final class RoomTimeline {
         // aren't shown themselves.
         // Rows of this account's own doing, which a read marker isn't about.
         var ownRows: Set<String> = []
-        let callOutcomes = CallHistory.outcomes(of: items.compactMap { item in
-            guard let event = item.asEvent(), let kind = CallEvent.kind(of: event.content), kind != .invite else { return nil }
+        let callOutcomes = CallHistory.outcomes(of: readings.compactMap { reading in
+            guard let event = reading.event, let kind = reading.callKind, kind != .invite else { return nil }
             return callEvent(kind, event)
         })
-        for item in items {
-            let id = item.uniqueId().id
-            if let event = item.asEvent() {
+        for index in readings.indices {
+            let id = readings[index].id
+            if let event = readings[index].event {
                 if event.isOwn { ownRows.insert(id) }
-                if let kind = CallEvent.kind(of: event.content) {
+                if let kind = readings[index].callKind {
                     guard kind == .invite else { continue }
                     let invite = callEvent(.invite, event)
                     previous = nil
@@ -577,8 +682,7 @@ final class RoomTimeline {
                         ownUserID: ownUserID))))
                     continue
                 }
-                switch TimelineRow.Kind(event: event, ownUserID: ownUserID, name: displayName(for:), contactName: contactName,
-                                        thisMacIsVerified: isThisMacVerified()) {
+                switch kind(at: index, event) {
                 case .message(var message):
                     // The user's own names for whoever a reply quotes, and the newest in a thread.
                     if let sender = message.replyTo?.sender, let name = contactName(sender) { message.replyTo?.senderName = name }
@@ -609,7 +713,7 @@ final class RoomTimeline {
                 case nil:
                     break
                 }
-            } else if let virtual = item.asVirtual() {
+            } else if let virtual = readings[index].virtual {
                 previous = nil
                 switch virtual {
                 case .dateDivider(let ts):
@@ -622,6 +726,8 @@ final class RoomTimeline {
             }
         }
         appendQueuedImages(to: &rows, after: previous)
+        // What's kept is what's in the timeline now: items gone from it go.
+        self.readings = Dictionary(readings.map { (ObjectIdentifier($0.item), $0) }, uniquingKeysWith: { _, last in last })
 
         // A thread's history ends at its root message.
         if let threadRoot, let first = rows.first(where: \.isMessage),
@@ -660,19 +766,7 @@ final class RoomTimeline {
         }
 
         resolveReceipts(in: &rows)
-
-        // Detect history landing above what was the oldest message, so the view can hold its place.
-        let oldFirst = self.rows.first(where: \.isMessage)?.id
-        let newFirst = rows.first(where: \.isMessage)?.id
-        let addsAbove = oldFirst != nil && oldFirst != newFirst && rows.contains(where: { $0.id == oldFirst })
-        if addsAbove { willAddAbove?() }
-        self.rows = rows
-        if isLive { updateLatestReaction() }
-        if addsAbove, let oldFirst {
-            prependAnchorID = oldFirst
-            prependCount += 1
-        }
-        fetchMissingReplyDetails()
+        return (rows, converted)
     }
 
     /// A reply names the message it answers; if that message isn't among the loaded ones, the
@@ -717,6 +811,13 @@ final class RoomTimeline {
 
     /// This Mac was verified (or no longer is): the marks on the user's own messages, drawn again.
     func thisMacVerificationChanged() {
+        trustVersion += 1
+        rebuildRows()
+    }
+
+    /// Someone was verified, or a device of theirs: the marks on their messages, made again.
+    func trustChanged() {
+        trustVersion += 1
         rebuildRows()
     }
 

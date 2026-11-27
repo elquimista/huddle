@@ -284,6 +284,16 @@ enum DevHooks {
     }
 
     static let freeScroll = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_FREE_SCROLL"] != nil
+
+    /// How many rows of history a room's timeline loads as it opens, for measuring how it copes
+    /// with a long one (HUDDLE_DEV_PERF times each rebuild of its rows).
+    static let historyRows: Int? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_HISTORY"].flatMap(Int.init)
+        : nil
+
+    /// Each time a timeline's rows are made, makes them all again from nothing as well, and says
+    /// whether they're the same (DEV_ROWS_SAME, DEV_ROWS_DIFFER): a check on what's kept of them.
+    static let checksRows = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_CHECK_ROWS"] != nil
     /// Gives every message its actions as accessibility actions even without VoiceOver, so tests
     /// can reach them.
     static let accessibilityActions = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_AX_ACTIONS"] != nil

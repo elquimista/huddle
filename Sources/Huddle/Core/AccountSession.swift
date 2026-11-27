@@ -346,7 +346,12 @@ final class AccountSession: Identifiable {
         roomToReopen = lastRoomBySpace[selectedSpaceID ?? ""]
         verificationFlow.isThisMacVerified = { [weak self] in self?.verification == .verified }
         verificationFlow.onIncoming = { [weak self] in self?.showVerificationRequest() }
-        verificationFlow.onVerifiedPerson = { [weak self] userID in self?.peopleIdentities[userID] = .verified }
+        verificationFlow.onVerifiedPerson = { [weak self] userID in
+            guard let self else { return }
+            self.peopleIdentities[userID] = .verified
+            // Their messages' marks: rows keep the ones they were made with (RoomTimeline).
+            for timeline in self.allTimelines { timeline.trustChanged() }
+        }
         // The drafts kept from last time, for their rooms' rows.
         for roomID in Set(savedDraftTexts.keys.map(Self.roomID(ofDraftKey:))) {
             refreshDraftPreview(forRoom: roomID)
