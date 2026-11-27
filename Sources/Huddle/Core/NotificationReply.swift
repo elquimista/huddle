@@ -104,11 +104,12 @@ extension AccountSession {
             timeline = try await room.timeline()
         }
         _ = try await timeline.send(msg: MentionComposer.content(for: text, mentions: []))
-        if threadRoot == nil {
-            setRoom(roomID, unread: false)
-        } else {
+        if let threadRoot {
             // Other messages in the room may still be unread; the thread has been answered.
             try? await timeline.markAsRead(receiptType: .read)
+            noteRead(roomID: roomID, thread: threadRoot)
+        } else {
+            setRoom(roomID, unread: false)
         }
     }
 }

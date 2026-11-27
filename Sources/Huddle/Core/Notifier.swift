@@ -44,6 +44,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private var seen: Set<String> = []
     private var seenOrder: [String] = []
     private var notifiedInvites = Set(UserDefaults.standard.stringArray(forKey: "notifiedInvites") ?? [])
+    /// Dev build with alerts off: the alerts that would have been delivered, so that clearing
+    /// them can be tested without any showing (`DEV_NOTIFY_HELD` lines).
+    private var devHeld: [(group: String, thread: String, event: String)] = []
 
     /// `UNUserNotificationCenter` only works inside an app bundle.
     private var center: UNUserNotificationCenter? {
@@ -84,6 +87,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let senderID: String
         let body: String
         var threadRoot: String?
+        var eventID: String?
 
         switch item.event {
         case .timeline(let event):
@@ -93,6 +97,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                   let content = try? event.content(),
                   let text = Self.describe(content, contactName: { [account] in account.contactName(for: $0) }) else { return }
             body = NotificationSettings.showsText ? text : NotificationSettings.hiddenText
+            eventID = event.eventId()
             threadRoot = item.threadId ?? event.threadRootEventId()
             key = "\(account.id)|\(roomID)|\(event.eventId())"
             guard seen.insert(key).inserted else { return }
@@ -165,7 +170,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.body = body
         content.threadIdentifier = Self.group(accountID: account.id, roomID: roomID)
         content.userInfo = ["account": account.id, "room": roomID, "thread": threadRoot ?? "",
-                            "roomName": Self.roomName(item)]
+                            "event": eventID ?? "", "roomName": Self.roomName(item)]
         if item.isNoisy == true, NotificationSettings.playsSound { content.sound = .default }
         // A message can be answered from its alert; an invitation is answered in the app.
         if case .timeline = item.event { content.categoryIdentifier = Self.messageCategory }
@@ -182,6 +187,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 let roomName = Self.roomName(item)
                 Task { await self.reply(text, accountID: account.id, roomID: roomID, thread: thread, roomName: roomName) }
             }
+        }
+        // A thread's reply keeps its room unread until the thread is read, wherever the room is
+        // in the list: the account watches the room for that.
+        if threadRoot != nil { account.watchThreads(in: roomID) }
+        if AppEnvironment.isDev, !NotificationSettings.isEnabled, let eventID {
+            devHeld.append((content.threadIdentifier, threadRoot ?? "", eventID))
         }
         guard NotificationSettings.isEnabled else { return }
         center?.add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
@@ -289,12 +300,52 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     func clear(accountID: String, roomID: String? = nil) {
         guard let center else { return }
         let prefix = roomID.map { Self.group(accountID: accountID, roomID: $0) } ?? "\(accountID)|"
+        if AppEnvironment.isDev, !devHeld.isEmpty {
+            let removed = devHeld.filter { $0.group.hasPrefix(prefix) }
+            devHeld.removeAll { $0.group.hasPrefix(prefix) }
+            print("DEV_NOTIFY_HELD cleared \(removed.map { "\($0.thread.isEmpty ? "main" : "thread"):\($0.event)" }) left=\(devHeld.count)")
+            fflush(stdout)
+        }
         center.getDeliveredNotifications { delivered in
             let stale = delivered
                 .filter { $0.request.content.threadIdentifier.hasPrefix(prefix) }
                 .map(\.request.identifier)
             if AppEnvironment.isDev {
                 print("DEV_NOTIFY_CLEAR \(prefix) removed=\(stale.count) delivered=\(delivered.count)")
+                fflush(stdout)
+            }
+            if !stale.isEmpty { center.removeDeliveredNotifications(withIdentifiers: stale) }
+        }
+    }
+
+    /// Removes a room's notifications for messages that have been read, here or on another
+    /// device: those `isRead` says are, given the thread each is in ("" for the main
+    /// conversation) and its event. Threads are read apart from the rest of the room, so the
+    /// room being read doesn't settle a thread's.
+    func clearRead(accountID: String, roomID: String, isRead: @escaping (_ thread: String, _ eventID: String) -> Bool) {
+        guard let center else { return }
+        let prefix = Self.group(accountID: accountID, roomID: roomID)
+        if AppEnvironment.isDev, devHeld.contains(where: { $0.group == prefix }) {
+            let removed = devHeld.filter { $0.group == prefix && isRead($0.thread, $0.event) }
+            devHeld.removeAll { $0.group == prefix && isRead($0.thread, $0.event) }
+            let kept = devHeld.filter { $0.group == prefix }
+            func said(_ held: [(group: String, thread: String, event: String)]) -> [String] {
+                held.map { "\($0.thread.isEmpty ? "main" : "thread"):\($0.event)" }
+            }
+            print("DEV_NOTIFY_HELD read \(said(removed)) kept=\(said(kept))")
+            fflush(stdout)
+        }
+        Task { @MainActor in
+            let delivered = await center.deliveredNotifications()
+            let stale = delivered.filter { notification in
+                let content = notification.request.content
+                guard content.threadIdentifier == prefix else { return false }
+                // One from before alerts said which event they were for has "" for it: as a
+                // whole-room alert it goes once the main conversation is read; a thread's stays.
+                return isRead(content.userInfo["thread"] as? String ?? "", content.userInfo["event"] as? String ?? "")
+            }.map(\.request.identifier)
+            if AppEnvironment.isDev, !stale.isEmpty {
+                print("DEV_NOTIFY_CLEAR_READ \(prefix) removed=\(stale.count) delivered=\(delivered.count)")
                 fflush(stdout)
             }
             if !stale.isEmpty { center.removeDeliveredNotifications(withIdentifiers: stale) }

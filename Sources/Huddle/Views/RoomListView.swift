@@ -645,6 +645,24 @@ private struct RoomRow: View {
             pill(Text("@"), color: .red)
         } else if room.notifications > 0 {
             pill(Text("\(min(room.notifications, 99))"), color: room.isUrgent ? .red : .accentColor)
+        } else if room.hasOnlyThreadNews {
+            // Only replies in threads are unread, which the newest message may not show: says
+            // where they are. In colour, as a count would be; grey, as a quiet room's dot is,
+            // where only mentions are told of.
+            let symbol = Image(systemName: "bubble.left.and.bubble.right.fill")
+            let said = room.unreadThreads == 1 ? "New replies in a thread" : "New replies in \(room.unreadThreads) threads"
+            Group {
+                if room.notificationMode == .mentionsAndKeywordsOnly {
+                    symbol
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: Self.badgeWidth)
+                } else {
+                    pill(Text(symbol).font(.system(size: 9, weight: .bold)), color: .accentColor)
+                }
+            }
+            .help(said)
+            .accessibilityLabel(said)
         } else if room.showsUnread {
             // Marked unread on purpose is a reminder, in colour; new messages in a quiet room
             // only a grey dot.
