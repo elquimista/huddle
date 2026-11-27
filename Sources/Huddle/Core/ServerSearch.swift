@@ -119,7 +119,7 @@ struct ServerSearch {
             }
         }
         let profile = profiles[sender]
-        let senderName = (profile?["displayname"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? sender
+        let senderName = ShownName.clean(profile?["displayname"] as? String) ?? sender
         let timestamp = (event["origin_server_ts"] as? NSNumber)?.doubleValue ?? 0
         let (text, icon) = describe(content, senderName: senderName)
         return SearchHit(roomID: roomID, eventID: eventID, sender: sender, senderName: senderName,

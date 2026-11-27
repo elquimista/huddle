@@ -362,10 +362,10 @@ final class VerificationFlow {
         let senderID = details.senderProfile.userId
         let request = Request(flowID: details.flowId,
                               senderID: senderID,
-                              senderName: details.senderProfile.displayName,
+                              senderName: ShownName.clean(details.senderProfile.displayName),
                               senderAvatarURL: details.senderProfile.avatarUrl,
                               deviceID: details.deviceId,
-                              deviceName: details.deviceDisplayName.flatMap { $0.isEmpty ? nil : $0 },
+                              deviceName: ShownName.clean(details.deviceDisplayName),
                               firstSeen: details.firstSeenTimestamp > 0
                                 ? Date(timeIntervalSince1970: TimeInterval(details.firstSeenTimestamp) / 1000) : nil)
         let subject: Subject = senderID != userID ? .person(id: senderID, name: request.senderName)

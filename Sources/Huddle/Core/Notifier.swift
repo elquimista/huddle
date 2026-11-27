@@ -93,10 +93,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             }
             // Someone ringing: the call panel, whether or not the room is in front, and not an
             // alert as well. A ring that goes unanswered leaves a missed call (CallCenter).
-            let callerName = account.contactName(for: senderID) ?? item.senderInfo.displayName ?? senderID.matrixLocalpart
+            let callerName = account.contactName(for: senderID) ?? Self.senderName(item, senderID)
             // A direct chat's name is the caller's; only a room's is worth saying.
             let callRoomName = item.roomInfo.isDm || item.roomInfo.isDirect
-                || item.roomInfo.displayName == item.senderInfo.displayName ? nil : item.roomInfo.displayName
+                || Self.roomName(item) == ShownName.clean(item.senderInfo.displayName) ? nil : Self.roomName(item)
             if case .messageLike(.rtcNotification(let type, let expirationTs, let intent)) = content, type == .ring {
                 let call = IncomingCall(
                     account: account, roomID: roomID, eventID: event.eventId(),
@@ -137,7 +137,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
 
         // The user's own name for them, where they've given one (ContactNames.swift).
-        let sender = account.contactName(for: senderID) ?? item.senderInfo.displayName ?? senderID
+        let sender = account.contactName(for: senderID) ?? Self.senderName(item, senderID)
         let isDirect = item.roomInfo.isDirect && item.roomInfo.joinedMembersCount <= 2
         let recipient = arrival(on: account)
 
@@ -147,14 +147,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content.subtitle = [threadRoot != nil ? "In a thread" : nil, recipient]
                 .compactMap { $0 }.joined(separator: " · ").capitalizedFirst
         } else {
-            content.title = item.roomInfo.displayName
+            content.title = Self.roomName(item)
             content.subtitle = [threadRoot != nil ? "\(sender) in a thread" : sender, recipient]
                 .compactMap { $0 }.joined(separator: " · ")
         }
         content.body = body
         content.threadIdentifier = Self.group(accountID: account.id, roomID: roomID)
         content.userInfo = ["account": account.id, "room": roomID, "thread": threadRoot ?? "",
-                            "roomName": item.roomInfo.displayName]
+                            "roomName": Self.roomName(item)]
         if item.isNoisy == true, NotificationSettings.playsSound { content.sound = .default }
         // A message can be answered from its alert; an invitation is answered in the app.
         if case .timeline = item.event { content.categoryIdentifier = Self.messageCategory }
@@ -168,7 +168,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             if let text = DevHooks.notificationReply, content.categoryIdentifier == Self.messageCategory,
                store?.selected?.id == account.id {
                 let thread = threadRoot
-                let roomName = item.roomInfo.displayName
+                let roomName = Self.roomName(item)
                 Task { await self.reply(text, accountID: account.id, roomID: roomID, thread: thread, roomName: roomName) }
             }
         }
@@ -227,6 +227,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
         guard NotificationSettings.isEnabled else { return }
         center?.add(UNNotificationRequest(identifier: "\(account.id)|verify", content: content, trigger: nil))
+    }
+
+    /// Who it's from: their name made safe to show, with their Matrix ID after it if someone else
+    /// in the room goes by the same name (ShownName), or their Matrix ID if they have none.
+    private static func senderName(_ item: NotificationItem, _ senderID: String) -> String {
+        ShownName.person(item.senderInfo.displayName, userID: senderID, isAmbiguous: item.senderInfo.isNameAmbiguous)
+    }
+
+    /// The room's name, made safe to show (ShownName).
+    private static func roomName(_ item: NotificationItem) -> String {
+        ShownName.clean(item.roomInfo.displayName) ?? "Unnamed room"
     }
 
     private static func describe(_ content: TimelineEventContent, contactName: (String) -> String?) -> String? {

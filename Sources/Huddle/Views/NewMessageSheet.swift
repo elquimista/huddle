@@ -406,14 +406,15 @@ struct NewMessageSheet: View {
         var people: [Person] = []
         do {
             people = try await account.searchPeople(term).map {
-                Person(userID: $0.userId, name: $0.displayName ?? $0.userId, avatarURL: $0.avatarUrl)
+                Person(userID: $0.userId, name: ShownName.clean($0.displayName) ?? $0.userId, avatarURL: $0.avatarUrl)
             }
         } catch {
             searchFailed = true
         }
         if let typed = typedUserID, !people.contains(where: { $0.userID == typed }) {
             if let profile = try? await account.profile(of: typed) {
-                people.insert(Person(userID: typed, name: profile.displayName ?? typed, avatarURL: profile.avatarUrl), at: 0)
+                people.insert(Person(userID: typed, name: ShownName.clean(profile.displayName) ?? typed,
+                                     avatarURL: profile.avatarUrl), at: 0)
             } else if await account.userExists(typed) == false {
                 // Only the server saying so counts: some refuse to show the profiles of
                 // people who share no room, who exist all the same.

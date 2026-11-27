@@ -798,10 +798,12 @@ final class RoomTimeline {
     private func requestProfile(_ userID: String) {
         guard requestedProfiles.insert(userID).inserted else { return }
         Task { [weak self, room] in
-            let name = try? await room.memberDisplayName(userId: userID)
-            let avatar = try? await room.memberAvatarUrl(userId: userID)
+            // With their Matrix ID after it if someone else in the room goes by the same name.
+            let member = try? await room.member(userId: userID)
             guard let self else { return }
-            self.profiles[userID] = (name ?? userID, avatar ?? nil)
+            self.profiles[userID] = (ShownName.person(member?.displayName, userID: userID,
+                                                      isAmbiguous: member?.isNameAmbiguous ?? false),
+                                     member?.avatarUrl)
             self.nameVersion += 1
             self.rebuildRows()
             if self.identityStates[userID] != nil { self.updateIdentityWarnings() }
@@ -878,11 +880,13 @@ final class RoomTimeline {
         var found: [MentionCandidate] = []
         while let chunk = iterator.nextChunk(chunkSize: 500) {
             for member in chunk where member.membership == .join && member.userId != ownUserID {
+                // Suggestions show each one's Matrix ID beside the name.
                 found.append(MentionCandidate(id: member.userId,
-                                              name: member.displayName ?? member.userId.matrixLocalpart,
+                                              name: ShownName.clean(member.displayName) ?? member.userId.matrixLocalpart,
                                               avatarURL: member.avatarUrl))
-                if profiles[member.userId] == nil, let name = member.displayName {
-                    profiles[member.userId] = (name, member.avatarUrl)
+                if profiles[member.userId] == nil, ShownName.clean(member.displayName) != nil {
+                    profiles[member.userId] = (ShownName.person(member.displayName, userID: member.userId,
+                                                                isAmbiguous: member.isNameAmbiguous), member.avatarUrl)
                     nameVersion += 1
                 }
             }
@@ -1559,7 +1563,7 @@ extension TimelineItemContent {
         case .rtcNotification:
             return sender.map { "\($0) started a call" } ?? "Started a call"
         case .roomMembership(let userID, let displayName, let change, _):
-            let target = contactName(userID) ?? displayName ?? userID
+            let target = contactName(userID) ?? ShownName.clean(displayName) ?? userID
             switch change {
             case .joined, .invitationAccepted, .knockAccepted: return "\(target) joined"
             case .left: return "\(target) left"
@@ -1573,16 +1577,17 @@ extension TimelineItemContent {
             default: return nil
             }
         case .profileChange(let displayName, let previous, _, _):
-            if let displayName, let previous, displayName != previous {
-                return "\(previous) changed their name to \(displayName)"
+            // Both made safe to show (ShownName): a name can be chosen to read as another.
+            if let new = ShownName.clean(displayName), let old = ShownName.clean(previous), new != old {
+                return "\(old) changed their name to \(new)"
             }
             return "\(who) updated their profile"
         case .state(_, let content):
             switch content {
-            case .roomName(let name): return "\(who) renamed the room to \(name ?? "nothing")"
+            case .roomName(let name): return "\(who) renamed the room to \(ShownName.clean(name) ?? "nothing")"
             case .roomTopic(let topic):
                 // What it says now, as far as a line goes.
-                guard let line = topic.flatMap(RoomSummary.oneLine) else { return "\(who) removed the topic" }
+                guard let line = ShownName.text(topic).flatMap(RoomSummary.oneLine) else { return "\(who) removed the topic" }
                 let shown = line.count > 80 ? line.prefix(79).trimmingCharacters(in: .whitespaces) + "…" : line
                 return "\(who) changed the topic to “\(shown)”"
             case .roomAvatar: return "\(who) changed the room picture"

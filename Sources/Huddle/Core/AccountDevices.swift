@@ -40,7 +40,7 @@ extension AccountSession {
         var devices = (json["devices"] as? [[String: Any]] ?? []).compactMap { entry -> AccountDevice? in
             guard let id = entry["device_id"] as? String else { return nil }
             let seen = (entry["last_seen_ts"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
-            return AccountDevice(id: id, name: (entry["display_name"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+            return AccountDevice(id: id, name: ShownName.clean(entry["display_name"] as? String),
                                  lastSeen: seen, lastSeenIP: entry["last_seen_ip"] as? String, trust: .unknown)
         }
         // Verified: the device's keys carry a valid signature by the account's self-signing key,
