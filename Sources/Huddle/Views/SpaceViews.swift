@@ -258,7 +258,7 @@ private struct RailIcon: View, Equatable {
                 .background(LinearGradient(colors: [Self.homeTop, Self.homeBottom], startPoint: .top, endPoint: .bottom),
                             in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
         case .space(let space):
-            AvatarView(media: media, url: space.avatarUrl, name: space.displayName,
+            AvatarView(media: media, url: space.avatarUrl, name: space.shownName,
                        seed: space.roomId, size: 34, isSquare: true)
         case .invite(let invite):
             // Faded until joined, and marked by its red dot.
@@ -281,7 +281,7 @@ private struct RailIcon: View, Equatable {
         let key = shortcut.map { " (\($0))" } ?? ""
         return switch kind {
         case .home: "Home\(key)\nDirect chats and rooms that aren’t in a space"
-        case .space(let space): space.displayName + key
+        case .space(let space): space.shownName + key
         case .invite(let invite): "Invitation to \(invite.name)"
         }
     }
@@ -289,7 +289,7 @@ private struct RailIcon: View, Equatable {
     private var name: String {
         switch kind {
         case .home: "Home"
-        case .space(let space): space.displayName
+        case .space(let space): space.shownName
         case .invite(let invite): invite.name
         }
     }
@@ -601,7 +601,9 @@ private struct SpaceLevelView: View {
         }
         .task(id: invite?.id) {
             guard invite != nil, let member = try? await account.room(id: spaceID)?.inviter() else { return }
-            inviter = Inviter(userID: member.userId, name: member.displayName ?? member.userId,
+            inviter = Inviter(userID: member.userId,
+                              name: ShownName.person(member.displayName, userID: member.userId,
+                                                     isAmbiguous: member.isNameAmbiguous),
                               avatarURL: member.avatarUrl)
         }
         .onDisappear {
@@ -631,8 +633,8 @@ private struct SpaceLevelView: View {
         let space = directory?.space
         // As the space has them now, changed here or elsewhere; the server's description of the
         // space until they're known.
-        let name = details.flatMap { $0.name.isEmpty ? nil : $0.name } ?? space?.displayName ?? account.spaceName(spaceID)
-        let topic = details.map(\.topic) ?? space?.topic
+        let name = details.flatMap { $0.name.isEmpty ? nil : $0.name } ?? space?.shownName ?? account.spaceName(spaceID)
+        let topic = details.map(\.topic) ?? ShownName.text(space?.topic)
         return HStack(alignment: .top, spacing: 16) {
             picture(name: name, fallbackURL: space?.avatarUrl ?? invite?.avatarURL)
             VStack(alignment: .leading, spacing: 6) {
@@ -896,7 +898,7 @@ private struct SpaceLevelView: View {
                     account.selectedRoomID = room.roomId
                 }
             } catch {
-                failure = "Couldn’t join \(room.displayName): \(error.actionMessage)"
+                failure = "Couldn’t join \(room.shownName): \(error.actionMessage)"
             }
         }
     }
@@ -904,7 +906,7 @@ private struct SpaceLevelView: View {
     /// Takes a room or space out of this one, for everyone in it. It stays as it is otherwise:
     /// a space taken out is in the rail again, if the account is in it.
     private func remove(_ room: SpaceRoom) {
-        FailureAlert.run("Couldn’t Remove “\(room.displayName)”") {
+        FailureAlert.run("Couldn’t Remove “\(room.shownName)”") {
             try await account.removeRoom(room.roomId, fromSpace: spaceID)
             await directory?.reload()
         }
@@ -937,11 +939,11 @@ private struct SpaceRoomRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            AvatarView(media: account.media, url: room.avatarUrl, name: room.displayName,
+            AvatarView(media: account.media, url: room.avatarUrl, name: room.shownName,
                        seed: room.roomId, size: 38, isSquare: isSpace)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(room.displayName)
+                    Text(room.shownName)
                         .fontWeight(.semibold)
                         .lineLimit(1)
                     if isSpace {
@@ -953,7 +955,7 @@ private struct SpaceRoomRow: View {
                             .background(.quaternary, in: Capsule())
                     }
                 }
-                if let topic = room.topic, !topic.isEmpty {
+                if let topic = ShownName.text(room.topic) {
                     Text(topic)
                         .font(.callout)
                         .foregroundStyle(.secondary)

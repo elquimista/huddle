@@ -523,7 +523,7 @@ final class AccountSession: Identifiable {
         let client = client
         async let name = try? client.displayName()
         async let avatar = try? client.avatarUrl()
-        displayName = await name
+        displayName = ShownName.clean(await name ?? nil)
         avatarURL = await avatar ?? nil
     }
 
@@ -942,7 +942,7 @@ final class AccountSession: Identifiable {
 
     /// What is known of a space: one of the account's own, or one it has been invited to.
     func spaceName(_ spaceID: String) -> String {
-        spaces.first { $0.roomId == spaceID }?.displayName
+        spaces.first { $0.roomId == spaceID }?.shownName
             ?? allRooms.first { $0.id == spaceID }?.name
             ?? "Space"
     }
@@ -1360,7 +1360,7 @@ final class AccountSession: Identifiable {
         guard !unknown.isEmpty, let room = roomHandles[roomID] else { return }
         Task { [weak self] in
             for userID in unknown {
-                let name = (try? await room.memberDisplayName(userId: userID)) ?? nil
+                let name = ShownName.clean((try? await room.memberDisplayName(userId: userID)) ?? nil)
                 self?.typistNames["\(roomID)|\(userID)"] = name ?? userID.matrixLocalpart
             }
             guard let self else { return }
@@ -1706,13 +1706,13 @@ extension RoomSummary {
     /// - Parameter names: the user's own names for people (ContactNames.swift), for a direct
     ///   chat's name and whoever wrote the newest message.
     static func make(from room: Room, names: [String: String] = [:]) async -> RoomSummary {
-        var summary = RoomSummary(id: room.id(), name: room.displayName() ?? room.id())
+        var summary = RoomSummary(id: room.id(), name: ShownName.clean(room.displayName()) ?? room.id())
         // A direct chat with one other person: who wrote its newest message goes without saying.
         // One with more names them, as a room does (and as its notifications do).
         var isOneToOneChat = false
         if let info = try? await room.roomInfo() {
             isOneToOneChat = info.isDirect && info.joinedMembersCount <= 2
-            summary.name = info.displayName ?? info.canonicalAlias ?? "Empty room"
+            summary.name = ShownName.clean(info.displayName) ?? info.canonicalAlias ?? "Empty room"
             summary.avatarURL = info.avatarUrl
             summary.isDirect = info.isDirect
             summary.isInvite = info.membership == .invited
@@ -1726,7 +1726,7 @@ extension RoomSummary {
             summary.isFavourite = info.isFavourite
             summary.isLowPriority = info.isLowPriority
             summary.isEncrypted = info.encryptionState == .encrypted
-            summary.topic = info.topic.flatMap(RoomSummary.oneLine)
+            summary.topic = ShownName.text(info.topic).flatMap(RoomSummary.oneLine)
             summary.isOneToOne = info.activeMembersCount == 2
             summary.hasCall = info.hasRoomCall
             summary.callParticipantCount = info.activeRoomCallParticipants.count
@@ -1736,7 +1736,7 @@ extension RoomSummary {
             }
             if let name = ContactRoomName.name(computed: info.displayName, hasOwnName: info.hasOwnName,
                                                isDirect: info.isDirect, heroes: info.heroes, names: names) {
-                summary.name = name
+                summary.name = ShownName.clean(name) ?? summary.name
             }
         }
         switch await room.latestEvent() {
@@ -1776,9 +1776,16 @@ extension Date {
     }
 }
 
+extension SpaceRoom {
+    /// The space's or room's name, made safe to show (ShownName): its address or ID if nothing
+    /// visible is left of it. Rooms in a space's directory are named by whoever made them.
+    var shownName: String { ShownName.clean(displayName) ?? canonicalAlias ?? roomId }
+}
+
 extension ProfileDetails {
+    /// The sender's name, made safe to show (ShownName), if they have one.
     var displayName: String? {
-        if case .ready(let displayName, _, _, _, _) = self { return displayName }
+        if case .ready(let displayName, _, _, _, _) = self { return ShownName.clean(displayName) }
         return nil
     }
 
@@ -1787,8 +1794,13 @@ extension ProfileDetails {
         return nil
     }
 
+    /// The sender's name, or their Matrix ID; with the Matrix ID after it when someone else in
+    /// the room goes by the same name, or one that looks the same (ShownName.person).
     func name(fallback userID: String) -> String {
-        displayName ?? userID
+        if case .ready(let displayName, let isAmbiguous, _, _, _) = self {
+            return ShownName.person(displayName, userID: userID, isAmbiguous: isAmbiguous)
+        }
+        return userID
     }
 }
 

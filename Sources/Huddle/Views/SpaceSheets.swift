@@ -484,11 +484,11 @@ struct LeaveSpaceSheet: View {
                            set: { if $0 { chosen.insert(id) } else { chosen.remove(id) } })
         return Toggle(isOn: isOn) {
             HStack(spacing: 10) {
-                AvatarView(media: account.media, url: room.spaceRoom.avatarUrl, name: room.spaceRoom.displayName,
+                AvatarView(media: account.media, url: room.spaceRoom.avatarUrl, name: room.spaceRoom.shownName,
                            seed: id, size: 24, isSquare: room.spaceRoom.roomType == .space)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(room.spaceRoom.displayName)
+                    Text(room.spaceRoom.shownName)
                         .lineLimit(1)
                     if room.isLastOwner {
                         Text("You’re its only owner")

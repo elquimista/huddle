@@ -118,7 +118,7 @@ struct HuddleApp: App {
                         .keyboardShortcut(RailShortcut.home)
                         .disabled(paused)
                     ForEach(Array(account.spaces.enumerated()), id: \.element.roomId) { index, space in
-                        Toggle(space.displayName, isOn: Binding(
+                        Toggle(space.shownName, isOn: Binding(
                             get: { account.selectedSpaceID == space.roomId },
                             set: { _ in account.choose(inRail: .space(space.roomId)) }))
                             .keyboardShortcut(RailShortcut.space(at: index))

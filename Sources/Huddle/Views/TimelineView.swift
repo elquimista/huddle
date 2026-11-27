@@ -2211,16 +2211,41 @@ private struct MessageView: View {
                     .monospacedDigit()
                     .foregroundStyle(.tertiary)
                     .frame(width: 54, alignment: .trailing)
-                Text(message.senderName)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(NameColors.shared.color(for: message.sender, inRoom: timeline.roomID))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                ircName
                     .frame(width: nameWidth, alignment: .trailing)
                     .help(message.sender)
             }
             VStack(alignment: .leading, spacing: 3) { content }
             Spacer(minLength: 0)
+        }
+    }
+
+    /// The sender, in the IRC layout's narrow column. A name someone else here goes by too comes
+    /// with the sender's Matrix ID (ShownName.person): here on a line of its own under the name,
+    /// shortened in the middle if it must be, so that both what tells two people on one server
+    /// apart ("@alice", "@alice_") and the server ("…:example.org", "…:evil.org") stay in view.
+    /// Cut short on one line, one or the other would go.
+    @ViewBuilder private var ircName: some View {
+        let color = NameColors.shared.color(for: message.sender, inRoom: timeline.roomID)
+        let idSuffix = " (\(message.sender))"
+        if message.senderName.hasSuffix(idSuffix) {
+            VStack(alignment: .trailing, spacing: 0) {
+                Text(message.senderName.dropLast(idSuffix.count))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+                Text(message.sender)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        } else {
+            Text(message.senderName)
+                .fontWeight(.semibold)
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 

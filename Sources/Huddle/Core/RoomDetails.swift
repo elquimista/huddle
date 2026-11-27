@@ -74,9 +74,9 @@ final class RoomDetails {
     }
 
     private func update(from info: RoomInfo) {
-        name = info.displayName ?? info.rawName ?? ""
+        name = ShownName.clean(info.displayName) ?? ShownName.clean(info.rawName) ?? ""
         nameSource = (info.hasOwnName, info.heroes)
-        topic = info.topic.flatMap { $0.isEmpty ? nil : $0 }
+        topic = ShownName.text(info.topic)
         avatarURL = info.avatarUrl
         isEncrypted = info.encryptionState == .encrypted
         isDirect = info.isDirect
@@ -106,8 +106,8 @@ final class RoomDetails {
 
     /// The name, with the user's names for people where it's made from theirs.
     func shownName(names: [String: String]) -> String {
-        ContactRoomName.name(computed: name, hasOwnName: nameSource.hasOwnName, isDirect: isDirect,
-                             heroes: nameSource.heroes, names: names) ?? name
+        ShownName.clean(ContactRoomName.name(computed: name, hasOwnName: nameSource.hasOwnName, isDirect: isDirect,
+                                             heroes: nameSource.heroes, names: names)) ?? name
     }
 
     /// This account's power level here, once the members are known.
@@ -171,7 +171,9 @@ final class RoomDetails {
                     case .infinite: .max
                     case .value(let value): value
                     }
-                    result.append(Member(userID: member.userId, name: member.displayName ?? member.userId,
+                    result.append(Member(userID: member.userId,
+                                         name: ShownName.person(member.displayName, userID: member.userId,
+                                                                isAmbiguous: member.isNameAmbiguous),
                                          avatarURL: member.avatarUrl, isInvited: isInvited, role: role,
                                          powerLevel: level))
                 }
