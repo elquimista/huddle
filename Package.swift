@@ -29,5 +29,14 @@ let package = Package(
             // Sparkle.framework goes in the app's Frameworks folder (Scripts/build-app.sh).
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
+        // swift test: what can be checked without a server, the security fixes above all.
+        // Tests use temporary folders only: run outside the app, Huddle takes itself for the
+        // release build, whose data is the user's.
+        .testTarget(
+            name: "HuddleTests",
+            dependencies: ["Huddle", .product(name: "MatrixRustSDK", package: "MatrixRustSDK")],
+            path: "Tests/HuddleTests",
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )

@@ -13,7 +13,12 @@ struct DraftsFile {
     private let key: SymmetricKey
 
     init(storeID: String, passphrase: String) {
-        url = StorePaths(storeID: storeID).data.appendingPathComponent("drafts")
+        self.init(url: StorePaths(storeID: storeID).data.appendingPathComponent("drafts"), passphrase: passphrase)
+    }
+
+    /// At `url`: the account's is in its store's folder (tests use a folder of their own).
+    init(url: URL, passphrase: String) {
+        self.url = url
         key = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: Data(passphrase.utf8)),
                                      salt: Data("app.huddle.drafts".utf8), info: Data(), outputByteCount: 32)
     }

@@ -87,6 +87,15 @@ Sessions are stored in the Keychain, and macOS ties Keychain access to an app's 
 
 `Scripts/make-icons.sh` redraws `Resources/AppIcon.icns` and `Resources/AppIcon-Dev.icns` from `Scripts/make-icon.swift`.
 
+## Tests
+
+```sh
+swift test                                          # the app's (Tests/HuddleTests)
+python3 -I -B Tests/scripts/test_scripts.py          # the release and build scripts'
+```
+
+What can be checked without a server, the security fixes above all: names cleaned of what could make them read as something else, links that ask before going somewhere their text doesn't say, nested formatting that froze the app, cross-signing signatures (and canonical JSON, against the specification's examples), pictures and voice messages that would unpack to gigabytes, encrypted drafts, the names and kinds of files people send; and the release notes, appcast and Element Call's content security policy. They use temporary folders only: run outside the app, Huddle takes itself for the release build, whose data is yours. The Tests workflow (`.github/workflows/tests.yml`) runs both on every push to `main` and `legacy/macos-13` and on pull requests to them, building the Matrix SDK as a release does, and caching it on `main`, where releases can use it too.
+
 ## Local test servers
 
 Two Docker setups give Huddle Dev something to talk to. Their credentials are in each folder's `dev.env` and work nowhere else.
@@ -196,5 +205,6 @@ Sources/Huddle/Views    SwiftUI views
 Vendor/MatrixRustSDK    local Swift package wrapping the compiled SDK
 Vendor/ElementCall      Element Call, the call screen, fetched at a pinned commit by Scripts/fetch-element-call.sh
 Scripts                 SDK build, app bundling, icons, Dev launcher
+Tests                   the app's tests (HuddleTests) and the scripts' (scripts)
 dev                     Docker test servers and seed data
 ```
