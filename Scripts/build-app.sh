@@ -96,6 +96,8 @@ cp -R Resources/Licenses "$APP/Contents/Resources/"  # the open-source libraries
 # Element Call, the call screen: a web app run in a web view (Sources/Huddle/Core/Calls.swift).
 Scripts/fetch-element-call.sh
 ditto Vendor/ElementCall/dist "$APP/Contents/Resources/ElementCall"
+# Its page runs only its own code, from the app (the policy's reasons are in the script).
+python3 -I Scripts/element-call-csp.py "$APP/Contents/Resources/ElementCall/index.html"
 cp Vendor/ElementCall/LICENSE.txt "$APP/Contents/Resources/Licenses/Element-Call-LICENSE.txt"
 cp "$BIN" "$APP/Contents/MacOS/Huddle"
 if [ "$CONFIG" = release ]; then strip -x "$APP/Contents/MacOS/Huddle"; fi

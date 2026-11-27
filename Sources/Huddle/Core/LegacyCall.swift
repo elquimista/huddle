@@ -885,6 +885,19 @@ final class CallMedia: NSObject, WKNavigationDelegate, WKUIDelegate {
         for continuation in waiting { continuation.resume() }
     }
 
+    /// Only the page itself loads: nothing into frames, and nothing in place of it.
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                 decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+        let isPage = action.targetFrame?.isMainFrame == true && action.request.url.map(Self.isPage) == true
+        decisionHandler(isPage ? .allow : .cancel)
+    }
+
+    /// The page's address: the app's folder, where it's loaded from, or the blank page.
+    fileprivate static func isPage(_ url: URL) -> Bool {
+        url.absoluteString == "about:blank"
+            || (url.isFileURL && url.standardizedFileURL.path == Bundle.main.bundleURL.standardizedFileURL.path)
+    }
+
     /// The microphone, for the call's own page only; never the camera.
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
@@ -897,7 +910,8 @@ final class CallMedia: NSObject, WKNavigationDelegate, WKUIDelegate {
     /// The page: a connection to the other Mac, the microphone into it and their sound out.
     private static let page = """
     <!doctype html>
-    <html><body><audio id="sound" autoplay></audio>
+    <html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; media-src mediastream: blob:"></head>
+    <body><audio id="sound" autoplay></audio>
     <script>
     "use strict";
     const post = (message) => window.webkit.messageHandlers.legacyCall.postMessage(message);
@@ -1037,7 +1051,10 @@ private final class CallMediaMessages: NSObject, WKScriptMessageHandler {
         self.media = media
     }
 
+    /// Only from the page itself, in the main frame: the handler is there for every frame.
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.protocol == "file",
+              message.frameInfo.request.url.map(CallMedia.isPage) == true else { return }
         let body = message.body
         MainActor.assumeIsolated { media?.received(body) }
     }
