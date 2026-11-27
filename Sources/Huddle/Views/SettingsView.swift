@@ -612,6 +612,7 @@ private struct PrivacySettingsTab: View {
     @AppStorage(OwnPresence.sharingKey) private var sharesPresence = true
     @AppStorage(HistoryIndexer.defaultsKey) private var indexesFullHistory = true
     @AppStorage(EncryptionPreferences.excludesInsecureDevicesKey) private var excludesInsecureDevices = false
+    @AppStorage(LegacyCall.matrixOrgFallbackKey) private var usesMatrixOrgFallback = true
 
     /// Every account's full-history pass, taken together.
     private var progress: (done: Int, total: Int)? {
@@ -660,6 +661,14 @@ private struct PrivacySettingsTab: View {
                 }
             } footer: {
                 SectionNote(text: "People whose apps don’t verify their devices won’t be able to read what you send, and this Mac must be verified to send encrypted messages. Element calls this “exclude insecure devices”.")
+            }
+            Section {
+                Toggle(isOn: $usesMatrixOrgFallback) {
+                    Text("Use matrix.org to help calls connect")
+                    Text("When your server has no call server of its own, matrix.org’s helps the older kind of call find a way between the two Macs, and sees your IP address while it does.")
+                }
+            } footer: {
+                SectionNote(text: "Off, those calls connect only when the two Macs can reach each other directly. Element Call, which most calls use, goes through your server either way.")
             }
         }
         .onChange(of: indexesFullHistory) { _, on in

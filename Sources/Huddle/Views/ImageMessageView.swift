@@ -72,7 +72,8 @@ struct ImageMessageView: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
 
         ZStack {
-            Button(action: hasFailed ? retry : (withheld != nil && still == nil ? showAnyway : { open(still) })) {
+            // One too large to show at all opens the viewer, which says so and offers to save it.
+            Button(action: hasFailed ? retry : (withheld?.canBeShown == true && still == nil ? showAnyway : { open(still) })) {
                 // Every layer is held to the frame on its own. Left to size themselves, a layer
                 // filling the frame takes the shape of its picture, and the stack takes the
                 // largest of them: the blurred placeholder, which is always square, would make
@@ -103,7 +104,8 @@ struct ImageMessageView: View {
             // Not `.disabled`: SwiftUI dims part of a disabled button's picture, leaving a dark band.
             .allowsHitTesting(sendState == nil)
             .accessibilityLabel(accessibilityLabel)
-            .help(hasFailed ? "Try again" : (withheld != nil && still == nil ? "Download and show this picture" : ""))
+            .help(hasFailed ? "Try again" : (withheld == nil || still != nil ? ""
+                : withheld?.canBeShown == true ? "Download and show this picture" : "Too large to show here: open it to save it"))
 
             if hasFailed {
                 failureNote
@@ -233,24 +235,26 @@ struct ImageMessageView: View {
     }
 
     /// For a picture too large to fetch, or to decode, unasked: what it is, and that clicking
-    /// shows it. A spinner once clicked, while it downloads. Where the frame is too small for
-    /// that, just the symbol. White on the sender's blur, dimmed; on a plain tile, in the
-    /// tile's own grey.
+    /// shows it (a spinner then, while it downloads), or, for one too large to show at all, that
+    /// it isn't shown. Where the frame is too small for that, just the symbol. White on the
+    /// sender's blur, dimmed; on a plain tile, in the tile's own grey.
     private func withheldNote(_ reason: MediaLoader.Withheld) -> some View {
         let isOnBlur = !image.isSticker && image.blurhash.flatMap(BlurCache.image(for:)) != nil
+        let isLoading = isAskedFor && reason.canBeShown
         // As tall either way, so the words don't move when it's clicked.
         let symbol = Group {
-            if isAskedFor {
+            if isLoading {
                 ProgressView().controlSize(.small)
             } else {
-                Image(systemName: "arrow.down.circle.fill").font(.system(size: 22))
+                Image(systemName: reason.canBeShown ? "arrow.down.circle.fill" : "exclamationmark.circle.fill")
+                    .font(.system(size: 22))
             }
         }
         .frame(height: 26)
         return ViewThatFits {
             VStack(spacing: 4) {
                 symbol
-                Text(isAskedFor ? "Loading Picture…" : "Show Picture")
+                Text(isLoading ? "Loading Picture…" : reason.canBeShown ? "Show Picture" : "Too Large to Show")
                     .font(.caption.weight(.semibold))
                 Text(Self.describe(reason))
                     .font(.caption2)
@@ -300,7 +304,9 @@ struct ImageMessageView: View {
         let name = image.caption ?? image.filename
         let label = name.isEmpty ? what : "\(what): \(name)"
         guard let withheld, still == nil else { return label }
-        return "\(label), not downloaded (\(Self.describe(withheld))). Click to show it."
+        return withheld.canBeShown
+            ? "\(label), not downloaded (\(Self.describe(withheld))). Click to show it."
+            : "\(label), too large to show (\(Self.describe(withheld))). Click to open it, to save it."
     }
 }
 

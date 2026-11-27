@@ -571,9 +571,17 @@ final class LegacyCall: HuddleCall {
         return "The call couldn’t be set up."
     }
 
+    /// Settings ▸ Privacy: whether matrix.org's STUN server may help when the homeserver has none.
+    static let matrixOrgFallbackKey = "callsUseMatrixOrgFallback"
+
+    static var usesMatrixOrgFallback: Bool {
+        UserDefaults.standard.object(forKey: matrixOrgFallbackKey) as? Bool ?? true
+    }
+
     /// Where the call can find a way between the two Macs: the homeserver's TURN server if it has
-    /// one; otherwise the fallback Element offers, matrix.org's STUN server, which sees this Mac's
-    /// address while the call connects. (Not in Dev, whose test calls stay on this Mac.)
+    /// one; otherwise, unless turned off in Settings, the fallback Element offers, matrix.org's
+    /// STUN server, which sees this Mac's address while the call connects. (Not in Dev, whose
+    /// test calls stay on this Mac.)
     static func iceServers(for account: AccountSession) async -> [[String: Any]] {
         var servers: [[String: Any]] = []
         if let session = try? account.client.session(), var url = URL(string: session.homeserverUrl) {
@@ -590,7 +598,12 @@ final class LegacyCall: HuddleCall {
                 servers.append(server)
             }
         }
-        if servers.isEmpty, !AppEnvironment.isDev {
+        let fallsBack = servers.isEmpty && usesMatrixOrgFallback
+        if AppEnvironment.isDev {
+            // Dev's test calls stay on this Mac: whether matrix.org would be asked is only noted.
+            print("DEV_ICE_SERVERS \(servers.flatMap { $0["urls"] as? [String] ?? [] }) matrixOrg=\(fallsBack)")
+            fflush(stdout)
+        } else if fallsBack {
             servers.append(["urls": ["stun:turn.matrix.org"]])
         }
         return servers

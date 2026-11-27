@@ -190,9 +190,9 @@ final class LoginFlow {
 }
 
 enum AppInfo {
-    /// Sent to homeservers when registering Huddle as an OAuth client.
-    /// Replace with your project's website before distributing the app.
-    static let clientURI = "https://huddle.invalid"
+    /// Sent to homeservers when registering Huddle as an OAuth client: the server's sign-in page
+    /// shows it as Huddle's website, where people can see what they're letting in.
+    static let clientURI = "https://github.com/elquimista/huddle"
 }
 
 /// One-shot localhost HTTP listener that receives the OAuth redirect.
@@ -267,8 +267,12 @@ final class LoopbackServer: @unchecked Sendable {
             let query = URLComponents(string: "http://127.0.0.1\(path)")?.queryItems ?? []
             let isCallback = query.contains { $0.name == "code" || $0.name == "error" }
                 && self.expectedState.map { state in query.contains { $0.name == "state" && $0.value == state } } ?? false
+            // Refused or called off at the server's end, the page doesn't say "Signed in".
+            let isRefusal = query.contains { $0.name == "error" }
+            let (title, detail) = isRefusal ? ("Not signed in", "You can close this tab and return to Huddle to try again.")
+                                            : ("Signed in", "You can close this tab and return to Huddle.")
             let body = isCallback
-                ? "<html><body style='font:16px -apple-system;text-align:center;margin-top:20vh'><h2>Signed in</h2><p>You can close this tab and return to Huddle.</p></body></html>"
+                ? "<html><body style='font:16px -apple-system;text-align:center;margin-top:20vh'><h2>\(title)</h2><p>\(detail)</p></body></html>"
                 : ""
             let status = isCallback ? "200 OK" : "404 Not Found"
             let response = "HTTP/1.1 \(status)\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
