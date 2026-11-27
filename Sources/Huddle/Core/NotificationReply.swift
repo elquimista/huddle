@@ -200,10 +200,11 @@ extension AccountSession {
     /// The room read, once a message in it has been answered; for a thread, only the thread:
     /// other messages in the room may still be unread.
     private func markAnswered(roomID: String, threadRoot: String?, timeline: Timeline) async {
-        if threadRoot == nil {
-            setRoom(roomID, unread: false)
-        } else {
+        if let threadRoot {
             try? await timeline.markAsRead(receiptType: .read)
+            noteRead(roomID: roomID, thread: threadRoot)
+        } else {
+            setRoom(roomID, unread: false)
         }
     }
 }

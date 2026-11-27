@@ -160,7 +160,7 @@ struct RoomView: View {
                         .help("Details, members and settings (⌘I)")
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        let newThreads = timeline.newThreads.count
+                        let newThreads = max(timeline.unreadThreadRoots.count, timeline.newThreads.count)
                         Button {
                             panel = panel == .threadList ? nil : .threadList
                         } label: {

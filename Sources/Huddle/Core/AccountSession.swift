@@ -27,6 +27,10 @@ struct RoomSummary: Identifiable, Equatable {
     var isMarkedUnread = false
     /// Messages have come since the room was last read (marking it unread aside).
     var hasNewMessages = false
+    /// Threads with replies from someone else the user hasn't read (`ThreadActivity`). The
+    /// counts above, the SDK's, take any reply older than the newest message read in the main
+    /// conversation as read: these are what they leave out.
+    var unreadThreads = 0
     /// A space rather than a room (the room list leaves spaces out).
     var isSpace = false
     /// Tagged favourite or low priority (m.favourite, m.lowpriority), here or in another app.
@@ -57,7 +61,11 @@ struct RoomSummary: Identifiable, Equatable {
 
     var isMuted: Bool { notificationMode == .mute }
     /// Shown as unread: anything new, except that a muted room is only when marked unread.
-    var showsUnread: Bool { isMuted ? isMarkedUnread : hasUnread }
+    var showsUnread: Bool { isMuted ? isMarkedUnread : hasUnread || unreadThreads > 0 }
+    /// What makes it unread is only replies in threads: the list says so.
+    var hasOnlyThreadNews: Bool {
+        unreadThreads > 0 && !isMuted && notifications == 0 && mentions == 0 && !hasNewMessages && !isMarkedUnread
+    }
     var isHighlighted: Bool { isInvite || notifications > 0 || mentions > 0 }
     /// Addressed to you personally: an invitation, a mention, or a direct message.
     var isUrgent: Bool { isInvite || mentions > 0 || (isDirect && notifications > 0) }
@@ -289,6 +297,19 @@ final class AccountSession: Identifiable {
     @ObservationIgnored private var roomHandles: [String: Room] = [:]
     @ObservationIgnored private var timelines: [String: RoomTimeline] = [:]
     @ObservationIgnored private var probes: [String: RoomPreviewProbe] = [:]
+    /// The rooms on screen in the list, as last told the probes.
+    @ObservationIgnored private var roomsOnScreen: Set<String> = []
+    /// What each watched room's read receipts say of its threads (`RoomPreviewProbe`).
+    @ObservationIgnored private var threadActivity: [String: ThreadActivity] = [:]
+    /// Rooms watched until their threads are known: a thread's reply was announced there, or
+    /// its notifications are being cleared.
+    @ObservationIgnored private var threadChecks: Set<String> = []
+    /// Rooms just read here, until when: if the SDK's count then still says unread although
+    /// nothing is (`catchUpIfAllRead`), the room is marked read as a whole.
+    @ObservationIgnored private var catchUps: [String: Date] = [:]
+    /// Looks again, now and then, at rooms with unread threads: a thread read on another device
+    /// changes nothing else to notice it by.
+    @ObservationIgnored private var threadRechecks: Task<Void, Never>?
     /// Who else is typing in each room. Followed in every room from the start, not only open
     /// ones: the server says only when the typists change, so a room opened while someone is
     /// typing would otherwise not know until they stopped.
@@ -522,6 +543,8 @@ final class AccountSession: Identifiable {
         ownPresence.stop()
         probes.values.forEach { $0.stop() }
         probes.removeAll()
+        threadRechecks?.cancel()
+        threadRechecks = nil
         let syncService = syncService
         self.syncService = nil
         await syncService?.stop()
@@ -549,7 +572,14 @@ final class AccountSession: Identifiable {
             guard let room = self.roomHandles[roomID], self.syncService != nil else { return }
             let summary = await RoomSummary.make(from: room)
             if summary.hasCounts, !summary.isHighlighted {
-                Notifier.shared.clear(accountID: self.id, roomID: roomID)
+                // The SDK's counts say the main conversation is read, not the threads: their
+                // replies go only once their probe says so. Without one yet, the room is watched
+                // until it does.
+                let probe = self.probes[roomID]
+                if probe == nil { self.watchThreads(in: roomID) }
+                Notifier.shared.clearRead(accountID: self.id, roomID: roomID) { thread, eventID in
+                    thread.isEmpty || probe?.isRead(eventID: eventID, thread: thread) == true
+                }
             }
         }
     }
@@ -662,6 +692,7 @@ final class AccountSession: Identifiable {
             })
         }
         stampNotificationModes(on: &all)
+        stampThreadActivity(on: &all)
         let previous = allRooms
         allRooms = all
         followTyping(in: all)
@@ -682,6 +713,128 @@ final class AccountSession: Identifiable {
         for room in previous where room.isHighlighted {
             if let now = current[room.id], now.hasCounts, !now.isHighlighted {
                 clearNotificationsIfStillRead(roomID: room.id)
+            }
+        }
+        // A receipt come in, sent here or on another device, moves the counts: the probes look
+        // again at what it says of the threads.
+        let before = Dictionary(previous.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for (roomID, probe) in probes {
+            guard let now = current[roomID], let then = before[roomID] else { continue }
+            if now.notifications != then.notifications || now.mentions != then.mentions
+                || now.hasNewMessages != then.hasNewMessages || now.isMarkedUnread != then.isMarkedUnread {
+                probe.recheckThreads()
+            }
+        }
+    }
+
+    // MARK: Threads read and unread
+
+    /// Puts each room's unread threads on its summary, where the list reads it.
+    @discardableResult
+    private func stampThreadActivity(on all: inout [RoomSummary]) -> Bool {
+        var changed = false
+        for index in all.indices {
+            let count = threadActivity[all[index].id]?.unread.count ?? 0
+            if all[index].unreadThreads != count {
+                all[index].unreadThreads = count
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /// A probe has worked out again what a room's receipts say of its threads.
+    private func setThreadActivity(_ activity: ThreadActivity, for roomID: String) {
+        let before = threadActivity[roomID]
+        threadActivity[roomID] = activity
+        threadChecks.remove(roomID)
+        timelines[roomID]?.unreadThreadRoots = Set(activity.unread.keys)
+        if before?.unread.count ?? 0 != activity.unread.count {
+            var all = allRooms
+            if stampThreadActivity(on: &all) {
+                allRooms = all
+                rebuildSections()
+            }
+        }
+        if AppEnvironment.isDev {
+            print("DEV_THREADS \(userID) \(roomID) unread=\(activity.unread.count) main=\(activity.mainIsRead.map { "\($0)" } ?? "?")")
+            fflush(stdout)
+        }
+        // Alerts for what has now been read go: in a thread (here or on another device), or in
+        // the main conversation, which the SDK's counts may still take for unread while a
+        // thread's reply after it is.
+        if let probe = probes[roomID] {
+            Notifier.shared.clearRead(accountID: id, roomID: roomID) { thread, eventID in
+                probe.isRead(eventID: eventID, thread: thread) == true
+            }
+        }
+        catchUpIfAllRead(roomID, activity)
+        if (before?.unread.isEmpty ?? true) != activity.unread.isEmpty { refreshProbes() }
+        followUnreadThreads()
+    }
+
+    /// After a room is read here: the SDK's count still taking a reply as unread when nothing
+    /// is (a thread read since the main conversation, which its count doesn't follow), the room
+    /// is marked read as a whole, which moves the count and the server's along.
+    private func catchUpIfAllRead(_ roomID: String, _ activity: ThreadActivity) {
+        guard let until = catchUps[roomID] else { return }
+        guard until > .now else {
+            catchUps[roomID] = nil
+            return
+        }
+        guard activity.unread.isEmpty, activity.mainIsRead == true,
+              let summary = allRooms.first(where: { $0.id == roomID }), !summary.isMarkedUnread,
+              summary.hasNewMessages || summary.notifications > 0 || summary.mentions > 0,
+              timelines[roomID]?.holdsUnread != true, let room = room(id: roomID) else { return }
+        catchUps[roomID] = nil
+        if AppEnvironment.isDev {
+            print("DEV_THREADS \(userID) \(roomID) catch-up: all read, the SDK's count said not")
+            fflush(stdout)
+        }
+        Task { try? await room.markAsRead(receiptType: .read) }
+    }
+
+    /// Something in the room was read here: in a thread (its root), or with nil in the main
+    /// conversation.
+    func noteRead(roomID: String, thread root: String?) {
+        catchUps = catchUps.filter { $0.value > .now }
+        catchUps[roomID] = .now.addingTimeInterval(15)
+        if let root { probes[roomID]?.markRead(thread: root) }
+        // Read from outside it (a thread's alert): watched until its threads are known.
+        if probes[roomID] == nil { watchThreads(in: roomID) }
+        // The receipt sent comes back with a sync, which may not move the counts.
+        for delay in [2.0, 6.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.probes[roomID]?.recheckThreads()
+            }
+        }
+    }
+
+    /// Watches a room until what its receipts say of its threads is known.
+    func watchThreads(in roomID: String) {
+        guard probes[roomID] == nil else {
+            probes[roomID]?.recheckThreads()
+            return
+        }
+        threadChecks.insert(roomID)
+        refreshProbes()
+    }
+
+    /// While any room has unread threads, looks again every so often.
+    private func followUnreadThreads() {
+        let anyUnread = threadActivity.values.contains { !$0.unread.isEmpty }
+        if !anyUnread {
+            threadRechecks?.cancel()
+            threadRechecks = nil
+        } else if threadRechecks == nil {
+            threadRechecks = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(20))
+                    guard let self, !Task.isCancelled else { return }
+                    for (roomID, activity) in self.threadActivity where !activity.unread.isEmpty {
+                        self.probes[roomID]?.recheckThreads()
+                    }
+                }
             }
         }
     }
@@ -1241,12 +1394,14 @@ final class AccountSession: Identifiable {
         guard let room = room(id: roomID) else { return nil }
         let timeline = prepared(RoomTimeline(room: room))
         timeline.onLatestReaction = { [weak self] preview in self?.reactionPreviews[roomID] = preview }
-        timeline.onLatestThreadReply = { [weak self] date in self?.setThreadReplyDate(date, for: roomID) }
         timeline.onIdentityChanges = { [weak self] changes in self?.applyIdentityChanges(changes) }
+        timeline.onRead = { [weak self] in self?.noteRead(roomID: roomID, thread: nil) }
         timeline.setTypingUserIDs(typingUserIDs[roomID] ?? [])
+        timeline.unreadThreadRoots = threadActivity[roomID].map { Set($0.unread.keys) } ?? []
         timelines[roomID] = timeline
-        // The open room reports its own reactions now; its probe has nothing to add.
-        probes.removeValue(forKey: roomID)?.stop()
+        // The open room reports its own reactions now; its probe goes on telling which of its
+        // threads are unread.
+        probes[roomID]?.reportsReactions = false
         touch(roomID)
         updateSubscriptions(now: true)
         return timeline
@@ -1413,7 +1568,10 @@ final class AccountSession: Identifiable {
     func threadTimeline(roomID: String, root: String) -> RoomTimeline? {
         guard let room = room(id: roomID) else { return nil }
         let thread = prepared(RoomTimeline(room: room, threadRoot: root))
-        thread.onRead = { [weak self] in self?.timelines[roomID]?.markThreadSeen(root) }
+        thread.onRead = { [weak self] in
+            self?.timelines[roomID]?.markThreadSeen(root)
+            self?.noteRead(roomID: roomID, thread: root)
+        }
         return thread
     }
 
@@ -1445,7 +1603,8 @@ final class AccountSession: Identifiable {
     }
 
     static func isUnread(_ room: RoomSummary) -> Bool {
-        !room.isInvite && !room.isSpace && (room.hasUnread || room.notifications > 0 || room.mentions > 0)
+        !room.isInvite && !room.isSpace && (room.hasUnread || room.notifications > 0 || room.mentions > 0
+            || room.unreadThreads > 0)
     }
 
     /// Marks a room read up to its newest message, or unread, as the user asks. Shown in the
@@ -1459,6 +1618,11 @@ final class AccountSession: Identifiable {
                 allRooms[index].notifications = 0
                 allRooms[index].mentions = 0
                 allRooms[index].hasNewMessages = false
+                // Its threads too: the receipt for the whole room covers them.
+                allRooms[index].unreadThreads = 0
+                threadActivity[roomID]?.unread = [:]
+                timelines[roomID]?.unreadThreadRoots = []
+                probes[roomID]?.markRead(thread: nil)
             }
         }
         updateBadges()
@@ -1593,21 +1757,39 @@ final class AccountSession: Identifiable {
         presence.watch(Set(partners), focus: open)
     }
 
-    /// A probe for every room on screen that isn't open, to catch reactions the room list misses.
     private func updateProbes(for onScreen: Set<String>) {
-        for (roomID, probe) in probes where !onScreen.contains(roomID) {
+        roomsOnScreen = onScreen
+        refreshProbes()
+    }
+
+    /// A probe for every room on screen, to catch reactions the room list misses (in rooms not
+    /// open, which report their own) and whether the newest message is a thread's; and for those
+    /// and every other room whose threads matter (open, kept warm, with unread threads, or being
+    /// looked at for them), to tell which threads are unread.
+    private func refreshProbes() {
+        var wanted = roomsOnScreen.union(timelines.keys).union(threadChecks)
+        for (roomID, activity) in threadActivity where !activity.unread.isEmpty { wanted.insert(roomID) }
+        if let roomBeingIndexed { wanted.remove(roomBeingIndexed) }
+        for (roomID, probe) in probes where !wanted.contains(roomID) {
             probe.stop()
             probes[roomID] = nil
+            if threadActivity[roomID]?.unread.isEmpty ?? false { threadActivity[roomID] = nil }
         }
-        for roomID in onScreen where probes[roomID] == nil && timelines[roomID] == nil && roomID != roomBeingIndexed {
+        for roomID in wanted {
+            if let probe = probes[roomID] {
+                probe.reportsReactions = timelines[roomID] == nil
+                continue
+            }
             guard let room = room(id: roomID) else { continue }
             let probe = RoomPreviewProbe(room: room) { [weak self] preview in
                 guard let self, self.timelines[roomID] == nil else { return }
                 self.reactionPreviews[roomID] = preview
             } reportThreadReply: { [weak self] date in
-                guard let self, self.timelines[roomID] == nil else { return }
-                self.setThreadReplyDate(date, for: roomID)
+                self?.setThreadReplyDate(date, for: roomID)
+            } reportThreads: { [weak self] activity in
+                self?.setThreadActivity(activity, for: roomID)
             }
+            probe.reportsReactions = timelines[roomID] == nil
             probe.contactName = { [weak self] in self?.contactNames[$0] }
             probes[roomID] = probe
         }

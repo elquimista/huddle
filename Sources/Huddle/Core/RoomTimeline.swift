@@ -285,21 +285,24 @@ final class RoomTimeline {
     @ObservationIgnored private var listenerHandle: TaskHandle?
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private(set) var ownUserID: String
-    /// Room timeline only. Replies newer than this are new: when you had last marked the room
-    /// read, as of opening it.
+    /// Room timeline only. When you had last marked the room read, as of opening it: how far
+    /// down the list of threads their latest replies' dates are looked up.
     @ObservationIgnored private var unreadHorizon: Date?
-    /// Room timeline only. When each thread was last read here, by root event ID.
-    @ObservationIgnored private var threadSeen: [String: Date] = [:]
+    /// Live room timeline only. Threads with replies from someone else you haven't read, by
+    /// root event ID: what your read receipts say (`ThreadActivity`, set by the account).
+    var unreadThreadRoots: Set<String> = [] {
+        didSet {
+            guard unreadThreadRoots != oldValue, isLive else { return }
+            rebuildRows()
+            refreshNewThreads()
+        }
+    }
     /// Live room timeline only. The room's threads, most recently active first, followed so a
     /// reply to one whose root is far back, or not loaded at all, is known about.
     @ObservationIgnored private var threadActivity: RoomThreadList?
-    /// Live room timeline only. Threads someone else has replied to since you last read the
-    /// room or the thread, most recently active first.
+    /// Live room timeline only. Those of the room's threads with replies you haven't read, as
+    /// listed, most recently active first.
     private(set) var newThreads: [ThreadListEntry] = []
-    /// Live room timeline only. Told the date of the newest reply in any thread, so the room
-    /// list can say when the room's newest message is one.
-    @ObservationIgnored var onLatestThreadReply: ((Date?) -> Void)?
-    /// Thread timeline only. Tells the room's timeline that this thread has been read.
     /// Everyone else in the room, for mention suggestions. Empty until `loadMembers()`.
     private(set) var members: [MentionCandidate] = []
     @ObservationIgnored private var membersRequested = false
@@ -308,10 +311,10 @@ final class RoomTimeline {
     @ObservationIgnored private var imageQueueTask: Task<Void, Never>?
     /// The queued image just given to the SDK, and which unsent image rows existed before it.
     @ObservationIgnored private var handover: (id: UUID, before: Set<String>)?
+    /// Told each time this timeline's room or thread has been marked read here.
     @ObservationIgnored var onRead: (() -> Void)?
     @ObservationIgnored var onLatestReaction: ((ReactionPreview?) -> Void)?
     @ObservationIgnored private var latestReaction: ReactionPreview?
-    @ObservationIgnored private var lastRoomReceipt: String?
     /// A two-person direct chat shows ticks on your messages; other rooms show who has read.
     @ObservationIgnored private(set) var isOneToOne = false
     /// Just two people in the room, direct chat or not: a call there is one person calling the other.
@@ -752,9 +755,8 @@ final class RoomTimeline {
         if threadRoot == nil, !isPinnedList, !isMediaList {
             for index in rows.indices {
                 guard case .message(var message) = rows[index].kind, var thread = message.thread,
-                      let root = message.eventID, let latest = thread.latestDate else { continue }
-                thread.hasNewReplies = isNew(thread: root, latestReply: latest,
-                                             fromOthers: thread.latestSender != ownUserID)
+                      let root = message.eventID else { continue }
+                thread.hasNewReplies = unreadThreadRoots.contains(root)
                 message.thread = thread
                 rows[index].kind = .message(message)
             }
@@ -1313,28 +1315,19 @@ final class RoomTimeline {
         // A stretch of older messages isn't where the room has been read up to; nor is a room
         // the user has just marked unread.
         guard let timeline, focusedEvent == nil, !isPinnedList, !isMediaList, !holdsUnread else { return }
+        // The room's own timeline sends a receipt for the main conversation, a thread's for that
+        // thread: each is read apart from the other, as the server counts them. (Where the
+        // SDK's count, which takes the room as one line, is left behind, the account catches it
+        // up: `AccountSession.noteRead`.)
         try? await timeline.markAsRead(receiptType: .read)
         hasReadToEnd = true
-        guard threadRoot != nil else { return }
-        // A thread's own receipt doesn't lower the room's unread count, which is measured from
-        // the room-wide receipt. Move that one up to the newest reply read here.
-        if let latest = await timeline.latestEventId(), latest != lastRoomReceipt {
-            lastRoomReceipt = latest
-            try? await room.sendSingleReceipt(receiptType: .read, thread: .unthreaded, eventId: latest)
-        }
         onRead?()
     }
 
-    /// Room timeline: the thread with this root has just been read in its panel.
+    /// Room timeline: the thread with this root has just been read in its panel. Its dot goes
+    /// at once; the receipt sent for it settles it.
     func markThreadSeen(_ root: String) {
-        threadSeen[root] = .now
-        rebuildRows()
-        refreshNewThreads()
-    }
-
-    /// Whether a thread has a reply from someone else since you last read the room or it.
-    private func isNew(thread root: String, latestReply: Date, fromOthers: Bool) -> Bool {
-        fromOthers && latestReply > max(unreadHorizon ?? .distantPast, threadSeen[root] ?? .distantPast)
+        unreadThreadRoots.remove(root)
     }
 
     private func followThreads() {
@@ -1346,10 +1339,8 @@ final class RoomTimeline {
     }
 
     private func refreshNewThreads() {
-        let threads = (threadActivity?.entries ?? []).filter { $0.replyCount > 0 && $0.latestDateIsKnown }
-        let new = threads.filter { isNew(thread: $0.id, latestReply: $0.latestDate, fromOthers: $0.latestIsOthers) }
+        let new = (threadActivity?.entries ?? []).filter { $0.replyCount > 0 && unreadThreadRoots.contains($0.id) }
         if new != newThreads { newThreads = new }
-        onLatestThreadReply?(threads.map(\.latestDate).max())
     }
 }
 
