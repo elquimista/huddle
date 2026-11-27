@@ -182,12 +182,63 @@ private struct MediaKindList: View {
     let timeline: RoomTimeline
     let kind: MediaKind
     let openThread: (String) -> Void
+    @State private var search = Search()
+
+    /// How the look back through the room is going. It goes on while things of this kind turn
+    /// up, and stops for the user to say once none has for a while: a room's whole history can
+    /// be thousands of requests to the server (3,000 messages took 158, and 23 seconds), where
+    /// what's been looked through already, kept on this Mac, goes by in moments.
+    private struct Search {
+        /// When the search started, was taken up again, or last found something.
+        var since = Date.now
+        /// How many had been found then.
+        var found = 0
+        /// Goes up when the user says to look further, to start the loader again.
+        var round = 0
+        /// Stopped, nothing having turned up for a while, until the user says to look further.
+        var isPaused = false
+    }
+
+    /// Looking goes on as long as something turns up at least this often.
+    private static let patience: TimeInterval = DevHooks.mediaSearchPatience ?? 10
+
+    /// Whether to ask for older messages again, with `count` found so far. Notes a find, and
+    /// stops once there hasn't been one for a while.
+    private func looksFurther(count: Int) -> Bool {
+        if count > search.found {
+            search.found = count
+            search.since = .now
+        }
+        guard Date.now.timeIntervalSince(search.since) < Self.patience else {
+            search.isPaused = true
+            return false
+        }
+        return true
+    }
+
+    /// Stopped, with more of the room to look through.
+    private var isPaused: Bool { search.isPaused && timeline.hasMoreHistory }
+
+    private func lookFurther() {
+        search.since = .now
+        search.isPaused = false
+        search.round += 1
+    }
 
     var body: some View { WithPerceptionTracking {
         let items = timeline.rows.reversed().compactMap { $0.message.flatMap(MediaItem.init) }.filter { $0.isKind(kind) }
         if items.isEmpty {
             VStack(spacing: 0) {
-                if timeline.isLoading || timeline.hasMoreHistory {
+                if isPaused {
+                    EmptyState {
+                        Label("No \(kind.title) Found Yet", systemImage: kind.emptyIcon)
+                    } description: {
+                        Text("None in the latest messages here. Looking further back may take a while in a long conversation.")
+                    } actions: {
+                        Button("Look Further Back", action: lookFurther)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if timeline.isLoading || timeline.hasMoreHistory {
                     // Further back, as long as there's anywhere to look.
                     VStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -196,7 +247,7 @@ private struct MediaKindList: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background { HistoryLoader(timeline: timeline) }
+                    .background { loader(count: 0) }
                 } else {
                     EmptyState("No \(kind.title)", systemImage: kind.emptyIcon,
                                description: Text(kind.emptyText))
@@ -239,13 +290,22 @@ private struct MediaKindList: View {
         }
     } }
 
-    /// Going further back while there's more; once there isn't, how many there are.
+    /// Going further back while there's more (or a button to, once nothing has turned up for a
+    /// while); once there isn't, how many there are.
     @ViewBuilder private func footer(count: Int) -> some View {
         Group {
-            if timeline.hasMoreHistory {
+            if isPaused {
+                VStack(spacing: 8) {
+                    Text("\(kind.count(count)) in the latest messages")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button("Look Further Back", action: lookFurther)
+                        .controlSize(.small)
+                }
+            } else if timeline.hasMoreHistory {
                 ProgressView()
                     .controlSize(.small)
-                    .background { HistoryLoader(timeline: timeline) }
+                    .background { loader(count: count) }
             } else {
                 Text(kind.count(count))
                     .font(.callout)
@@ -254,6 +314,10 @@ private struct MediaKindList: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
+    }
+
+    private func loader(count: Int) -> some View {
+        HistoryLoader(timeline: timeline, round: search.round) { looksFurther(count: count) }
     }
 
     private func open(_ item: MediaItem, _ shown: NSImage?) {
@@ -291,19 +355,24 @@ private struct MediaKindList: View {
 }
 
 /// Asks for older messages while it's on screen, again as each request finishes, until the room's
-/// start: at the foot of the list, or in place of it while nothing of the kind has turned up yet.
+/// start or `shouldGoOn` says to stop: at the foot of the list, or in place of it while nothing of
+/// the kind has turned up yet.
 private struct HistoryLoader: View {
     let timeline: RoomTimeline
+    /// Changes when the user asks to look further, which starts it again.
+    let round: Int
+    let shouldGoOn: () -> Bool
 
     private struct Trigger: Equatable {
         let isReady: Bool
         let requests: Int
+        let round: Int
     }
 
     var body: some View { WithPerceptionTracking {
         Color.clear
-            .task(id: Trigger(isReady: !timeline.isLoading, requests: timeline.historyRequests)) {
-                guard !timeline.isLoading, timeline.hasMoreHistory else { return }
+            .task(id: Trigger(isReady: !timeline.isLoading, requests: timeline.historyRequests, round: round)) {
+                guard !timeline.isLoading, timeline.hasMoreHistory, shouldGoOn() else { return }
                 await timeline.loadOlder()
             }
     } }

@@ -294,6 +294,12 @@ enum DevHooks {
     /// Each time a timeline's rows are made, makes them all again from nothing as well, and says
     /// whether they're the same (DEV_ROWS_SAME, DEV_ROWS_DIFFER): a check on what's kept of them.
     static let checksRows = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_CHECK_ROWS"] != nil
+
+    /// How long Media and Files goes on looking back with nothing found, in seconds, in place of
+    /// ten: for seeing it stop, and look further, in a room of a few thousand messages.
+    static let mediaSearchPatience: TimeInterval? = AppEnvironment.isDev
+        ? ProcessInfo.processInfo.environment["HUDDLE_DEV_MEDIA_PATIENCE"].flatMap(TimeInterval.init)
+        : nil
     /// Gives every message its actions as accessibility actions even without VoiceOver, so tests
     /// can reach them.
     static let accessibilityActions = AppEnvironment.isDev && ProcessInfo.processInfo.environment["HUDDLE_DEV_AX_ACTIONS"] != nil
