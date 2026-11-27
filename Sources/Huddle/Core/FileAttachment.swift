@@ -257,16 +257,16 @@ extension MediaLoader {
         }
     }
 
-    /// The file downloaded, decrypted, to a folder of its own among those cleared after a day.
+    /// The file downloaded, decrypted, to a folder of its own, cleared soon after
+    /// (`clearOpenedFiles`).
     private func downloadedCopy(of file: FileAttachment) async throws -> URL {
         guard let media = file.media else { throw AudioLoadError.download }
         let manager = FileManager.default
-        let folder = manager.temporaryDirectory
-            .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".files", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = Self.openedFilesFolder.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let url = folder.appendingPathComponent(file.safeFilename)
         try await download(media, mimetype: file.mimetype, to: url)
+        Self.markAsDownloaded(url)
         return url
     }
 
@@ -274,7 +274,7 @@ extension MediaLoader {
     func download(_ media: MediaRef, mimetype: String?, to destination: URL) async throws {
         let handle = try await client.getMediaFile(mediaSource: media.source, filename: destination.lastPathComponent,
                                                    mimeType: mimetype ?? "application/octet-stream",
-                                                   useCache: false, tempDir: nil)
+                                                   useCache: false, tempDir: Self.downloadingFolderPath())
         let manager = FileManager.default
         if manager.fileExists(atPath: destination.path) { try manager.removeItem(at: destination) }
         guard try handle.persist(path: destination.path) else { throw AudioLoadError.download }
@@ -291,18 +291,88 @@ extension MediaLoader {
         }
     }
 
-    /// Clears files downloaded for opening more than a day ago: anything worth keeping was saved
-    /// somewhere with Save File As. Newer ones may still be open in another app.
-    static func clearOpenedFiles() {
-        let manager = FileManager.default
-        let folder = manager.temporaryDirectory
+    // MARK: Clearing up
+
+    /// Where files downloaded to open (or copy) go, each in a folder of its own, and recordings
+    /// waiting to be sent (VoiceRecorder).
+    static var openedFilesFolder: URL {
+        FileManager.default.temporaryDirectory
             .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".files", isDirectory: true)
-        guard let downloads = try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.creationDateKey])
-        else { return }
-        let dayAgo = Date().addingTimeInterval(-24 * 3600)
-        for download in downloads {
-            let made = (try? download.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            if made < dayAgo { try? manager.removeItem(at: download) }
+    }
+
+    /// Where the SDK puts files as it downloads and decrypts them: videos for as long as they're
+    /// kept to play (VideoFiles), and files on their way somewhere else. Left to the SDK, these
+    /// went in the system's temporary folder, where they outlived a quit.
+    static var downloadingFolder: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".media", isDirectory: true)
+    }
+
+    /// `downloadingFolder`, made if need be, readable only by this user; nil (the system's
+    /// temporary folder, then) if it can't be.
+    static func downloadingFolderPath() -> String? {
+        let folder = downloadingFolder
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                        attributes: [.posixPermissions: 0o700])) != nil else { return nil }
+        return folder.path
+    }
+
+    enum Sweep {
+        /// Starting, or quitting: nothing is in use.
+        case launch, quit
+        /// While Huddle runs (every quarter of an hour).
+        case routine
+    }
+
+    /// Clears what was decrypted to disk to be opened or played: it's outside the encrypted
+    /// store, so it's kept no longer than it's likely wanted. A file downloaded to open goes an
+    /// hour after, or when Huddle quits if that's sooner (or, after a crash, when it starts),
+    /// and videos and downloads under way when it quits. Anything worth keeping is saved with
+    /// Save File As. A file changed since (edited, in another app) is someone's work, and a
+    /// recording waiting to be sent is too: those are left for a day, as everything was before.
+    static func clearOpenedFiles(_ sweep: Sweep) {
+        let manager = FileManager.default
+        if sweep != .routine {
+            try? manager.removeItem(at: downloadingFolder)
+            // A voice message being decoded (AudioPreparer), should Huddle have stopped meanwhile.
+            try? manager.removeItem(at: manager.temporaryDirectory
+                .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".audio", isDirectory: true))
         }
+        guard let folders = try? manager.contentsOfDirectory(at: openedFilesFolder, includingPropertiesForKeys: [.creationDateKey])
+        else { return }
+        let now = Date()
+        for folder in folders {
+            let made = (try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            let files = (try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            let expires: Date
+            if files.isEmpty {
+                expires = made.addingTimeInterval(3600)     // a download that didn't finish, or one starting
+            } else if files.allSatisfy(isAsDownloaded) {
+                expires = sweep == .routine ? made.addingTimeInterval(3600) : now
+            } else {
+                expires = made.addingTimeInterval(24 * 3600)
+            }
+            if expires <= now { try? manager.removeItem(at: folder) }
+        }
+    }
+
+    private static let downloadedMark = "app.huddle.downloaded"
+
+    /// Notes on a file downloaded to open when it was written, so a sweep can tell it from one
+    /// changed since. (An app saving it by replacing it leaves a file without the note.)
+    private static func markAsDownloaded(_ url: URL) {
+        guard let written = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return }
+        let stamp = String(written.timeIntervalSinceReferenceDate)
+        _ = stamp.withCString { setxattr(url.path, downloadedMark, $0, strlen($0), 0, 0) }
+    }
+
+    /// Whether a file is as it was downloaded to open, not changed since.
+    private static func isAsDownloaded(_ url: URL) -> Bool {
+        var buffer = [CChar](repeating: 0, count: 64)
+        let length = getxattr(url.path, downloadedMark, &buffer, buffer.count - 1, 0, 0)
+        guard length > 0, let stamp = Double(String(cString: buffer)),
+              let written = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        else { return false }
+        return abs(written.timeIntervalSinceReferenceDate - stamp) < 0.001
     }
 }

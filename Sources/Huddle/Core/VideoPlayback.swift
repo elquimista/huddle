@@ -98,8 +98,10 @@ actor VideoFiles {
         }
         let download = downloads[key] ?? Task {
             // Named with its extension, which is how the player knows what kind of film it is.
+            // Decrypted to a folder of Huddle's own, emptied when it quits (clearOpenedFiles).
             let handle = try await client.getMediaFile(mediaSource: media.source, filename: filename,
-                                                       mimeType: mimetype, useCache: false, tempDir: nil)
+                                                       mimeType: mimetype, useCache: false,
+                                                       tempDir: MediaLoader.downloadingFolderPath())
             let url = URL(fileURLWithPath: try handle.path())
             let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(UInt64.init) ?? 0
             guard bytes > 0 else { throw VideoPlayError.download }

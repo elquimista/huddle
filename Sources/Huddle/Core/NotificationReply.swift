@@ -131,9 +131,11 @@ extension Notifier {
         let content = UNMutableNotificationContent()
         content.title = "Reply Not Sent"
         content.subtitle = roomName
+        // The reply quoted only where alerts say what messages say.
+        let what = NotificationSettings.showsText ? "“\(text)”" : "Your reply"
         content.body = account == nil
-            ? "“\(text)” couldn’t be sent."
-            : "“\(text)” couldn’t be sent. It’s waiting in the conversation, to send from there."
+            ? "\(what) couldn’t be sent."
+            : "\(what) couldn’t be sent. It’s waiting in the conversation, to send from there."
         content.threadIdentifier = "\(accountID)|\(roomID)"
         content.userInfo = ["account": accountID, "room": roomID, "thread": thread ?? ""]
         guard NotificationSettings.isEnabled else { return }

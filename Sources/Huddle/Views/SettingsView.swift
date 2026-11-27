@@ -308,6 +308,7 @@ private struct SettingRow<Control: View>: View {
 private struct NotificationSettingsTab: View {
     @AppStorage(NotificationSettings.enabledKey) private var notificationsEnabled = NotificationSettings.enabledByDefault
     @AppStorage(NotificationSettings.soundKey) private var notificationSound = true
+    @AppStorage(NotificationSettings.showsTextKey) private var showsText = true
 
     var body: some View {
         SettingsForm {
@@ -321,6 +322,13 @@ private struct NotificationSettingsTab: View {
                     Text("Play sound")
                         .foregroundStyle(notificationsEnabled ? .primary : .tertiary)
                     Text("For direct messages, mentions and invitations.")
+                        .foregroundStyle(notificationsEnabled ? .secondary : .tertiary)
+                }
+                .disabled(!notificationsEnabled)
+                Toggle(isOn: $showsText) {
+                    Text("Show message text")
+                        .foregroundStyle(notificationsEnabled ? .primary : .tertiary)
+                    Text("Off, a notification says who wrote and where, but not what. macOS keeps notifications outside Huddle’s encryption.")
                         .foregroundStyle(notificationsEnabled ? .secondary : .tertiary)
                 }
                 .disabled(!notificationsEnabled)

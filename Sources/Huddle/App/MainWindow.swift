@@ -78,6 +78,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        // Files decrypted to be opened or played don't outlast Huddle.
+        MediaLoader.clearOpenedFiles(.quit)
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         // One window, without tabs: a second, from a tab bar's "+", would show the same account.
         NSWindow.allowsAutomaticWindowTabbing = false

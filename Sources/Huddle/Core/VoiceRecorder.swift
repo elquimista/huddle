@@ -355,9 +355,7 @@ final class VoiceCapture: @unchecked Sendable {
     /// readable only by this user.
     private static func write(_ data: Data, duration: TimeInterval) -> Finished? {
         let manager = FileManager.default
-        let folder = manager.temporaryDirectory
-            .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".files", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = MediaLoader.openedFilesFolder.appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {
             try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let url = folder.appendingPathComponent(VoiceRecording.filename)
