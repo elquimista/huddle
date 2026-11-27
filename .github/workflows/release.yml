@@ -20,10 +20,19 @@
 # keeps the archive with the run for three days, published nowhere: to try the secrets.
 #
 # Updates: with the SPARKLE_PRIVATE_KEY and RELEASES_TOKEN secrets set, each release is signed for
-# Sparkle and published, with the appcast the app checks, to a public repository (the UPDATES_REPO
-# variable, else <owner>/huddle-releases), so the app can find and install updates while this
-# repository stays private. Only there: this repository gets no release of its own. Without the
-# secrets the release is published here instead, and isn't offered as an update.
+# Sparkle and published, with the appcast the app checks, to a repository of releases of its own
+# (the UPDATES_REPO variable, else <owner>/huddle-releases). Only there: this repository gets no
+# release of its own. Without the secrets the release is published here instead, and isn't offered
+# as an update.
+#
+# Release notes: the tag's own message (git tag -a): its first line the release's title, the rest
+# what's new, as paragraphs and "- " lists (Scripts/release-notes.py), shown on the release and in
+# the update window. A tag without a message gets the commits since the last release instead.
+#
+# The release environment: the job runs in it (Settings > Environments > release), and every secret
+# above is one of its own, not the repository's. Set up as the README says (Releases), it lets only
+# the release tags and the release branches in, and waits for its reviewer to approve each run, so
+# no one who can merely push here (or a token that can) gets a signed release published.
 #
 # The app is one for both Apple Silicon and Intel Macs.
 name: Release
@@ -44,6 +53,8 @@ jobs:
   release:
     runs-on: macos-15
     timeout-minutes: 120
+    # Its secrets are the release environment's: a run waits there for approval before it starts.
+    environment: release
     env:
       UPDATES_REPO: ${{ vars.UPDATES_REPO || format('{0}/huddle-releases', github.repository_owner) }}
     steps:
@@ -63,6 +74,41 @@ jobs:
             version="$(git describe --tags --abbrev=0 --match 'v[0-9]*' | sed 's/^v//')-trial"
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # What's new: the tag's own message, or the commits since the last release (the last stable
+      # one, for a stable release) but not those that only change how releases are made. Read
+      # from GitHub, as the checkout leaves a tag without its message. Here, before the build, so
+      # a tag GitHub can't tell about stops the run in a minute rather than an hour.
+      - name: Write the release notes
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          exclude="--exclude=*-*"
+          case "$GITHUB_REF_NAME" in *-*) exclude="" ;; esac
+          previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' $exclude "$GITHUB_REF_NAME^" 2> /dev/null || true)"
+          git log --no-merges --format=%s "${previous:+$previous..}$GITHUB_REF_NAME" -- . ':(exclude).github' > "$RUNNER_TEMP/changes.txt"
+          for attempt in 1 2 3 4 5; do
+            if object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')"; then break; fi
+            [ "$attempt" = 5 ] && { echo "::error::GitHub didn't say what the tag is."; exit 1; }
+            sleep $((attempt * 10))
+          done
+          : > "$RUNNER_TEMP/tag.txt"
+          if [ "${object%% *}" = tag ]; then
+            for attempt in 1 2 3 4 5; do
+              if gh api "repos/$GITHUB_REPOSITORY/git/tags/${object#* }" --jq .message > "$RUNNER_TEMP/tag.txt"; then break; fi
+              [ "$attempt" = 5 ] && { echo "::error::GitHub didn't give the tag's message."; exit 1; }
+              sleep $((attempt * 10))
+            done
+          fi
+          Scripts/release-notes.py "$RUNNER_TEMP/tag.txt" "$RUNNER_TEMP/notes.md" "$RUNNER_TEMP/title.txt"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "::warning::The tag has no message beyond its title: the release lists the commits instead."
+            sed 's/^/- /' "$RUNNER_TEMP/changes.txt" > "$RUNNER_TEMP/notes.md"
+          fi
+          [ -s "$RUNNER_TEMP/title.txt" ] || echo "Huddle $VERSION" > "$RUNNER_TEMP/title.txt"
+          echo "RELEASE_TITLE=$(head -1 "$RUNNER_TEMP/title.txt")" >> "$GITHUB_ENV"
+          { echo "### $(head -1 "$RUNNER_TEMP/title.txt")"; echo; cat "$RUNNER_TEMP/notes.md"; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Use the newest stable Xcode
         run: |
@@ -195,14 +241,8 @@ jobs:
           build="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' build/Huddle.app/Contents/Info.plist)"
           signature="$(echo "$SPARKLE_PRIVATE_KEY" | .build/artifacts/sparkle/Sparkle/bin/sign_update --ed-key-file - -p "$zip")"
           length="$(stat -f %z "$zip")"
-          beta="" prerelease="" exclude="--exclude=*-*"
-          case "$GITHUB_REF_NAME" in *-*) beta="--beta" prerelease="--prerelease" exclude="" ;; esac
-
-          # What changed: the commits since the last release (the last stable one, for a stable release),
-          # but not those that only change how releases are made.
-          previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' $exclude "$GITHUB_REF_NAME^" 2> /dev/null || true)"
-          git log --no-merges --format=%s "${previous:+$previous..}$GITHUB_REF_NAME" -- . ':(exclude).github' > "$RUNNER_TEMP/changes.txt"
-          sed 's/^/- /' "$RUNNER_TEMP/changes.txt" > "$RUNNER_TEMP/notes.md"
+          beta="" prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) beta="--beta" prerelease="--prerelease" ;; esac
 
           # GitHub now and then fails a request (an HTTP 5xx, a timeout), sometimes one it carried out
           # all the same. So each step below is tried up to five times, and is safe to repeat: it looks
@@ -254,10 +294,13 @@ jobs:
               # Not there yet, rather than GitHub failing to say.
               grep -q 'release not found' "$RUNNER_TEMP/view.txt" || { cat "$RUNNER_TEMP/view.txt" >&2; return 1; }
               gh release create "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" \
-                --title "Huddle $version" --notes-file "$RUNNER_TEMP/notes.md" --latest=false $prerelease
+                --title "$RELEASE_TITLE" --notes-file "$RUNNER_TEMP/notes.md" --latest=false $prerelease
               return
             fi
             gh release upload "$GITHUB_REF_NAME" "$zip" -R "$UPDATES_REPO" --clobber || return
+            # Its title and notes as the tag has them now (a run again after the message changed).
+            gh release edit "$GITHUB_REF_NAME" -R "$UPDATES_REPO" \
+              --title "$RELEASE_TITLE" --notes-file "$RUNNER_TEMP/notes.md" --latest=false || return
             if [ "$draft" = true ]; then
               gh release edit "$GITHUB_REF_NAME" -R "$UPDATES_REPO" --draft=false --latest=false
             fi
@@ -276,7 +319,7 @@ jobs:
             Scripts/appcast.py "$updates/appcast.xml" --version "$version" --build "$build" \
               --minimum-system "$minimum" --maximum-system 13.99 \
               --url "https://github.com/$UPDATES_REPO/releases/download/$GITHUB_REF_NAME/$zip" \
-              --length "$length" --signature "$signature" --changes "$RUNNER_TEMP/changes.txt" $beta || return
+              --length "$length" --signature "$signature" --notes "$RUNNER_TEMP/notes.md" $beta || return
             git -C "$updates" add appcast.xml || return
             git -C "$updates" commit -q -m "Huddle $version" || return
             git -C "$updates" push -q origin HEAD
@@ -299,7 +342,7 @@ jobs:
           else
             # The macOS 13 line, made after newer releases: never the one GitHub shows as latest.
             gh release create "$GITHUB_REF_NAME" "Huddle-$version.zip" --verify-tag \
-              --title "Huddle $version" --generate-notes --latest=false $prerelease
+              --title "$RELEASE_TITLE" --notes-file "$RUNNER_TEMP/notes.md" --latest=false $prerelease
           fi
 
       - name: Remove the signing keychain

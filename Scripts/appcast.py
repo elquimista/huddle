@@ -3,7 +3,7 @@
 
   Scripts/appcast.py <appcast.xml> --version 0.2.0 --build 45 --url <archive URL> \\
       --length <bytes> --signature <EdDSA signature from sign_update> \\
-      [--changes <file, one change per line>] [--beta] \\
+      [--notes <release notes, Markdown>] [--changes <file, one change per line>] [--beta] \\
       [--minimum-system 14.0] [--maximum-system 13.99]
 
 The release workflow runs it for every tag (.github/workflows/release.yml). It makes the appcast if
@@ -11,7 +11,8 @@ there isn't one, and replaces the item for the same version (when a tag's workfl
 Newest first. Sparkle compares --build with an app's CFBundleVersion; --beta puts the release in
 the "beta" channel, offered only to those who chose beta versions in Settings. --minimum-system and
 --maximum-system are the macOS versions a release is offered on (Sparkle checks both), so each line
-reaches only the Macs it is for.
+reaches only the Macs it is for. What's new, shown above the Install button: --notes, the release's
+notes (paragraphs and "- " lists, from Scripts/release-notes.py), else --changes as a list.
 """
 import argparse
 import email.utils
@@ -27,6 +28,20 @@ def sparkle(tag):
     return f"{{{SPARKLE}}}{tag}"
 
 
+def notes_html(markdown):
+    """Release notes as Sparkle shows them: paragraphs, and "- " lists, as HTML."""
+    blocks = []
+    for block in markdown.strip().split("\n\n"):
+        lines = [line.strip() for line in block.strip().splitlines() if line.strip()]
+        if not lines:
+            continue
+        if all(line.startswith("- ") for line in lines):
+            blocks.append("<ul>" + "".join(f"<li>{html.escape(line[2:])}</li>" for line in lines) + "</ul>")
+        else:
+            blocks.append("<p>" + html.escape(" ".join(lines)) + "</p>")
+    return "".join(blocks)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("appcast")
@@ -35,6 +50,7 @@ def main():
     parser.add_argument("--url", required=True)
     parser.add_argument("--length", required=True)
     parser.add_argument("--signature", required=True)
+    parser.add_argument("--notes")
     parser.add_argument("--changes")
     parser.add_argument("--beta", action="store_true")
     parser.add_argument("--minimum-system", default="14.0")
@@ -64,7 +80,13 @@ def main():
         ET.SubElement(item, sparkle("maximumSystemVersion")).text = args.maximum_system
     if args.beta:
         ET.SubElement(item, sparkle("channel")).text = "beta"
-    if args.changes:
+    notes = ""
+    if args.notes:
+        with open(args.notes, encoding="utf-8") as f:
+            notes = notes_html(f.read())
+    if notes:
+        ET.SubElement(item, "description").text = notes
+    elif args.changes:
         with open(args.changes, encoding="utf-8") as f:
             changes = [line.strip() for line in f if line.strip()]
         if changes:
