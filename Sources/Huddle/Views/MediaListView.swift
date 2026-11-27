@@ -315,6 +315,8 @@ private struct MediaTile: View {
     /// Opens it, given what's shown of it so far.
     let open: (NSImage?) -> Void
     @State private var loaded: NSImage?
+    /// Too large to load unasked: opening it loads it.
+    @State private var isWithheld = false
 
     /// Big enough to fill a square of the grid from the shorter side of a wide picture.
     private static let side = 360
@@ -342,6 +344,10 @@ private struct MediaTile: View {
                         Image(systemName: "film")
                             .font(.title2)
                             .foregroundStyle(.tertiary)
+                    } else if isWithheld {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.title2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 .clipped()
@@ -356,7 +362,10 @@ private struct MediaTile: View {
         .task(id: item.id) {
             guard loaded == nil else { return }
             switch item.content {
-            case .image(let image): loaded = await media.displayImage(for: image, side: Self.side, isLocal: false)
+            case .image(let image):
+                let result = await media.displayImage(for: image, side: Self.side, isLocal: false)
+                loaded = result.image
+                if case .withheld = result { isWithheld = true }
             case .video(let file, _): loaded = await media.videoPoster(for: file, side: Self.side)
             default: break
             }
@@ -364,7 +373,9 @@ private struct MediaTile: View {
     }
 
     private var accessibilityLabel: String {
-        if case .video = item.content { "Video from \(item.byline)" } else { "Image from \(item.byline)" }
+        if case .video = item.content { "Video from \(item.byline)" }
+        else if isWithheld { "Image from \(item.byline), too large to load without opening it" }
+        else { "Image from \(item.byline)" }
     }
 }
 

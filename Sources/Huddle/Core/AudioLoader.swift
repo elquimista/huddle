@@ -117,24 +117,38 @@ enum AudioPreparer {
             let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatInt16, interleaved: true)
             let format = file.processingFormat
             // The file's own word on its rate, channels and length, which a made-up one could
-            // set to anything: held to what real recordings use, so it can't ask for more
-            // memory than a long stereo one would.
+            // set to anything: held to what real recordings use, and to as many samples as a
+            // voice message may decode to, so it can't ask for more memory than that.
             guard format.sampleRate.isFinite, (1...192_000).contains(format.sampleRate),
                   (1...8).contains(format.channelCount) else { throw AudioLoadError.unsupported }
             guard file.length > 0, Double(file.length) / format.sampleRate <= OggOpusDecoder.maximumDuration else {
                 throw file.length > 0 ? AudioLoadError.tooLong : AudioLoadError.unsupported
             }
-            let mostSamples = Int(OggOpusDecoder.maximumDuration * 48_000) * 2
-            guard let frames = AVAudioFrameCount(exactly: file.length),
-                  Int(frames) * Int(format.channelCount) <= mostSamples else { throw AudioLoadError.tooLong }
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
+            let channels = Int(format.channelCount)
+            guard let frames = Int(exactly: file.length),
+                  frames * channels <= OggOpusDecoder.maximumSamples else { throw AudioLoadError.tooLong }
+            // Read a few seconds at a time straight into the WAV file: the audio is held once.
+            let chunkFrames: AVAudioFrameCount = 1 << 17
+            guard let chunk = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrames) else {
                 throw AudioLoadError.unsupported
             }
-            try file.read(into: buffer)
-            guard buffer.frameLength > 0, let channel = buffer.int16ChannelData else { throw AudioLoadError.unsupported }
-            let channels = Int(format.channelCount)
-            let samples = Array(UnsafeBufferPointer(start: channel[0], count: Int(buffer.frameLength) * channels))
-            return WAVFile.data(samples: samples, channels: channels, sampleRate: format.sampleRate)
+            var wav = WAVFile.header(dataSize: 0, channels: channels, sampleRate: format.sampleRate)
+            wav.reserveCapacity(WAVFile.headerSize + frames * channels * 2)
+            while file.framePosition < file.length {
+                do {
+                    try file.read(into: chunk, frameCount: chunkFrames)
+                } catch where wav.count > WAVFile.headerSize {
+                    break   // the length a file states can be a frame or so more than it holds
+                }
+                guard chunk.frameLength > 0, let channel = chunk.int16ChannelData else { break }
+                let bytes = Int(chunk.frameLength) * channels * 2
+                channel[0].withMemoryRebound(to: UInt8.self, capacity: bytes) { wav.append($0, count: bytes) }
+                // However long the file said it was.
+                if wav.count - WAVFile.headerSize > OggOpusDecoder.maximumSamples * 2 { throw AudioLoadError.tooLong }
+            }
+            guard wav.count > WAVFile.headerSize else { throw AudioLoadError.unsupported }
+            WAVFile.setDataSize(of: &wav, channels: channels, sampleRate: format.sampleRate)
+            return wav
         } catch let error as AudioLoadError {
             throw error
         } catch {

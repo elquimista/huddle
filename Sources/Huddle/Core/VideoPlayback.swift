@@ -14,6 +14,8 @@ struct VideoDetails: Equatable {
     let blurhash: String?
     /// For a video being sent from here: the film itself, on this Mac.
     let localURL: URL?
+    /// The still's size in bytes, as the sender reported it.
+    var thumbnailByteCount: UInt64? = nil
 
     static func size(_ width: UInt64?, _ height: UInt64?) -> CGSize? {
         guard let width, let height, width > 0, height > 0 else { return nil }
@@ -279,7 +281,8 @@ extension MediaLoader {
     }
 
     /// Videos no larger than this have their still taken from the film itself, downloading it
-    /// unasked, when the sender didn't send one. Larger ones wait to be played.
+    /// unasked, when the sender didn't send one. Larger ones wait to be played, as do those whose
+    /// size neither the server nor the sender gives.
     static let largestPosterDownload: UInt64 = 20 * 1024 * 1024
 
     /// A video's still, if it has been made already: for drawing it in the first frame its
@@ -297,15 +300,18 @@ extension MediaLoader {
         let id = file.media?.source.url() ?? video.localURL?.absoluteString ?? file.filename
         if let cached = cachedVideoPoster(for: file, side: side) { return cached }
         var still: CGImage?
+        // The sender's still, if it is no larger than a thumbnail should be.
         if let thumbnail = video.thumbnail,
-           let data = try? await client.getMediaContent(mediaSource: thumbnail.source) {
+           await exceeds(thumbnail.source, claimed: video.thumbnailByteCount, limit: Self.largestAutomaticThumbnail) == nil,
+           let data = try? await client.getMediaContent(mediaSource: thumbnail.source),
+           Self.excessPixels(in: data) == nil {
             still = ImagePreparer.scaled(data, to: side)
         }
         if still == nil {
             var url = video.localURL
             if url == nil, let media = file.media {
                 url = await videoFiles.downloaded(media)
-                if url == nil, let size = file.size, size <= Self.largestPosterDownload {
+                if url == nil, await mayFetchForStill(file, media: media) {
                     url = try? await videoFile(for: file)
                 }
             }
@@ -315,5 +321,13 @@ extension MediaLoader {
         let image = NSImage(cgImage: still, size: CGSize(width: still.width, height: still.height))
         storeImage(image, forKey: "\(id)#poster\(side)", cost: still.width * still.height * 4)
         return image
+    }
+
+    /// Whether a video is small enough to download for its still: by the server's word, or the
+    /// sender's where the server gives none. With neither, it isn't.
+    private func mayFetchForStill(_ file: FileAttachment, media: MediaRef) async -> Bool {
+        if let claimed = file.size, claimed > Self.largestPosterDownload { return false }
+        guard let size = await sizes.size(of: media.source, client: client) ?? file.size else { return false }
+        return size <= Self.largestPosterDownload
     }
 }
