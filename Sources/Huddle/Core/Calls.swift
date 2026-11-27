@@ -10,6 +10,18 @@ enum ElementCallApp {
     static var indexURL: URL? {
         Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "ElementCall")
     }
+
+    /// Whether a URL is Element Call's page itself, as bundled, whatever its query and fragment.
+    static func isPage(_ url: URL?) -> Bool {
+        guard let url, url.isFileURL, let index = indexURL else { return false }
+        return url.standardizedFileURL.path == index.standardizedFileURL.path
+    }
+
+    /// Whether a URL is one of Element Call's own files, in the app.
+    static func isOwnFile(_ url: URL) -> Bool {
+        guard url.isFileURL, let folder = indexURL?.deletingLastPathComponent().standardizedFileURL.path else { return false }
+        return url.standardizedFileURL.path.hasPrefix(folder + "/")
+    }
 }
 
 /// One call: Element Call in a web view, joined to a room.
@@ -346,6 +358,8 @@ private final class CallBridge: NSObject, WKScriptMessageHandler, WKNavigationDe
         }
         window.addEventListener("error", (e) => window.webkit.messageHandlers.\(logName).postMessage("uncaught: " + e.message));
         window.addEventListener("unhandledrejection", (e) => window.webkit.messageHandlers.\(logName).postMessage("unhandled: " + String(e.reason)));
+        // What the page's content security policy stopped (Scripts/element-call-csp.py).
+        document.addEventListener("securitypolicyviolation", (e) => window.webkit.messageHandlers.\(logName).postMessage("csp: " + e.effectiveDirective + " blocked " + e.blockedURI));
     })();
     """
 
@@ -356,8 +370,13 @@ private final class CallBridge: NSObject, WKScriptMessageHandler, WKNavigationDe
         self.session = session
     }
 
+    /// Only from Element Call's own page, in the web view's main frame. The handler is there
+    /// for every frame of whatever the web view shows; the bridge sends what it's given into the
+    /// room, as this account.
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let text = message.body as? String else { return }
+        guard let text = message.body as? String, message.frameInfo.isMainFrame,
+              message.frameInfo.securityOrigin.protocol == "file",
+              ElementCallApp.isPage(message.frameInfo.request.url) else { return }
         if message.name == Self.logName {
             print("ELEMENTCALL", text)
             fflush(stdout)
@@ -370,14 +389,20 @@ private final class CallBridge: NSObject, WKScriptMessageHandler, WKNavigationDe
         MainActor.assumeIsolated { session?.pageDidLoad() }
     }
 
-    /// Only the call screen itself loads here; a link it opens goes to the browser.
+    /// Only the call screen itself loads here: its page, or the blank one a call is cleared to.
+    /// Nothing loads into frames (Element Call makes none but blank ones of its own); other
+    /// files, and pages made in the page itself (data: and blob:), don't load at all. A link it
+    /// opens goes to the browser.
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { return decisionHandler(.cancel) }
-        if url.isFileURL || url.scheme == "about" || url.scheme == "blob" || url.scheme == "data" {
+        let isBlank = url.absoluteString == "about:blank" || url.absoluteString == "about:srcdoc"
+        if let frame = action.targetFrame, !frame.isMainFrame {
+            return decisionHandler(isBlank ? .allow : .cancel)
+        }
+        if ElementCallApp.isOwnFile(url) || (isBlank && action.targetFrame != nil) {
             return decisionHandler(.allow)
         }
-        if action.targetFrame?.isMainFrame == false { return decisionHandler(.allow) }
         if url.scheme == "https" || url.scheme == "http" { NSWorkspace.shared.open(url) }
         decisionHandler(.cancel)
     }
