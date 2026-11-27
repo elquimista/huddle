@@ -40,9 +40,11 @@ enum LinkPolicy {
     // MARK: Links that say one thing and do another
 
     /// The link to put on text that reads `shown` and goes to `target`: the target itself, or,
-    /// when the text is an address of somewhere else, a stand-in that asks before going there.
+    /// when the text names a web address anywhere in it ("https://bank.com/login.", "Sign in at
+    /// bank.com") and of somewhere else, a stand-in that asks before going there.
     static func link(to target: URL, shown: String) -> URL {
-        guard let named = host(namedBy: shown), let real = target.host.map(normalized), named != real else { return target }
+        guard let real = target.host.map(normalized),
+              hosts(namedBy: shown).contains(where: { $0 != real }) else { return target }
         var components = URLComponents()
         components.scheme = checkScheme
         components.queryItems = [URLQueryItem(name: "to", value: target.absoluteString),
@@ -50,16 +52,17 @@ enum LinkPolicy {
         return components.url ?? target
     }
 
-    /// The host the text names, when the whole text is a web address ("docs.example.com/x",
-    /// "https://example.com").
-    private static func host(namedBy text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.contains(" "), let detector else { return nil }
-        let range = NSRange(trimmed.startIndex..., in: trimmed)
-        guard let match = detector.firstMatch(in: trimmed, range: range), match.range == range,
-              let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-              let host = url.host else { return nil }
-        return normalized(host)
+    /// The hosts of the web addresses the text names, wherever they are in it. Invisible
+    /// characters (zero-width spaces and joiners, direction marks) are left out first, so none
+    /// can split an address to hide it from the detector while it still reads as one.
+    private static func hosts(namedBy text: String) -> [String] {
+        let visible = String(String.UnicodeScalarView(text.unicodeScalars.filter { $0.properties.generalCategory != .format }))
+        guard !visible.isEmpty, let detector else { return [] }
+        return detector.matches(in: visible, range: NSRange(visible.startIndex..., in: visible)).compactMap { match in
+            guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  let host = url.host else { return nil }
+            return normalized(host)
+        }
     }
 
     private static func normalized(_ host: String) -> String {

@@ -22,7 +22,9 @@ struct VideoDetails: Equatable {
 
     /// "0:42", "12:05", "1:02:03".
     static func durationText(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds.rounded())
+        // Held to 99 hours: a length the sender gives can be anything, and converting one out
+        // of range would stop the app.
+        let total = Int((seconds.isFinite ? min(max(seconds, 0), 99 * 3600) : 0).rounded())
         let (hours, minutes, rest) = (total / 3600, total / 60 % 60, total % 60)
         return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, rest)
                          : String(format: "%d:%02d", minutes, rest)

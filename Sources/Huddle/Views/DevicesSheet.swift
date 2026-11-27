@@ -88,7 +88,8 @@ struct DevicesSheet: View {
                             }
                             Text(managedByService
                                  ? "Your server’s sign-in service manages your devices: signing one out opens its page."
-                                 : "A device signed out needs your password to sign in again, and loses the encryption keys it held. Verified devices were confirmed from one of your trusted devices.")
+                                 : "A device signed out needs your password to sign in again, and loses the encryption keys it held. Verified devices were confirmed from one of your trusted devices."
+                                    + (account.verification == .verified ? "" : " Which are verified shows once this Mac is verified itself."))
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.leading)

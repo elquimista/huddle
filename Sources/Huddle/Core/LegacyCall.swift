@@ -98,6 +98,8 @@ final class LegacyCall: HuddleCall {
 
     /// How long a call rings before it's given up, as Element's clients have it.
     private static let ringLifetime: TimeInterval = 60
+    /// The longest an incoming call rings, whatever the caller sets.
+    static let longestRing: TimeInterval = 120
     /// How long an answered call has to get its sound through.
     private static let connectTimeout: TimeInterval = 30
 
@@ -138,7 +140,10 @@ final class LegacyCall: HuddleCall {
         if let invitee = content["invitee"] as? String, invitee != account.userID { return nil }
         // When it was sent, as near as this Mac can tell: how old the server said it was, if it
         // did, rather than the server's clock against this one.
-        let lifetime = ((content["lifetime"] as? NSNumber)?.doubleValue ?? Self.ringLifetime * 1000) / 1000
+        // No longer than two minutes, whatever the caller asks: it's theirs to say, and a ring
+        // that never ends would be a nuisance anyone in the room could make.
+        let lifetime = min(((content["lifetime"] as? NSNumber)?.doubleValue ?? Self.ringLifetime * 1000) / 1000,
+                           Self.longestRing)
         let sent: Date
         if let age = (event["unsigned"] as? [String: Any])?["age"] as? NSNumber {
             sent = Date().addingTimeInterval(-age.doubleValue / 1000)

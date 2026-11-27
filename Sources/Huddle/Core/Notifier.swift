@@ -104,12 +104,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                     account: account, roomID: roomID, eventID: event.eventId(),
                     callerName: callerName, callerAvatarURL: item.senderInfo.avatarUrl, callerID: senderID,
                     roomName: callRoomName,
-                    isVoice: intent != .video, expires: Date(matrixTimestamp: expirationTs))
+                    isVoice: intent != .video,
+                    // As long as the caller says, up to two minutes (LegacyCall.longestRing).
+                    expires: min(Date(matrixTimestamp: expirationTs), Date().addingTimeInterval(LegacyCall.longestRing)))
                 // Rung out before it got here (this Mac was asleep, say): missed.
                 if call.expires > .now { CallCenter.shared.ring(call) } else { announceMissedCall(call) }
                 return
-            } else if case .messageLike(.callInvite) = content {
-                // The older kind of one-to-one call, as Element Web makes in a direct chat.
+            } else if case .messageLike(.callInvite) = content, item.roomInfo.joinedMembersCount <= 2 {
+                // The older kind of one-to-one call, as Element Web makes in a direct chat: only
+                // ever between two people, so in a bigger room it doesn't ring.
                 if CallCenter.shared.ringLegacy(
                     invite: item.rawEvent, account: account, roomID: roomID, callerName: callerName,
                     callerAvatarURL: item.senderInfo.avatarUrl, callerID: senderID, roomName: callRoomName) {

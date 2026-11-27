@@ -101,13 +101,40 @@ struct FileAttachment: Equatable {
     var icon: NSImage { NSWorkspace.shared.icon(for: type ?? (isVideo ? .movie : .data)) }
 
     /// The name to suggest when saving: the sender's, made safe (no invisible characters
-    /// turning the extension round, no folders).
+    /// turning the extension round or hiding part of it, no control characters, no folders).
     var safeFilename: String {
-        let invisible = CharacterSet(charactersIn: "\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}")
-        let cleaned = String(String.UnicodeScalarView(filename.unicodeScalars.filter { !invisible.contains($0) }))
-        let name = (cleaned as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = String(String.UnicodeScalarView(filename.unicodeScalars.filter {
+            ![.format, .control].contains($0.properties.generalCategory)
+        }))
+        let name = (cleaned as NSString).lastPathComponent
+            .replacingOccurrences(of: "/", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty || name.hasPrefix(".") ? "File" + name : name
     }
+
+    /// Whether opening it could run something or change how the Mac works: an app, a script,
+    /// an installer or disk image, a configuration profile, a shortcut to somewhere else. macOS
+    /// checks some of these before they run, not all, so Huddle asks first for every one.
+    var canRunCode: Bool {
+        let ext = (safeFilename as NSString).pathExtension.lowercased()
+        guard !ext.isEmpty else { return false }
+        if Self.riskyExtensions.contains(ext) { return true }
+        guard let type = UTType(filenameExtension: ext) else { return false }
+        return Self.riskyTypes.contains { type.conforms(to: $0) }
+    }
+
+    private static let riskyTypes: [UTType] = [
+        .executable, .script, .application, .applicationBundle, .bundle, .pluginBundle,
+        .systemPreferencesPane, .diskImage, .internetLocation, .internetShortcut,
+    ]
+    /// Kinds the system types above don't all cover, by their usual extension.
+    private static let riskyExtensions: Set<String> = [
+        "app", "command", "tool", "terminal", "pkg", "mpkg", "dmg", "iso", "img", "sparseimage",
+        "workflow", "action", "wflow", "shortcut", "scpt", "scptd", "applescript", "jar",
+        "mobileconfig", "configprofile", "webloc", "inetloc", "fileloc", "url",
+        "kext", "prefpane", "saver", "osax", "plugin", "bundle", "dylib", "xpc", "appex",
+        "qlgenerator", "mdimporter", "service", "definition",
+    ]
 }
 
 /// A file picked, dropped or pasted, waiting in the composer to be sent. It stays on disk until
@@ -198,9 +225,25 @@ enum FilePreparer {
 extension MediaLoader {
     /// Downloads a file to a folder of Huddle's own, only this user can read, marked as
     /// downloaded (so macOS checks it before anything opens it), and opens it in its usual app.
+    /// A kind of file that can run something asks first (FileAttachment.canRunCode).
     func open(_ file: FileAttachment) async throws {
+        if file.canRunCode {
+            guard await MainActor.run(body: { Self.confirmOpening(file) }) else { return }
+        }
         let url = try await downloadedCopy(of: file)
         _ = await MainActor.run { NSWorkspace.shared.open(url) }
+    }
+
+    @MainActor private static func confirmOpening(_ file: FileAttachment) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Open “\(file.safeFilename)”?"
+        alert.informativeText = "Files of this kind can run programs or change how your Mac works. "
+            + "Open it only if you expected it from someone you trust."
+        // The safe choice is the default one.
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Open")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     /// Puts a file on the pasteboard as Finder copies one, to paste in Finder, Mail or another
@@ -238,7 +281,13 @@ extension MediaLoader {
         var values = URLResourceValues()
         values.quarantineProperties = [kLSQuarantineAgentNameKey as String: "Huddle",
                                        kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload]
-        try? marked.setResourceValues(values)
+        do {
+            try marked.setResourceValues(values)
+        } catch {
+            // Unmarked, macOS wouldn't check it before opening it: better no file than that.
+            try? manager.removeItem(at: destination)
+            throw AudioLoadError.download
+        }
     }
 
     /// Clears files downloaded for opening more than a day ago: anything worth keeping was saved

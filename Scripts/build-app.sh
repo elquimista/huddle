@@ -47,12 +47,16 @@ if [ -n "$COMMIT" ] && ! git diff --quiet HEAD -- 2>/dev/null; then COMMIT="$COM
 UPDATES_REPO="${HUDDLE_UPDATES_REPO:-elquimista/huddle-releases}"
 FEED_URL="${HUDDLE_UPDATE_FEED:-https://raw.githubusercontent.com/$UPDATES_REPO/main/appcast.xml}"
 RELEASE_PUBLIC_KEY="4pwtUCqEBuFh/G/s/0PCJtG9gqgyZW1qW4L+NYqJtuA="
+# SUVerifyUpdateBeforeExtraction: an update's archive is checked against that key before it is
+# unpacked, not after, so a doctored archive never gets as far as the unarchiver.
 if [ "$CONFIG" = release ]; then
   UPDATE_KEYS="<key>SUFeedURL</key><string>$FEED_URL</string>
     <key>SUPublicEDKey</key><string>${HUDDLE_SPARKLE_PUBLIC_KEY:-$RELEASE_PUBLIC_KEY}</string>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
     <key>SUEnableAutomaticChecks</key><true/>"
 elif [ -n "${HUDDLE_SPARKLE_PUBLIC_KEY:-}" ]; then
   UPDATE_KEYS="<key>SUPublicEDKey</key><string>$HUDDLE_SPARKLE_PUBLIC_KEY</string>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
     <key>SUEnableAutomaticChecks</key><false/>"
 else
   UPDATE_KEYS="<key>SUEnableAutomaticChecks</key><false/>"

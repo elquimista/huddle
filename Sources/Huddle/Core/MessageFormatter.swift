@@ -194,7 +194,9 @@ private struct HTMLParser {
 
     private var output = AttributedString()
     private var bold = 0, italic = 0, strike = 0, code = 0, pre = 0, quote = 0
-    private var links: [URL?] = []
+    /// The link being read, if any: where it goes, and where its text began in `output`, in
+    /// characters, to check the text against where the link goes once it ends.
+    private var openLink: (target: URL?, start: Int)?
     /// Collects a mention link's text until its closing tag.
     private var mention: (userID: String, label: String)?
     private var lists: [Int?] = []          // nil for bullets, a counter for numbered lists
@@ -203,9 +205,6 @@ private struct HTMLParser {
     private var paragraphJustEnded = false
     private static let quoteBar = "▎ "
     private static let deepestIndent = 6
-    /// Where each open link's text began in `output`, in characters, to check the text against
-    /// where the link goes once it ends.
-    private var linkStarts: [Int] = []
 
     init(html: String, ownUserID: String, keepsLinkText: Bool, name: @escaping (String) -> String?) {
         self.html = html
@@ -270,7 +269,7 @@ private struct HTMLParser {
         if code > 0 || pre > 0 { intent.insert(.code) }
         if !intent.isEmpty { piece.inlinePresentationIntent = intent }
         if quote > 0 { piece.foregroundColor = .secondary }
-        if let link = links.last, let link { piece.link = link }
+        if let target = openLink?.target { piece.link = target }
         output.append(piece)
         atLineStart = text.last?.isNewline == true
         paragraphJustEnded = false
@@ -350,37 +349,41 @@ private struct HTMLParser {
             append("———")
             breakLine()
         case "a":
-            if isClosing {
-                if let mention {
-                    self.mention = nil
-                    output.append(MessageFormatter.pill(
-                        MessageFormatter.mentionLabel(for: mention.userID, given: mention.label,
-                                                      keepsLinkText: keepsLinkText, name: name),
-                        isOwn: mention.userID == ownUserID))
-                    atLineStart = false
-                } else if let start = linkStarts.popLast(), let link = links.popLast() {
-                    // Text that is itself an address, of somewhere other than where the link
-                    // goes, asks before going there (LinkPolicy).
-                    if let link, start < output.characters.count {
-                        let lower = output.characters.index(output.startIndex, offsetBy: start)
-                        let shown = String(output.characters[lower...])
-                        let checked = LinkPolicy.link(to: link, shown: shown)
-                        if checked != link { output[lower...].link = checked }
-                    }
-                }
+            // Links don't nest: one opened inside another ends that one first, as in a browser.
+            // (Each link's text is checked as it ends, so thousands of links nested in one another
+            // would check the same long text thousands of times: one message could hang the app.)
+            endLink()
+            guard !isClosing else { return }
+            let href = Self.attribute("href", in: body).map(Self.decodeEntities)
+            if let userID = href.flatMap(Self.mentionedUser) {
+                mention = (userID, "")
             } else {
-                let href = Self.attribute("href", in: body).map(Self.decodeEntities)
-                if let userID = href.flatMap(Self.mentionedUser) {
-                    mention = (userID, "")
-                } else {
-                    links.append(href.flatMap { URL(string: $0) })
-                    linkStarts.append(output.characters.count)
-                }
+                openLink = (href.flatMap { URL(string: $0) }, output.characters.count)
             }
         case "img":
             if let alt = Self.attribute("alt", in: body), !alt.isEmpty { handleText(alt) }
         default:
             break   // span, font, u and anything unknown: keep the text, drop the tag
+        }
+    }
+
+    /// Ends the open link or mention, if there is one. A mention becomes its pill. A link whose
+    /// text is itself an address, of somewhere other than where it goes, asks before going there
+    /// (LinkPolicy); plain text has no links, so nothing to check.
+    private mutating func endLink() {
+        if let mention {
+            self.mention = nil
+            output.append(MessageFormatter.pill(
+                MessageFormatter.mentionLabel(for: mention.userID, given: mention.label,
+                                              keepsLinkText: keepsLinkText, name: name),
+                isOwn: mention.userID == ownUserID))
+            atLineStart = false
+        } else if let openLink {
+            self.openLink = nil
+            guard !keepsLinkText, let target = openLink.target, openLink.start < output.characters.count else { return }
+            let lower = output.characters.index(output.startIndex, offsetBy: openLink.start)
+            let checked = LinkPolicy.link(to: target, shown: String(output.characters[lower...]))
+            if checked != target { output[lower...].link = checked }
         }
     }
 

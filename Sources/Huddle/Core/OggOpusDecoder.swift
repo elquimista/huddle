@@ -205,17 +205,20 @@ enum WAVFile {
             withUnsafeBytes(of: value.littleEndian) { file.append(contentsOf: $0) }
         }
         file.append(contentsOf: "RIFF".utf8)
-        append(UInt32(36 + dataSize))
+        // Clamped, not converted: a value out of range would stop the app, where a wrong header
+        // only makes a file that doesn't play. (Callers keep them in range already.)
+        let rate = sampleRate.isFinite ? Int(min(max(sampleRate, 0), 1_000_000)) : 0
+        append(UInt32(clamping: 36 + dataSize))
         file.append(contentsOf: "WAVEfmt ".utf8)
         append(UInt32(16))                               // size of the format block
         append(UInt16(1))                                // PCM
-        append(UInt16(channels))
-        append(UInt32(sampleRate))
-        append(UInt32(Int(sampleRate) * channels * 2))   // bytes per second
-        append(UInt16(channels * 2))                     // bytes per sample frame
+        append(UInt16(clamping: channels))
+        append(UInt32(clamping: rate))
+        append(UInt32(clamping: rate * channels * 2))    // bytes per second
+        append(UInt16(clamping: channels * 2))           // bytes per sample frame
         append(UInt16(16))                               // bits per sample
         file.append(contentsOf: "data".utf8)
-        append(UInt32(dataSize))
+        append(UInt32(clamping: dataSize))
         samples.withUnsafeBufferPointer { file.append($0) }
         return file
     }
