@@ -7,6 +7,7 @@ import UserNotifications
 enum NotificationSettings {
     static let enabledKey = "notificationsEnabled"
     static let soundKey = "notificationSound"
+    static let showsTextKey = "notificationShowsText"
     static let enabledByDefault = !AppEnvironment.isDev
 
     static var isEnabled: Bool {
@@ -16,6 +17,16 @@ enum NotificationSettings {
     static var playsSound: Bool {
         UserDefaults.standard.object(forKey: soundKey) as? Bool ?? true
     }
+
+    /// Whether an alert says what a message says. macOS keeps alerts in a database of its own,
+    /// outside Huddle's encryption; turned off, a message's text never goes there: its alert
+    /// says only who it's from and where.
+    static var showsText: Bool {
+        UserDefaults.standard.object(forKey: showsTextKey) as? Bool ?? true
+    }
+
+    /// What a message's alert says when it doesn't say what the message does.
+    static let hiddenText = "New message"
 }
 
 /// Posts macOS notifications for the events the SDK says should notify (it applies the
@@ -81,7 +92,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                   Date(timeIntervalSince1970: TimeInterval(event.timestamp()) / 1000) >= launchDate,
                   let content = try? event.content(),
                   let text = Self.describe(content, contactName: { [account] in account.contactName(for: $0) }) else { return }
-            body = text
+            body = NotificationSettings.showsText ? text : NotificationSettings.hiddenText
             threadRoot = item.threadId ?? event.threadRootEventId()
             key = "\(account.id)|\(roomID)|\(event.eventId())"
             guard seen.insert(key).inserted else { return }

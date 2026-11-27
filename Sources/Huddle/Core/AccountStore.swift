@@ -47,7 +47,13 @@ final class AccountStore {
         // this clears anything that build left behind.
         try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory
             .appendingPathComponent((Bundle.main.bundleIdentifier ?? "app.huddle.Huddle") + ".preview", isDirectory: true))
-        MediaLoader.clearOpenedFiles()
+        MediaLoader.clearOpenedFiles(.launch)
+        Task {
+            while true {
+                try? await Task.sleep(for: .seconds(15 * 60))
+                MediaLoader.clearOpenedFiles(.routine)
+            }
+        }
         if !DevHooks.startsFresh { await restoreStoredAccounts() }
         isRestoring = false
         await DevHooks.run(store: self)
@@ -90,7 +96,8 @@ final class AccountStore {
         for (index, account) in stored.enumerated() {
             switch restored[index] {
             case .success(let client):
-                let session = AccountSession(id: account.id, userID: account.userId, client: client)
+                let session = AccountSession(id: account.id, userID: account.userId, client: client,
+                                             drafts: DraftsFile(storeID: account.id, passphrase: account.passphrase))
                 accounts.append(session)
                 Task { await session.start() }
             case .failure(let error):
@@ -118,7 +125,8 @@ final class AccountStore {
                                    nativeSlidingSync: true,
                                    passphrase: passphrase)
         SessionVault.shared.add(stored)
-        let account = AccountSession(id: storeID, userID: session.userId, client: client)
+        let account = AccountSession(id: storeID, userID: session.userId, client: client,
+                                     drafts: DraftsFile(storeID: storeID, passphrase: passphrase))
         accounts.append(account)
         selectedID = account.id
         Task { await account.start() }
@@ -134,8 +142,8 @@ final class AccountStore {
         try? await account.client.logout()
         SessionVault.shared.remove(id: account.id)
         accounts.removeAll { $0.id == account.id }
-        StorePaths(storeID: account.id).delete()
-        UserDefaults.standard.removeObject(forKey: "drafts.\(account.id)")
+        StorePaths(storeID: account.id).delete()     // its drafts with it (DraftsFile)
+        UserDefaults.standard.removeObject(forKey: "drafts.\(account.id)")   // where 1.4.3 and earlier kept them
         if selectedID == account.id { selectedID = accounts.first?.id }
     }
 }

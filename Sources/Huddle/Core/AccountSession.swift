@@ -198,10 +198,12 @@ final class AccountSession: Identifiable {
     /// `returnView(for:)`).
     @PerceptionIgnored private var returnViews: [String: RoomTimeline] = [:]
     /// Unsent messages, by room (and thread): what was being written there, kept while away.
-    /// The text is kept across launches too; a reply and attachments, for this one.
+    /// The text is kept across launches too, encrypted (DraftsFile); a reply and attachments,
+    /// for this one.
     @PerceptionIgnored private var drafts: [String: StashedDraft] = [:]
+    @PerceptionIgnored private let draftsFile: DraftsFile
     @PerceptionIgnored private lazy var savedDraftTexts: [String: String] =
-        UserDefaults.standard.dictionary(forKey: "drafts.\(id)") as? [String: String] ?? [:]
+        draftsFile.readMoving(fromDefaultsKey: "drafts.\(id)")
     @PerceptionIgnored private var draftSave: DispatchWorkItem?
     /// What each room's row says of an unsent message there, by room. Not for the open room,
     /// whose composer shows it: its row catches up as it's left, so that typing there doesn't
@@ -325,10 +327,11 @@ final class AccountSession: Identifiable {
     /// Rooms on screen kept subscribed at once: a full window's worth, with room to spare.
     private static let maxSubscribedRooms = 30
 
-    init(id: String, userID: String, client: Client) {
+    init(id: String, userID: String, client: Client, drafts: DraftsFile) {
         self.id = id
         self.userID = userID
         self.client = client
+        self.draftsFile = drafts
         self.media = MediaLoader(client: client)
         self.presence = PresenceTracker(client: client)
         self.ownPresence = OwnPresence(client: client)
@@ -1304,7 +1307,7 @@ final class AccountSession: Identifiable {
         draftSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            UserDefaults.standard.set(self.savedDraftTexts, forKey: "drafts.\(self.id)")
+            try? self.draftsFile.write(self.savedDraftTexts)
         }
         draftSave = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
