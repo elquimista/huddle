@@ -11,6 +11,7 @@ struct ImageAttachment: Equatable {
     let thumbnail: MediaRef?
     /// The thumbnail's size, as the sender reported it.
     let thumbnailPixelSize: CGSize?
+    let thumbnailByteCount: UInt64?
     let filename: String
     let caption: String?
     /// As the sender reported it; nil if they didn't.
@@ -33,6 +34,7 @@ struct ImageAttachment: Equatable {
         media = MediaRef(source: try! MediaSource.fromUrl(url: "mxc://queued.invalid/\(id.uuidString)"))
         thumbnail = nil
         thumbnailPixelSize = nil
+        thumbnailByteCount = nil
         filename = staged.filename
         self.caption = caption
         pixelSize = staged.pixelSize
@@ -62,6 +64,7 @@ struct ImageAttachment: Equatable {
         } else {
             thumbnailPixelSize = nil
         }
+        thumbnailByteCount = info?.thumbnailInfo?.size
         self.filename = filename
         self.caption = caption
         if let width = info?.width, let height = info?.height, width > 0, height > 0 {

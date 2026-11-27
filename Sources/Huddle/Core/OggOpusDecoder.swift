@@ -15,24 +15,33 @@ enum OggOpusDecoder {
 
     /// Longest recording to decode: the whole of it is held in memory as 16-bit audio.
     static let maximumDuration: TimeInterval = 45 * 60
+    /// Most samples, over all its channels, decoded for one recording: 45 minutes of mono at
+    /// 48 kHz, or 22½ of stereo. Held once, as 16-bit audio, that is 259 MB at most.
+    static let maximumSamples = Int(maximumDuration * 48_000)
 
     static func isOgg(_ data: Data) -> Bool {
         data.count >= 4 && data.prefix(4).elementsEqual("OggS".utf8)
     }
 
-    /// The recording as a WAV file in memory.
+    /// The recording as a WAV file in memory, decoded straight into it: the audio is held once,
+    /// never copied.
     static func wav(from data: Data) throws -> Data {
         let stream = try Stream(data: data)
-        guard stream.duration <= maximumDuration else { throw Failure.tooLong }
-        let decoded = try decode(stream)
+        guard stream.duration * Double(stream.channels) <= maximumDuration else { throw Failure.tooLong }
+        var wav = WAVFile.header(dataSize: 0, channels: stream.channels, sampleRate: sampleRate)
+        let alreadySkipped = try decode(stream, appendingTo: &wav)
         // Drop the decoder's warm-up at the start and any padding after the true end. The stream
         // counts its warm-up from the first sample; the system decoder has already removed some.
-        let skip = max(stream.preSkip - decoded.alreadySkipped, 0)
-        let start = min(skip * stream.channels, decoded.samples.count)
-        var end = decoded.samples.count
+        let samples = (wav.count - WAVFile.headerSize) / 2
+        let skip = max(stream.preSkip - alreadySkipped, 0)
+        let start = min(skip * stream.channels, samples)
+        var end = samples
         if let count = stream.sampleCount { end = min(end, start + count * stream.channels) }
         guard end > start else { throw Failure.decodingFailed }
-        return WAVFile.data(samples: Array(decoded.samples[start..<end]), channels: stream.channels, sampleRate: sampleRate)
+        wav.removeSubrange(WAVFile.headerSize + end * 2 ..< wav.count)
+        wav.removeSubrange(WAVFile.headerSize ..< WAVFile.headerSize + start * 2)
+        WAVFile.setDataSize(of: &wav, channels: stream.channels, sampleRate: sampleRate)
+        return wav
     }
 
     // MARK: Container
@@ -132,14 +141,15 @@ enum OggOpusDecoder {
         return frameSize * frames
     }
 
-    /// Everything the packets decode to, as interleaved 16-bit samples, and how many samples per
-    /// channel of warm-up the system decoder left out of it.
-    static func decode(_ stream: Stream) throws -> (samples: [Int16], alreadySkipped: Int) {
+    /// Appends everything the packets decode to, as interleaved 16-bit samples, to `output`.
+    /// Returns how many samples per channel of warm-up the system decoder left out of it.
+    static func decode(_ stream: Stream, appendingTo output: inout Data) throws -> Int {
         let sizes = stream.packets.map(sampleCount(ofPacket:))
         // The length the packets themselves claim, not only the one the stream states at its end:
         // a crafted file can state a short one and claim hours, packet by packet.
-        let limit = Int(maximumDuration * sampleRate)
-        guard sizes.reduce(0, +) <= limit else { throw Failure.tooLong }
+        let limit = maximumSamples / stream.channels
+        let claimed = sizes.reduce(0, +)
+        guard claimed <= limit else { throw Failure.tooLong }
         // Nearly every encoder uses one packet size throughout; tell the decoder which.
         let framesPerPacket = sizes.first ?? 960
         let isUniform = sizes.dropLast().allSatisfy { $0 == framesPerPacket }
@@ -149,15 +159,15 @@ enum OggOpusDecoder {
             mFramesPerPacket: isUniform ? UInt32(framesPerPacket) : 0, mBytesPerFrame: 0,
             mChannelsPerFrame: UInt32(stream.channels), mBitsPerChannel: 0, mReserved: 0)
         guard let input = AVAudioFormat(streamDescription: &description),
-              let output = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate,
+              let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate,
                                          channels: AVAudioChannelCount(stream.channels), interleaved: true),
-              let converter = AVAudioConverter(from: input, to: output) else { throw Failure.decodingFailed }
+              let converter = AVAudioConverter(from: input, to: format) else { throw Failure.decodingFailed }
 
         let largestPacket = stream.packets.map(\.count).max() ?? 0
         var next = 0
-        var samples: [Int16] = []
-        samples.reserveCapacity(sizes.reduce(0, +) * stream.channels)
-        guard let chunk = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: 5760 * 8) else { throw Failure.decodingFailed }
+        let start = output.count
+        output.reserveCapacity(start + claimed * stream.channels * 2)
+        guard let chunk = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 5760 * 8) else { throw Failure.decodingFailed }
 
         while true {
             var failure: NSError?
@@ -180,9 +190,10 @@ enum OggOpusDecoder {
             }
             if status == .error || failure != nil { throw Failure.decodingFailed }
             if chunk.frameLength > 0, let channel = chunk.int16ChannelData {
-                samples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: Int(chunk.frameLength) * stream.channels))
+                let bytes = Int(chunk.frameLength) * stream.channels * 2
+                channel[0].withMemoryRebound(to: UInt8.self, capacity: bytes) { output.append($0, count: bytes) }
                 // Whatever the packets claimed, no more than the longest recording played.
-                if samples.count > (limit + 5760) * stream.channels { throw Failure.tooLong }
+                if output.count - start > (limit + 5760) * stream.channels * 2 { throw Failure.tooLong }
             }
             if status == .endOfStream || (status == .inputRanDry && next >= stream.packets.count) { break }
             if chunk.frameLength == 0, status != .haveData { break }
@@ -190,17 +201,19 @@ enum OggOpusDecoder {
 
         // The system decoder leaves a little of its own warm-up out of what it returns (120
         // samples, unannounced). Measure it: it is whatever the packets hold that didn't come out.
-        let missing = sizes.reduce(0, +) - samples.count / stream.channels
-        return (samples, (0...stream.preSkip).contains(missing) ? missing : 0)
+        let missing = claimed - (output.count - start) / 2 / stream.channels
+        return (0...stream.preSkip).contains(missing) ? missing : 0
     }
 }
 
-/// Builds an uncompressed 16-bit WAV file in memory.
+/// Builds an uncompressed 16-bit WAV file in memory: a header, then the samples, interleaved,
+/// one value per channel per moment.
 enum WAVFile {
-    /// - Parameter samples: interleaved, one value per channel per moment.
-    static func data(samples: [Int16], channels: Int, sampleRate: Double) -> Data {
-        let dataSize = samples.count * 2
-        var file = Data(capacity: 44 + dataSize)
+    static let headerSize = 44
+
+    /// The header for `dataSize` bytes of samples, for the samples to be appended to.
+    static func header(dataSize: Int, channels: Int, sampleRate: Double) -> Data {
+        var file = Data(capacity: headerSize)
         func append<T: FixedWidthInteger>(_ value: T) {
             withUnsafeBytes(of: value.littleEndian) { file.append(contentsOf: $0) }
         }
@@ -219,7 +232,12 @@ enum WAVFile {
         append(UInt16(16))                               // bits per sample
         file.append(contentsOf: "data".utf8)
         append(UInt32(clamping: dataSize))
-        samples.withUnsafeBufferPointer { file.append($0) }
         return file
+    }
+
+    /// Rewrites the header of a file whose samples have been appended, for their number.
+    static func setDataSize(of file: inout Data, channels: Int, sampleRate: Double) {
+        let header = header(dataSize: file.count - headerSize, channels: channels, sampleRate: sampleRate)
+        file.replaceSubrange(0..<headerSize, with: header)
     }
 }

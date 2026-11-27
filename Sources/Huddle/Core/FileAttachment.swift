@@ -39,7 +39,8 @@ struct FileAttachment: Equatable {
             pixelSize: VideoDetails.size(info?.width, info?.height),
             duration: info?.duration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil },
             blurhash: info?.blurhash,
-            localURL: nil)
+            localURL: nil,
+            thumbnailByteCount: info?.thumbnailInfo?.size)
     }
 
     /// One of ours, waiting in the queue to be sent.

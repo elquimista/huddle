@@ -23,6 +23,10 @@ struct ImageMessageView: View {
     @State private var correctedSize: CGSize?
     @State private var animation: NSImage?
     @State private var hasFailed = false
+    /// Why the picture wasn't loaded unasked, if it is too large to be.
+    @State private var withheld: MediaLoader.Withheld?
+    /// Clicked to be shown, whatever its size.
+    @State private var isAskedFor = false
     @State private var attempt = 0
     @State private var isOnScreen = false
     /// Whether all of the picture is above the middle of what shows of the conversation, where
@@ -38,6 +42,7 @@ struct ImageMessageView: View {
         let attempt: Int
         /// Loaded again once sent: from the server then, and an animation can start.
         let isLocal: Bool
+        let isAskedFor: Bool
     }
 
     /// The frame, shaped like the picture itself once it is known.
@@ -70,7 +75,7 @@ struct ImageMessageView: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
 
         ZStack {
-            Button(action: hasFailed ? retry : { open(still) }) {
+            Button(action: hasFailed ? retry : (withheld != nil && still == nil ? showAnyway : { open(still) })) {
                 // Every layer is held to the frame on its own. Left to size themselves, a layer
                 // filling the frame takes the shape of its picture, and the stack takes the
                 // largest of them: the blurred placeholder, which is always square, would make
@@ -101,10 +106,12 @@ struct ImageMessageView: View {
             // Not `.disabled`: SwiftUI dims part of a disabled button's picture, leaving a dark band.
             .allowsHitTesting(sendState == nil)
             .accessibilityLabel(accessibilityLabel)
-            .help(hasFailed ? "Try again" : "")
+            .help(hasFailed ? "Try again" : (withheld != nil && still == nil ? "Download and show this picture" : ""))
 
             if hasFailed {
                 failureNote
+            } else if let withheld, still == nil {
+                withheldNote(withheld)
             } else if let sendState {
                 UploadOverlay(sendState: sendState, uploadProgress: uploadProgress, cancel: cancelUpload)
             } else if image.isAnimated, animation == nil, still != nil {
@@ -133,7 +140,9 @@ struct ImageMessageView: View {
             isOnScreen = placement.isOnScreen
             isAboveReading = placement.isAboveReading
         }
-        .task(id: LoadKey(url: image.media.source.url(), attempt: attempt, isLocal: sendState != nil)) { await load() }
+        .task(id: LoadKey(url: image.media.source.url(), attempt: attempt, isLocal: sendState != nil, isAskedFor: isAskedFor)) {
+            await load()
+        }
     } }
 
     private struct Placement: Equatable {
@@ -149,7 +158,14 @@ struct ImageMessageView: View {
             still = localPreview
             return
         }
-        guard let loaded = await media.displayImage(for: image, side: loadSide, isLocal: sendState != nil) else {
+        let loaded: NSImage
+        switch await media.displayImage(for: image, side: loadSide, isLocal: sendState != nil, askedFor: isAskedFor) {
+        case .shown(let image):
+            loaded = image
+        case .withheld(let reason):
+            if !Task.isCancelled { withheld = reason }
+            return
+        case .failed:
             if !Task.isCancelled { hasFailed = still == nil }
             return
         }
@@ -176,6 +192,10 @@ struct ImageMessageView: View {
         attempt += 1
     }
 
+    private func showAnyway() {
+        isAskedFor = true
+    }
+
     // MARK: Pieces
 
     /// What is there before the picture: the sender's blur of it, or a plain tile.
@@ -190,7 +210,7 @@ struct ImageMessageView: View {
         } else {
             ZStack {
                 Color.primary.opacity(0.06)
-                if still == nil, !hasFailed {
+                if still == nil, !hasFailed, withheld == nil {
                     Image(systemName: "photo")
                         .font(.system(size: 20))
                         .foregroundStyle(.tertiary)
@@ -217,6 +237,62 @@ struct ImageMessageView: View {
         .allowsHitTesting(false)
     }
 
+    /// For a picture too large to fetch, or to decode, unasked: what it is, and that clicking
+    /// shows it. A spinner once clicked, while it downloads. Where the frame is too small for
+    /// that, just the symbol. White on the sender's blur, dimmed; on a plain tile, in the
+    /// tile's own grey.
+    private func withheldNote(_ reason: MediaLoader.Withheld) -> some View {
+        let isOnBlur = !image.isSticker && image.blurhash.flatMap(BlurCache.image(for:)) != nil
+        // As tall either way, so the words don't move when it's clicked.
+        let symbol = Group {
+            if isAskedFor {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "arrow.down.circle.fill").font(.system(size: 22))
+            }
+        }
+        .frame(height: 26)
+        return ViewThatFits {
+            VStack(spacing: 4) {
+                symbol
+                Text(isAskedFor ? "Loading Picture…" : "Show Picture")
+                    .font(.caption.weight(.semibold))
+                Text(Self.describe(reason))
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .opacity(0.8)
+            }
+            .fixedSize()
+            .padding(8)
+            symbol
+        }
+        .foregroundStyle(isOnBlur ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+        .modifier(DarkIf(isOnBlur))
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(isOnBlur ? .black.opacity(0.35) : .clear)
+        .allowsHitTesting(false)
+    }
+
+    /// Dark appearance (a light spinner) for what is drawn on a dimmed picture.
+    private struct DarkIf: ViewModifier {
+        let isOn: Bool
+        init(_ isOn: Bool) { self.isOn = isOn }
+        func body(content: Content) -> some View {
+            if isOn { content.environment(\.colorScheme, .dark) } else { content }
+        }
+    }
+
+    /// "34 MB", or "40,000 × 40,000 pixels".
+    private static func describe(_ reason: MediaLoader.Withheld) -> String {
+        switch reason {
+        case .bytes(let count):
+            ByteCountFormatter.string(fromByteCount: Int64(clamping: count), countStyle: .file)
+        case .pixels(let width, let height):
+            "\(width.formatted()) × \(height.formatted()) pixels"
+        }
+    }
+
     private func badge<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
             .padding(.horizontal, 6)
@@ -227,7 +303,9 @@ struct ImageMessageView: View {
     private var accessibilityLabel: String {
         let what = image.isSticker ? "Sticker" : (image.isAnimated ? "Animated image" : "Image")
         let name = image.caption ?? image.filename
-        return name.isEmpty ? what : "\(what): \(name)"
+        let label = name.isEmpty ? what : "\(what): \(name)"
+        guard let withheld, still == nil else { return label }
+        return "\(label), not downloaded (\(Self.describe(withheld))). Click to show it."
     }
 }
 
