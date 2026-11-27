@@ -83,6 +83,8 @@ struct ImageViewer: View {
 
     @State private var full: NSImage?
     @State private var hasFailed = false
+    /// Too large to decode at all (MediaLoader.largestShownPixels): it can only be saved.
+    @State private var tooLarge: MediaLoader.Withheld?
     @State private var attempt = 0
     /// 1 is the size that fits the window.
     @State private var zoom: CGFloat = 1
@@ -229,7 +231,24 @@ struct ImageViewer: View {
                 .accessibilityLabel(item.image.caption ?? item.image.filename)
                 .accessibilityAddTraits(.isImage)
             }
-            if hasFailed {
+            if let tooLarge, case .pixels(let width, let height) = tooLarge {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 26))
+                    Text("This picture is too large to show in Huddle.")
+                        .font(.headline)
+                    Text("It’s \(width.formatted()) × \(height.formatted()) pixels. Save it to open it in another app.")
+                        .foregroundStyle(.white.opacity(0.75))
+                    Button("Save Image As…") { AttachmentSaver.save(item.image, media: item.media) }
+                        .controlSize(.large)
+                        .padding(.top, 4)
+                }
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .frame(maxWidth: 360)
+                .padding(24)
+                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else if hasFailed {
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 26))
@@ -253,6 +272,11 @@ struct ImageViewer: View {
         hasFailed = false
         do {
             let data = try await item.media.imageFile(source: item.image.media.source)
+            // Read from its header before anything is decoded: a small file can unpack to gigabytes.
+            if let excess = MediaLoader.excessPixels(in: data, limit: MediaLoader.largestShownPixels) {
+                tooLarge = excess
+                return
+            }
             let isAnimated = item.image.isAnimated
             let side = Self.largestSide
             let decoded = await Task.detached(priority: .userInitiated) { () -> NSImage? in
@@ -416,7 +440,7 @@ struct ImageViewer: View {
     private var controls: some View {
         HStack(spacing: 2) {
             ViewerButton(symbol: "minus.magnifyingglass", help: "Zoom Out (−)") { step(0.8) }
-                .disabled(zoom <= zoomRange.lowerBound)
+                .disabled(zoom <= zoomRange.lowerBound || tooLarge != nil)
             Button(action: fit) {
                 Text("\(Int((fitScale * zoom * 100).rounded()))%")
                     .font(.callout.weight(.medium))
@@ -425,15 +449,19 @@ struct ImageViewer: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(tooLarge != nil)
             .help("Fit to Window (0)")
             .accessibilityLabel("Zoom")
             .accessibilityValue("\(Int((fitScale * zoom * 100).rounded())) percent")
             .accessibilityHint("Fits the image to the window")
             ViewerButton(symbol: "plus.magnifyingglass", help: "Zoom In (+)") { step(1.25) }
-                .disabled(zoom >= zoomRange.upperBound)
+                .disabled(zoom >= zoomRange.upperBound || tooLarge != nil)
             separator
+            // Nothing to zoom or turn in a picture too large to show.
             ViewerButton(symbol: "rotate.left", help: "Rotate Left (L)") { turn(-1) }
+                .disabled(tooLarge != nil)
             ViewerButton(symbol: "rotate.right", help: "Rotate Right (R)") { turn(1) }
+                .disabled(tooLarge != nil)
             separator
             ViewerButton(symbol: "doc.on.doc", help: "Copy Image (⌘C)", action: copy)
             ViewerButton(symbol: "square.and.arrow.down", help: "Save Image As… (⌘S)") {

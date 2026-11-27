@@ -331,9 +331,18 @@ enum ImagePasteboard {
         return [.data(data, name: "Pasted image.\(fileExtension)")]
     }
 
-    /// Puts a picture on the general pasteboard, as other apps expect to find one.
+    /// Puts a picture on the general pasteboard, as other apps expect to find one. One too large
+    /// for Huddle to show goes as the file is, in its own format, as putting it there as an image
+    /// would decode it whole (MediaLoader.largestShownPixels).
     @MainActor
     static func copy(_ data: Data) {
+        if MediaLoader.excessPixels(in: data, limit: MediaLoader.largestShownPixels) != nil {
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let type = CGImageSourceGetType(source) as String? else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setData(data, forType: NSPasteboard.PasteboardType(type))
+            return
+        }
         guard let image = NSImage(data: data) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([image])

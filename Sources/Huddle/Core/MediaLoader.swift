@@ -46,6 +46,13 @@ final class MediaLoader: @unchecked Sendable {
         /// The picture has more pixels than are decoded unasked. A small file can unpack to
         /// gigabytes: a 190 KB PNG of 40,000 × 40,000 one-bit pixels took 1.5 GB to scale down.
         case pixels(width: Int, height: Int)
+
+        /// Whether Huddle shows it at all, when asked: not one of more than `largestShownPixels`.
+        var canBeShown: Bool {
+            guard case .pixels(let width, let height) = self else { return true }
+            let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
+            return !overflow && pixels <= MediaLoader.largestShownPixels
+        }
     }
 
     private enum Refusal: Error {
@@ -61,6 +68,10 @@ final class MediaLoader: @unchecked Sendable {
     /// panorama, fits) are decoded only when asked for. Some formats are decoded whole even to
     /// be scaled down, which at this size is up to 256 MB.
     static let largestAutomaticPixels = 64 * 1024 * 1024
+    /// Pictures with more pixels than this (256 megapixels: 16,384 × 16,384) aren't decoded even
+    /// when asked for, in the conversation or the viewer: that could be a gigabyte. They can be
+    /// saved, and opened in another app.
+    static let largestShownPixels = 256 * 1024 * 1024
 
     /// A picture decoded at the size the timeline draws it. A large photo is never decoded in
     /// full for this: that would cost tens of megabytes of memory per picture.
@@ -75,15 +86,18 @@ final class MediaLoader: @unchecked Sendable {
         if DevHooks.imageLoadDelay > 0 { try? await Task.sleep(for: .seconds(DevHooks.imageLoadDelay)) }
 
         let unasked = !isLocal && !askedFor
+        // One being sent from here was checked as it was chosen.
+        let pixelLimit = isLocal ? nil : (unasked ? Self.largestAutomaticPixels : Self.largestShownPixels)
         do {
-            let (data, isWhole) = try await displayData(for: image, side: side, isLocal: isLocal, unasked: unasked)
+            let (data, isWhole) = try await displayData(for: image, side: side, isLocal: isLocal, unasked: unasked,
+                                                        pixelLimit: pixelLimit)
             guard var scaled = ImagePreparer.scaled(data, to: side) else { return .failed }
             // A smaller copy that isn't the shape of the picture is either cropped (some apps
             // make their thumbnails by cutting a square out of the middle) or the picture's
             // reported size is wrong. The picture itself settles which, and is what gets shown,
             // if it may be fetched.
             if !isWhole, !image.hasReportedShape(CGSize(width: scaled.width, height: scaled.height)),
-               let whole = try? await wholePicture(image, unasked: unasked),
+               let whole = try? await wholePicture(image, unasked: unasked, pixelLimit: pixelLimit),
                let rescaled = ImagePreparer.scaled(whole, to: side) {
                 scaled = rescaled
             }
@@ -99,7 +113,8 @@ final class MediaLoader: @unchecked Sendable {
 
     /// The smallest download that will do for the timeline, and whether it is the whole picture
     /// rather than a smaller copy of it.
-    private func displayData(for image: ImageAttachment, side: Int, isLocal: Bool, unasked: Bool) async throws -> (Data, Bool) {
+    private func displayData(for image: ImageAttachment, side: Int, isLocal: Bool, unasked: Bool,
+                             pixelLimit: Int?) async throws -> (Data, Bool) {
         let isEncrypted = image.media.source.toJson().contains("\"key\"")
         if isLocal || isEncrypted {
             // The server can't scale these: one is still on this Mac, the other it can't read.
@@ -108,39 +123,44 @@ final class MediaLoader: @unchecked Sendable {
             if let thumbnail = image.thumbnail,
                isLocal || ((image.thumbnailPixelSize.map { max($0.width, $0.height) } ?? 0) >= CGFloat(side) * 0.6
                            && image.hasReportedShape(image.thumbnailPixelSize ?? .zero)),
-               let data = await senderThumbnail(thumbnail.source, claimed: image.thumbnailByteCount, unasked: unasked) {
+               let data = await senderThumbnail(thumbnail.source, claimed: image.thumbnailByteCount, unasked: unasked,
+                                                pixelLimit: pixelLimit) {
                 return (data, false)
             }
-            return (try await wholePicture(image, unasked: unasked), true)
+            return (try await wholePicture(image, unasked: unasked, pixelLimit: pixelLimit), true)
         }
         // The server's own copy, made by it, though a server that can't make one may send the
         // picture itself.
         if let data = try? await client.getMediaThumbnail(mediaSource: image.media.source, width: UInt64(side), height: UInt64(side)),
-           !unasked || Self.excessPixels(in: data) == nil {
+           Self.fits(data, pixelLimit) {
             return (data, false)
         }
-        return (try await wholePicture(image, unasked: unasked), true)
+        return (try await wholePicture(image, unasked: unasked, pixelLimit: pixelLimit), true)
     }
 
-    /// A thumbnail its sender made, if it is small enough to fetch and decode unasked. Nil
+    /// A thumbnail its sender made, if it is small enough to fetch (unasked) and decode. Nil
     /// otherwise, and the picture itself is used.
-    private func senderThumbnail(_ source: MediaSource, claimed: UInt64?, unasked: Bool) async -> Data? {
+    private func senderThumbnail(_ source: MediaSource, claimed: UInt64?, unasked: Bool, pixelLimit: Int?) async -> Data? {
         if unasked, await exceeds(source, claimed: claimed, limit: Self.largestAutomaticThumbnail) != nil { return nil }
-        guard let data = try? await client.getMediaContent(mediaSource: source),
-              !unasked || Self.excessPixels(in: data) == nil else { return nil }
+        guard let data = try? await client.getMediaContent(mediaSource: source), Self.fits(data, pixelLimit) else { return nil }
         return data
     }
 
-    /// The whole picture: unasked, only if neither the file nor the picture in it is too large.
-    private func wholePicture(_ image: ImageAttachment, unasked: Bool) async throws -> Data {
+    /// The whole picture: only if the file isn't too large to download unasked, and the picture
+    /// in it has no more pixels than `pixelLimit`.
+    private func wholePicture(_ image: ImageAttachment, unasked: Bool, pixelLimit: Int?) async throws -> Data {
         let source = image.media.source
         if unasked, imageFiles.object(forKey: source.url() as NSString) == nil,
            let size = await exceeds(source, claimed: image.byteCount, limit: Self.largestAutomaticPicture) {
             throw Refusal.withheld(.bytes(size))
         }
         let data = try await imageFile(source: source)
-        if unasked, let pixels = Self.excessPixels(in: data) { throw Refusal.withheld(pixels) }
+        if let pixelLimit, let pixels = Self.excessPixels(in: data, limit: pixelLimit) { throw Refusal.withheld(pixels) }
         return data
+    }
+
+    private static func fits(_ data: Data, _ pixelLimit: Int?) -> Bool {
+        pixelLimit.map { excessPixels(in: data, limit: $0) == nil } ?? true
     }
 
     /// The file's size, if it is larger than `limit`: by the server's word where it gives one,
@@ -152,14 +172,15 @@ final class MediaLoader: @unchecked Sendable {
         return size > limit ? size : nil
     }
 
-    /// The picture's size, read from its header, if it has more pixels than are decoded unasked.
-    nonisolated static func excessPixels(in data: Data) -> Withheld? {
+    /// The picture's size, read from its header, if it has more pixels than `limit` (by default,
+    /// those decoded unasked).
+    nonisolated static func excessPixels(in data: Data, limit: Int = largestAutomaticPixels) -> Withheld? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
               let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
         let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
-        return overflow || pixels > largestAutomaticPixels ? .pixels(width: width, height: height) : nil
+        return overflow || pixels > limit ? .pixels(width: width, height: height) : nil
     }
 
     /// An image exactly as it was sent, for viewing at full size, copying, saving, or animating.
