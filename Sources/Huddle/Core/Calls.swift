@@ -58,6 +58,18 @@ final class CallSession {
     @PerceptionIgnored private var pageIsReady = false
     @PerceptionIgnored private var hasEnded = false
 
+    // Its sounds (`CallSound`), which Huddle plays rather than Element Call's own.
+    /// A direct chat's call: no sound for others coming and going, only for its end.
+    @PerceptionIgnored private var isDirect = false
+    /// This device started the call by ringing the other person: if nobody came, they declined
+    /// or didn't answer.
+    @PerceptionIgnored private var isRinging = false
+    /// Who else is in the call, by user ID, followed from the room once this device has joined.
+    @PerceptionIgnored private var others: Set<String>?
+    @PerceptionIgnored private var anyoneCame = false
+    @PerceptionIgnored private var hungUpHere = false
+    @PerceptionIgnored private var participantsHandle: TaskHandle?
+
     init(account: AccountSession, roomID: String, title: String, isVoiceOnly: Bool) {
         self.account = account
         self.roomID = roomID
@@ -80,6 +92,12 @@ final class CallSession {
         }
         let isEncrypted = (try? await room.latestEncryptionState()) == .encrypted
         let intent = await Self.intent(for: room, voiceOnly: isVoiceOnly)
+        isDirect = await room.isDirect()
+        isRinging = intent == .startCallDm || intent == .startCallDmVoice
+        participantsHandle = room.subscribeToRoomInfoUpdates(listener: RoomInfoObserver { [weak self] info in
+            let participants = info.activeRoomCallParticipants
+            Task { @MainActor in self?.participantsChanged(participants) }
+        })
         do {
             let settings = try newVirtualElementCallWidget(
                 props: VirtualElementCallWidgetProperties(
@@ -87,7 +105,9 @@ final class CallSession {
                     fontScale: nil, font: nil, encryption: isEncrypted ? .perParticipantKeys : .unencrypted,
                     posthogUserId: nil, posthogApiHost: nil, posthogApiKey: nil,
                     rageshakeSubmitUrl: nil, sentryDsn: nil, sentryEnvironment: nil),
-                config: VirtualElementCallWidgetConfig(intent: intent))
+                // Straight into the call: Element Call's lobby, where a room's call (not a
+                // direct chat's) would otherwise wait for its Join button, is never seen here.
+                config: VirtualElementCallWidgetConfig(intent: intent, skipLobby: true))
             let isDark = NSApp.effectiveAppearance.isDark
             let props = ClientProperties(clientId: Bundle.main.bundleIdentifier ?? "app.huddle.Huddle",
                                          languageTag: Locale.current.identifier(.bcp47),
@@ -152,6 +172,7 @@ final class CallSession {
         let bridge = CallBridge(session: self)
         content.add(bridge, name: CallBridge.name)
         content.addUserScript(WKUserScript(source: CallBridge.script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        content.addUserScript(WKUserScript(source: CallBridge.quietEffectsScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         if DevHooks.mutesAudio {
             content.addUserScript(WKUserScript(source: CallBridge.muteScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
@@ -221,7 +242,11 @@ final class CallSession {
         switch action {
         case "io.element.join":
             hasLoaded = true
-            if joined == nil { joined = .now }
+            if joined == nil {
+                joined = .now
+                // Who's there as this device comes in: no sound for them.
+                if let room = account.room(id: roomID) { participantsChanged(room.activeRoomCallParticipants()) }
+            }
         case "io.element.device_mute":
             // Element Call's microphone, as it stands.
             if let enabled = (object["data"] as? [String: Any])?["audio_enabled"] as? Bool { isMuted = !enabled }
@@ -271,6 +296,7 @@ final class CallSession {
     /// then says it's done. If it doesn't within a few seconds, the call is ended here anyway.
     func hangUp() {
         guard !hasEnded else { return }
+        hungUpHere = true
         guard hasLoaded, webView != nil, failure == nil else { return end() }
         request("im.vector.hangup")
         Task { [weak self] in
@@ -281,7 +307,15 @@ final class CallSession {
 
     private func end() {
         guard !hasEnded else { return }
+        // FaceTime's chime once someone had been in it with you, or you stopped it yourself (or
+        // were alone in a room's); the busy tone for a ring nobody took up. Nothing for a call
+        // that failed, which says so, or never got going.
+        if failure == nil, joined != nil {
+            (isRinging && !anyoneCame && !hungUpHere ? CallSound.busy : .ended).play()
+        }
         hasEnded = true
+        participantsHandle?.cancel()
+        participantsHandle = nil
         for task in tasks { task.cancel() }
         tasks = []
         driver = nil
@@ -293,6 +327,26 @@ final class CallSession {
 
     private func fail(_ message: String) {
         failure = message
+    }
+
+    /// The room's call has someone more or fewer in it. Once this device has joined: whether
+    /// anyone else has been in it with you, and, in a room's call, a sound for each who comes
+    /// or goes. (In a direct chat's, the other person going ends the call, which has its own.)
+    private func participantsChanged(_ participants: [String]) {
+        guard joined != nil, !hasEnded else { return }
+        let now = Set(participants).subtracting([account.userID])
+        if !now.isEmpty { anyoneCame = true }
+        if AppEnvironment.isDev, now != others {
+            print("DEV_CALL_OTHERS \(account.userID) \(now.sorted())")
+            fflush(stdout)
+        }
+        defer { others = now }
+        guard let before = others, !isDirect else { return }
+        if !now.subtracting(before).isEmpty {
+            CallSound.joined.play()
+        } else if !before.subtracting(now).isEmpty {
+            CallSound.left.play()
+        }
     }
 }
 
@@ -329,6 +383,13 @@ private final class CallBridge: NSObject, WKScriptMessageHandler, WKNavigationDe
             window.webkit.messageHandlers.\(name).postMessage(JSON.stringify(data));
         }
     }, false);
+    """
+
+    /// Element Call's own sound effects (someone joining or leaving, a ring declined or run out,
+    /// a hand raised) turned all the way down, before it reads its settings: Huddle plays its
+    /// own, macOS's, for both kinds of call (`CallSound`). The call's sound is untouched.
+    static let quietEffectsScript = """
+    try { localStorage.setItem("matrix-setting-sound-effect-volume", "0"); } catch (error) {}
     """
 
     /// Dev: the call's sound stays silent (HUDDLE_DEV_MUTE_AUDIO), as the other test audio does.

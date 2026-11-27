@@ -494,6 +494,7 @@ final class LegacyCall: HuddleCall {
         Self.log("\(account.userID) ended: \(ending)\(event.map { ", sending \($0.type)" } ?? "")")
         state = .ended(ending)
         ringback.stop()
+        Self.sound(for: ending, isOutgoing: isOutgoing, wasAnswered: wasAnswered)?.play()
         timeoutTask?.cancel()
         flushTask?.cancel()
         media.close()
@@ -521,6 +522,20 @@ final class LegacyCall: HuddleCall {
                 }
             }
             self?.onEnded?()
+        }
+    }
+
+    /// How the end of a call sounds: FaceTime's chime once it had been answered, or when you
+    /// stopped calling yourself; the busy tone when the person called didn't take it. Nothing
+    /// for one that rang here and wasn't taken (missed, or turned down here or elsewhere), nor
+    /// for one that failed, which says so.
+    private static func sound(for ending: Ending, isOutgoing: Bool, wasAnswered: Bool) -> CallSound? {
+        if wasAnswered { return .ended }
+        guard isOutgoing else { return nil }
+        switch ending {
+        case .hungUp: return .ended
+        case .declined, .noAnswer, .theyHungUp: return .busy
+        case .missed, .answeredElsewhere, .declinedElsewhere, .couldNotConnect, .failed: return nil
         }
     }
 
