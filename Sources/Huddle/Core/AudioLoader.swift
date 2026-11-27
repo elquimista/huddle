@@ -116,10 +116,18 @@ enum AudioPreparer {
 
             let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatInt16, interleaved: true)
             let format = file.processingFormat
+            // The file's own word on its rate, channels and length, which a made-up one could
+            // set to anything: held to what real recordings use, so it can't ask for more
+            // memory than a long stereo one would.
+            guard format.sampleRate.isFinite, (1...192_000).contains(format.sampleRate),
+                  (1...8).contains(format.channelCount) else { throw AudioLoadError.unsupported }
             guard file.length > 0, Double(file.length) / format.sampleRate <= OggOpusDecoder.maximumDuration else {
                 throw file.length > 0 ? AudioLoadError.tooLong : AudioLoadError.unsupported
             }
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)) else {
+            let mostSamples = Int(OggOpusDecoder.maximumDuration * 48_000) * 2
+            guard let frames = AVAudioFrameCount(exactly: file.length),
+                  Int(frames) * Int(format.channelCount) <= mostSamples else { throw AudioLoadError.tooLong }
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
                 throw AudioLoadError.unsupported
             }
             try file.read(into: buffer)

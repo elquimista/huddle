@@ -45,6 +45,12 @@ final class LoginFlow {
             self.client = client
             let details = await client.homeserverLoginDetails()
             self.homeserverURL = details.url()
+            // HTTPS only (plain HTTP for a server on this Mac, as in testing): what the user
+            // typed, or where its .well-known file sent them, which could otherwise send the
+            // password and every message in the clear.
+            guard let url = URL(string: details.url()), LinkPolicy.isSafeServerPage(url) else {
+                throw LoginError.unencrypted(details.url())
+            }
             guard details.slidingSyncVersion() == .native else { throw LoginError.slidingSyncUnsupported }
 
             self.supportsPassword = details.supportsPasswordLogin()
@@ -111,6 +117,8 @@ final class LoginFlow {
         guard let url = URL(string: data.loginUrl()), LinkPolicy.isSafeServerPage(url) else {
             throw LoginError.noSupportedLoginMethod
         }
+        loopback.expect(state: URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "state" }?.value)
         if AppEnvironment.isDev, ProcessInfo.processInfo.environment["HUDDLE_DEV_NO_BROWSER"] != nil {
             // Dev testing: print the sign-in URL instead of taking over the default browser.
             print("DEV_OAUTH_URL \(url.absoluteString)")
@@ -225,6 +233,15 @@ final class LoopbackServer: @unchecked Sendable {
         }
     }
 
+    /// The `state` the sign-in page was opened with, which its redirect carries back. Any other
+    /// page or app on this Mac can reach the listener too: a request without it is ignored, and
+    /// the listener keeps waiting for the real one.
+    private var expectedState: String?
+
+    func expect(state: String?) {
+        queue.sync { expectedState = state }
+    }
+
     /// The full redirect URL, or nil if the server was stopped first.
     func callback() async -> String? {
         for await url in callbacks { return url }
@@ -247,7 +264,9 @@ final class LoopbackServer: @unchecked Sendable {
             }
             let parts = line.split(separator: " ")
             let path = parts.count > 1 ? String(parts[1]) : "/"
-            let isCallback = path.contains("code=") || path.contains("error=")
+            let query = URLComponents(string: "http://127.0.0.1\(path)")?.queryItems ?? []
+            let isCallback = query.contains { $0.name == "code" || $0.name == "error" }
+                && self.expectedState.map { state in query.contains { $0.name == "state" && $0.value == state } } ?? false
             let body = isCallback
                 ? "<html><body style='font:16px -apple-system;text-align:center;margin-top:20vh'><h2>Signed in</h2><p>You can close this tab and return to Huddle.</p></body></html>"
                 : ""

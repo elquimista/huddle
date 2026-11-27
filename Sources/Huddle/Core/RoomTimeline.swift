@@ -577,7 +577,8 @@ final class RoomTimeline {
                         ownUserID: ownUserID))))
                     continue
                 }
-                switch TimelineRow.Kind(event: event, ownUserID: ownUserID, name: displayName(for:), contactName: contactName) {
+                switch TimelineRow.Kind(event: event, ownUserID: ownUserID, name: displayName(for:), contactName: contactName,
+                                        thisMacIsVerified: isThisMacVerified()) {
                 case .message(var message):
                     // The user's own names for whoever a reply quotes, and the newest in a thread.
                     if let sender = message.replyTo?.sender, let name = contactName(sender) { message.replyTo?.senderName = name }
@@ -704,10 +705,18 @@ final class RoomTimeline {
 
     /// The user's own name for someone (ContactNames.swift), set by the account.
     @PerceptionIgnored var contactName: (String) -> String? = { _ in nil }
+    /// Whether this Mac is verified (AccountSession): its own messages are marked as sent from an
+    /// unverified device only once it is, as until then every one of them would be.
+    @PerceptionIgnored var isThisMacVerified: () -> Bool = { true }
 
     /// The user's names for people changed: everything naming them, drawn again.
     func namesChanged() {
         nameVersion += 1
+        rebuildRows()
+    }
+
+    /// This Mac was verified (or no longer is): the marks on the user's own messages, drawn again.
+    func thisMacVerificationChanged() {
         rebuildRows()
     }
 
@@ -1250,8 +1259,10 @@ extension TimelineRow.Kind {
     /// Nil for events not worth a row (join rules and other housekeeping state; of power
     /// levels, only changes to people's roles get one). `name` gives a person's name by ID.
     /// `contactName` gives the user's own name for someone, where they've given one.
+    /// - Parameter thisMacIsVerified: whether this Mac's own device is verified, which decides
+    ///   whether this account's own messages are marked as sent from an unverified device.
     init?(event: EventTimelineItem, ownUserID: String, name: (String) -> String = { $0.matrixLocalpart },
-          contactName: (String) -> String? = { _ in nil }) {
+          contactName: (String) -> String? = { _ in nil }, thisMacIsVerified: Bool = true) {
         // A call's answer, decline and end are told on its invite's line (`CallHistory`).
         if let kind = CallEvent.kind(of: event.content), kind != .invite { return nil }
         let senderName = contactName(event.sender) ?? event.senderProfile.name(fallback: event.sender)
@@ -1349,8 +1360,7 @@ extension TimelineRow.Kind {
             mentionsRoom: mentionsRoom,
             replyTo: content.inReplyTo.map { ReplyPreview($0, contactName: contactName) },
             uploadProgress: uploadProgress,
-            // Not strict: people who haven't been verified are the usual case, not a warning.
-            shield: event.isOwn ? nil : MessageRow.Shield(event.lazyProvider.getShields(strict: false)),
+            shield: MessageRow.Shield.of(event, thisMacIsVerified: thisMacIsVerified),
             sendFailure: sendFailure))
     }
 }
@@ -1382,6 +1392,24 @@ extension MessageRow {
         let isSerious: Bool
         let label: String
         let detail: String
+
+        /// The warning under a message about where it came from, if any. Not strict: people who
+        /// haven't been verified are the usual case, not a warning. On this account's own
+        /// messages, only a serious one: one sent unencrypted into an encrypted room (which this
+        /// Mac never does, but a server could pass off as the user's), or from a device that's
+        /// unknown or unverified (one the server added, say). The grey "can't be confirmed" of
+        /// messages restored from key backup would mark most of the user's older messages, and
+        /// asks nothing of them. While this Mac isn't verified itself, every message sent from
+        /// it is from an unverified device, which the "This Mac isn't verified" bar already says.
+        static func of(_ event: EventTimelineItem, thisMacIsVerified: Bool = true) -> Shield? {
+            let state = event.lazyProvider.getShields(strict: false)
+            guard event.isOwn else { return Shield(state) }
+            switch state {
+            case .red(code: .unsignedDevice) where !thisMacIsVerified: return nil
+            case .red: return Shield(state)
+            case .grey, .none: return nil
+            }
+        }
 
         init?(_ state: ShieldState) {
             switch state {

@@ -275,7 +275,10 @@ struct AudioMessageView: View {
 
     /// "0:07", "12:34", "1:02:03".
     static func clock(_ seconds: TimeInterval, roundingUp: Bool) -> String {
-        let total = max(0, Int(roundingUp ? seconds.rounded() : seconds.rounded(.down)))
+        // A length from the sender or the player can be anything, even not a number: held to
+        // 99 hours, as converting one out of range would stop the app.
+        let held = seconds.isFinite ? min(max(seconds, 0), 99 * 3600) : 0
+        let total = Int(roundingUp ? held.rounded() : held.rounded(.down))
         let (hours, minutes, secs) = (total / 3600, total / 60 % 60, total % 60)
         return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, secs) : String(format: "%d:%02d", minutes, secs)
     }

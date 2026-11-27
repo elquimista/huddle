@@ -97,11 +97,16 @@ enum RecoveryKeyKeeper {
         }
     }
 
-    /// Readable by its owner only.
+    /// Readable by its owner only, from before the key is in it: made that way, or, replacing a
+    /// file that wasn't, made so before anything is written.
     private static func write(_ text: String, to url: URL) -> Bool {
+        let descriptor = open(url.path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return false }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        guard fchmod(descriptor, 0o600) == 0 else { return false }
         do {
-            try Data(text.utf8).write(to: url, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try handle.write(contentsOf: Data(text.utf8))
+            try handle.close()
             return true
         } catch {
             return false

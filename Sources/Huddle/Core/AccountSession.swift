@@ -143,7 +143,13 @@ final class AccountSession: Identifiable {
     /// False until the server has sent the first page of the room list.
     private(set) var hasLoadedRooms = false
     private(set) var syncState: SyncServiceState = .idle
-    private(set) var verification: VerificationState = .unknown
+    private(set) var verification: VerificationState = .unknown {
+        didSet {
+            if (verification == .verified) != (oldValue == .verified) {
+                for timeline in allTimelines { timeline.thisMacVerificationChanged() }
+            }
+        }
+    }
     /// Emoji verification: of this Mac, and of devices and people asking to verify with it.
     let verificationFlow: VerificationFlow
     /// Whether the account has a recovery key, and this Mac the keys it unlocks.
@@ -1366,6 +1372,7 @@ final class AccountSession: Identifiable {
     private func prepared(_ timeline: RoomTimeline) -> RoomTimeline {
         timeline.sharesTyping = { [weak self] in self?.sharesTyping ?? false }
         timeline.contactName = { [weak self] in self?.contactNames[$0] }
+        timeline.isThisMacVerified = { [weak self] in self?.verification == .verified }
         madeTimelines.add(timeline)
         return timeline
     }

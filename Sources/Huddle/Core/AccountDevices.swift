@@ -9,7 +9,8 @@ struct AccountDevice: Identifiable, Equatable {
         case unverified
         /// It never set up encryption, so it can't read encrypted messages.
         case noEncryption
-        /// The account has no cross-signing set up to tell.
+        /// Not for this Mac to say: the account has no cross-signing, or this Mac hasn't been
+        /// verified itself, so it has no key of the account's it can trust to check with.
         case unknown
     }
 
@@ -42,21 +43,32 @@ extension AccountSession {
             return AccountDevice(id: id, name: (entry["display_name"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                                  lastSeen: seen, lastSeenIP: entry["last_seen_ip"] as? String, trust: .unknown)
         }
-        // Verified: the device's keys carry a signature by the account's self-signing key.
+        // Verified: the device's keys carry a valid signature by the account's self-signing key,
+        // itself validly signed by its master key. The server's word on any of that counts for
+        // nothing (a server could add a device of its own and list it as signed): the master key
+        // is the one the SDK holds, and only once this Mac has verified it. The signatures are
+        // checked here, as the SDK doesn't say which of the account's devices it trusts.
+        let identity = (try? await client.encryption().userIdentity(userId: userID, fallbackToServer: false)) ?? nil
+        let masterKey = identity.flatMap { $0.isVerified() ? $0.masterKey() : nil }
         if let (keysStatus, keys) = try? await clientAPI("POST", "keys/query", body: ["device_keys": [userID: [String]()]]),
            keysStatus == 200 {
             let deviceKeys = (keys["device_keys"] as? [String: Any])?[userID] as? [String: Any] ?? [:]
-            let selfSigning = ((keys["self_signing_keys"] as? [String: Any])?[userID] as? [String: Any])?["keys"]
-                as? [String: Any]
-            let signingKeyIDs = Set(selfSigning?.keys.map { $0 } ?? [])
+            let selfSigningKey = masterKey.flatMap { masterKey in
+                ((keys["self_signing_keys"] as? [String: Any])?[userID] as? [String: Any]).flatMap {
+                    CrossSigning.selfSigningKey($0, userID: userID, masterKey: masterKey)
+                }
+            }
             for index in devices.indices {
                 guard let entry = deviceKeys[devices[index].id] as? [String: Any] else {
                     devices[index].trust = .noEncryption
                     continue
                 }
-                guard !signingKeyIDs.isEmpty else { continue }
-                let signatures = (entry["signatures"] as? [String: Any])?[userID] as? [String: Any] ?? [:]
-                devices[index].trust = signingKeyIDs.isDisjoint(with: signatures.keys) ? .unverified : .verified
+                guard masterKey != nil else { continue }
+                // A self-signing key the master key didn't sign vouches for nothing.
+                let isSigned = selfSigningKey.map {
+                    CrossSigning.isDeviceSigned(entry, userID: userID, deviceID: devices[index].id, selfSigningKey: $0)
+                } ?? false
+                devices[index].trust = isSigned ? .verified : .unverified
             }
         }
         return devices.sorted { ($0.lastSeen ?? .distantPast) > ($1.lastSeen ?? .distantPast) }

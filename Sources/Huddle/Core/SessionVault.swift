@@ -1,5 +1,6 @@
 import Foundation
 import MatrixRustSDK
+import OSLog
 import Security
 
 /// Everything needed to restore one logged-in account.
@@ -111,11 +112,17 @@ private enum Keychain {
     }
 
     static func write(_ data: Data) {
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var item = query
             item[kSecValueData as String] = data
-            SecItemAdd(item as CFDictionary, nil)
+            status = SecItemAdd(item as CFDictionary, nil)
+        }
+        // Not saved, the sessions would be gone at the next launch: at least say why.
+        if status != errSecSuccess {
+            log.error("Couldn't save the sessions in the Keychain: OSStatus \(status, privacy: .public)")
         }
     }
+
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.huddle.Huddle", category: "keychain")
 }

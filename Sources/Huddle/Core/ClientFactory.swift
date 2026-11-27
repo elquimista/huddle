@@ -87,9 +87,10 @@ struct StorePaths {
     }
 }
 
-/// Random passphrase for a new account's encrypted store.
+/// Random passphrase for a new account's encrypted store: from the system's secure generator,
+/// which stops the app rather than ever hand back bytes that aren't random.
 func makeStorePassphrase() -> String {
-    var bytes = [UInt8](repeating: 0, count: 32)
-    _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+    var generator = SystemRandomNumberGenerator()
+    let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
     return Data(bytes).base64EncodedString()
 }

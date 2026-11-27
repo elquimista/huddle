@@ -7,14 +7,21 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Bump to update Element Call (a tag of github.com/element-hq/element-call-swift).
+# Bump both to update Element Call: a tag of github.com/element-hq/element-call-swift, and the
+# commit it names (git ls-remote <repo> 'refs/tags/<tag>^{}'). The commit is what's checked: a tag
+# can be moved to other code, and what's fetched here runs in the app with the microphone.
 VERSION="0.28.2"
+COMMIT="abb0619fa3260262c72b8c8a2949e525632d43b1"
 OUT="Vendor/ElementCall"
 
 if [ -f "$OUT/VERSION" ] && [ "$(cat "$OUT/VERSION")" = "$VERSION" ]; then exit 0; fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 git -c advice.detachedHead=false clone -q --depth 1 --branch "$VERSION" https://github.com/element-hq/element-call-swift "$TMP/source"
+if [ "$(git -C "$TMP/source" rev-parse HEAD)" != "$COMMIT" ]; then
+  echo "error: Element Call's tag $VERSION isn't commit $COMMIT any more: not bundling it." >&2
+  exit 1
+fi
 rm -rf "$OUT"
 mkdir -p "$OUT"
 rsync -a --exclude '*.map' "$TMP/source/Sources/dist/" "$OUT/dist/"

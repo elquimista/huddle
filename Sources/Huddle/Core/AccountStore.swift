@@ -145,9 +145,12 @@ enum LoginError: LocalizedError {
     case alreadyLoggedIn(String)
     case noSupportedLoginMethod
     case cancelled
+    case unencrypted(String)
 
     var errorDescription: String? {
         switch self {
+        case .unencrypted(let url):
+            "This homeserver (\(url)) doesn’t use a secure connection, so your password and messages could be read on the way. Huddle signs in only over HTTPS."
         case .slidingSyncUnsupported:
             "This homeserver doesn’t support native sliding sync (MSC4186), which Huddle requires."
         case .alreadyLoggedIn(let userID):
