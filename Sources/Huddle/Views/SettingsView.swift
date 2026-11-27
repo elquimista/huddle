@@ -19,9 +19,9 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 
     var summary: String {
         switch self {
-        case .automatic: "Light or dark, as your Mac is set"
-        case .light: "Light, even when your Mac is dark"
-        case .dark: "Dark, even when your Mac is light"
+        case .automatic: "Matches your Mac"
+        case .light: "Always light"
+        case .dark: "Always dark"
         }
     }
 
@@ -65,9 +65,9 @@ enum MessageLayout: String, CaseIterable, Identifiable {
 
     var summary: String {
         switch self {
-        case .modern: "Avatars, with names above messages"
-        case .bubbles: "Chat bubbles, yours on the right"
-        case .irc: "Compact, one line per message"
+        case .modern: "Avatars and names above messages"
+        case .bubbles: "Your messages on the right"
+        case .irc: "One line per message"
         }
     }
 }
@@ -290,7 +290,7 @@ private struct SectionNote: View {
 /// toggle's row. Laid out by hand for controls the form would otherwise put under their label.
 private struct SettingRow<Control: View>: View {
     let title: String
-    let detail: String
+    var detail: String? = nil
     /// Lines the detail always takes, for one that changes, so the row (and the window) keeps
     /// its height as it does.
     var detailLines: Int? = nil
@@ -300,10 +300,12 @@ private struct SettingRow<Control: View>: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(detailLines ?? .max, reservesSpace: detailLines != nil)
+                if let detail {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(detailLines ?? .max, reservesSpace: detailLines != nil)
+                }
             }
             Spacer(minLength: 8)
             control
@@ -323,7 +325,7 @@ private struct NotificationSettingsTab: View {
             Section {
                 Toggle(isOn: $notificationsEnabled) {
                     Text("Show notifications")
-                    Text("For new messages, mentions and invitations.")
+                    Text("New messages, mentions and invitations.")
                 }
                 Toggle(isOn: $notificationSound) {
                     // A disabled switch dims by itself; its label has to be told.
@@ -334,14 +336,14 @@ private struct NotificationSettingsTab: View {
                 }
                 .disabled(!notificationsEnabled)
                 Toggle(isOn: $showsText) {
-                    Text("Show message text")
+                    Text("Show message previews")
                         .foregroundStyle(notificationsEnabled ? .primary : .tertiary)
-                    Text("Off, a notification says who wrote and where, but not what. macOS keeps notifications outside Huddle’s encryption.")
+                    Text("When off, notifications show only who sent a message and where.")
                         .foregroundStyle(notificationsEnabled ? .secondary : .tertiary)
                 }
                 .disabled(!notificationsEnabled)
             } footer: {
-                SectionNote(text: "Your Matrix account’s notification rules decide which rooms notify.")
+                SectionNote(text: "To choose which rooms notify you, Control-click a room and choose Notifications.")
             }
         }
     } }
@@ -380,7 +382,7 @@ private struct AppearanceSettingsTab: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                 }
-                SettingRow(title: "Emoji-only messages", detail: "Just a few emoji, drawn bigger.") {
+                SettingRow(title: "Emoji-only messages") {
                     Picker("Emoji-only messages", selection: $emojiSize) {
                         ForEach(EmojiSize.allCases) { size in WithPerceptionTracking {
                             Text(size.title).tag(size)
@@ -410,7 +412,7 @@ private struct QuickReactionsSection: View {
 
     var body: some View { WithPerceptionTracking {
         Section {
-            SettingRow(title: "Quick reactions", detail: "Click one to choose another.") {
+            SettingRow(title: "Quick reactions", detail: "Click one to change it.") {
                 HStack(spacing: 3) {
                     ForEach(Array(reactions.emoji.enumerated()), id: \.offset) { index, emoji in WithPerceptionTracking {
                         if index == reactions.onBarCount {
@@ -450,8 +452,8 @@ private struct QuickReactionsSection: View {
     /// (Where six won't fit, as in a thread beside the conversation, the bar shows three.)
     private var barDetail: String {
         layout == .bubbles
-            ? "In threads only, as bubbles have no bar."
-            : "As the pointer rests on a message."
+            ? "Only in threads, since bubbles have no bar."
+            : "Shown when the pointer is over a message."
     }
 
     private func slot(_ emoji: String, at index: Int) -> some View {
@@ -635,49 +637,48 @@ private struct PrivacySettingsTab: View {
             Section {
                 Toggle(isOn: $sharesPresence) {
                     Text("Show when I’m online")
-                    Text("People in your direct chats see when you’re online or away.")
+                    Text("Lets people in your direct chats see when you’re online.")
                 }
                 TypingSharingRows(accounts: store.accounts)
             } footer: {
-                SectionNote(text: "Sharing goes both ways: turn one off and you won’t see it from others either. Some servers don’t share anyone’s online status.")
+                SectionNote(text: "Turning one off also hides it from you. Some servers don’t share online status.")
             }
             Section {
                 Toggle(isOn: $indexesFullHistory) {
-                    Text("Search the full history of encrypted rooms")
-                    Text("Downloads each room’s history once, to index it on this Mac.")
+                    Text("Search all history in encrypted rooms")
+                    Text("Downloads each room’s history once to index it.")
                 }
                 if indexesFullHistory, let progress {
-                    SettingRow(title: "Indexing older messages",
-                               detail: "\(progress.done) of \(progress.total) rooms done") {
+                    SettingRow(title: "Indexing messages",
+                               detail: "\(progress.done) of \(progress.total) rooms") {
                         ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
                             .frame(width: 120)
                     }
                 }
             } footer: {
-                SectionNote(text: "The index is encrypted and never leaves this Mac. Your server searches unencrypted rooms itself.")
+                SectionNote(text: "The index is encrypted and stays on this Mac.")
             }
             Section {
                 Toggle(isOn: $excludesInsecureDevices) {
                     Text("Exclude unverified devices")
-                    Text("Your encrypted messages can only be read on devices their owners have verified, and messages from devices that aren’t are hidden.")
+                    Text("Messages to and from unverified devices are blocked.")
                 }
                 // The accounts' clients took the setting when Huddle opened.
                 if excludesInsecureDevices != EncryptionPreferences.excludedInsecureDevicesAtLaunch {
-                    SettingRow(title: "Takes effect when Huddle restarts",
-                               detail: "Huddle quits and opens again.") {
+                    SettingRow(title: "Restart Huddle to apply this change") {
                         Button("Restart Now") { AppRelauncher.relaunch() }
                     }
                 }
             } footer: {
-                SectionNote(text: "People whose apps don’t verify their devices won’t be able to read what you send, and this Mac must be verified to send encrypted messages. Element calls this “exclude insecure devices”.")
+                SectionNote(text: "When on, this Mac must be verified to send encrypted messages.")
             }
             Section {
                 Toggle(isOn: $usesMatrixOrgFallback) {
                     Text("Use matrix.org to help calls connect")
-                    Text("When your server has no call server of its own, matrix.org’s helps the older kind of call find a way between the two Macs, and sees your IP address while it does.")
+                    Text("Used when your server can’t relay a call. matrix.org sees your IP address.")
                 }
             } footer: {
-                SectionNote(text: "Off, those calls connect only when the two Macs can reach each other directly. Element Call, which most calls use, goes through your server either way.")
+                SectionNote(text: "When off, these calls connect only if both Macs can reach each other directly.")
             }
         }
         .onChanged(of: indexesFullHistory) { _, on in
@@ -697,12 +698,12 @@ private struct TypingSharingRows: View {
         if accounts.count == 1, let account = accounts.first {
             TypingSharingToggle(account: account) {
                 Text("Show when I’m typing")
-                Text("People in a room see when you’re writing a message there. Saved to your account, so Element follows it too.")
+                Text("Lets people see when you’re typing. Also applies in Element.")
             }
         } else if !accounts.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Show when I’m typing")
-                Text("People in a room see when you’re writing a message there. Saved to each account, so Element follows it too.")
+                Text("Lets people see when you’re typing. Set for each account; also applies in Element.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -803,7 +804,7 @@ private struct AccountsSettingsTab: View {
                 }
             }
         } } message: {
-            Text("Local message history and encryption keys for this account will be removed from this Mac.")
+            Text("This account’s messages and encryption keys will be removed from this Mac.")
         }
     } }
 }
@@ -964,7 +965,7 @@ private struct UpdateSettingsTab: View {
             Section {
                 Toggle(isOn: $updater.checksAutomatically) {
                     Text("Check for updates automatically")
-                    Text("Once a day.")
+                    Text("Checks once a day.")
                 }
                 Toggle(isOn: $updater.installsAutomatically) {
                     // A disabled switch dims by itself; its label has to be told.
@@ -976,7 +977,7 @@ private struct UpdateSettingsTab: View {
                 .disabled(!updater.checksAutomatically)
                 Toggle(isOn: $updater.includesBetas) {
                     Text("Include beta versions")
-                    Text("New features sooner, before they’re finished.")
+                    Text("Try new features before they’re finished.")
                 }
             }
             .disabled(!updater.isAvailable)
@@ -984,9 +985,9 @@ private struct UpdateSettingsTab: View {
     } }
 
     private var lastChecked: String {
-        guard let date = updater.lastChecked else { return "Not checked for updates yet." }
-        if date.timeIntervalSinceNow > -60 { return "Last checked just now." }
-        return "Last checked \(date.formatted(.relative(presentation: .named)))."
+        guard let date = updater.lastChecked else { return "Never checked" }
+        if date.timeIntervalSinceNow > -60 { return "Last checked just now" }
+        return "Last checked \(date.formatted(.relative(presentation: .named)))"
     }
 }
 
