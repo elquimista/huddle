@@ -1,19 +1,15 @@
-# Runs the tests (Tests/) on every push to the release branches and on pull requests to them:
-# the Swift ones with swift test, and the release and build scripts' with Python.
+# Runs the tests (Tests/) when asked, from the Actions tab (Run workflow): the Swift ones with
+# swift test, and the release and build scripts' with Python. Not on pushes or pull requests:
+# macOS runners are scarce, and only release tags are to spend them unasked.
 #
 # Matrix SDK: built from source as the release does (Scripts/build-sdk.sh), and cached under the
 # same key. A cache made here, on main, is one every branch and tag can use, releases included; the
 # first run after the SDK changes takes far longer than the rest.
 #
-# Nothing here is secret, and nothing is published: a pull request's run has no access to the
-# release environment, and its token can only read.
+# Nothing here is secret, and nothing is published: its token can only read.
 name: Tests
 
 on:
-  push:
-    branches: [main, legacy/macos-13]
-  pull_request:
-    branches: [main, legacy/macos-13]
   workflow_dispatch: {}
 
 permissions:
